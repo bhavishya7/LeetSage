@@ -4,19 +4,19 @@ import { useState, useEffect } from "react";
 type CurrentProblem = { title?: string; url?: string };
 
 const Popup: React.FC = () => {
-  const [problem, setProblem] = useState<CurrentProblem | null>(null);
+  const [problemData, setProblemData] = useState<CurrentProblem | null>(null);
 
-  console.log("Current problem:", problem);
+  console.log("Problem data received:", problemData);
 
   useEffect(() => {
-    chrome.storage.local.get("currentProblem", (data) => {
-      if (data.currentProblem) {
-        setProblem(data.currentProblem);
+    chrome.storage.local.get("problemData", (data) => {
+      if (data.problemData) {
+        setProblemData(data.problemData);
       }
     });
   }, []);
 
-  if (!problem?.title) {
+  if (!problemData?.title) {
     return (
       <div className="text-gray-600 text-sm">
         No problem detected on this tab yet.
@@ -26,7 +26,7 @@ const Popup: React.FC = () => {
 
   return (
     <div>
-      <h3 className="text-lg font-semibold">{problem.title}</h3>
+      <h3 className="text-lg font-semibold">{problemData.title}</h3>
     </div>
   );
 };
