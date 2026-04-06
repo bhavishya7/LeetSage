@@ -2,13 +2,42 @@
   "manifest_version": 3,
   "name": "LeetSage",
   "version": "1.0.0",
-  "description": "A Chrome extension built with Vite and React",
+  "description": "AI-powered learning companion for LeetCode problems. Get hints, examples, and breakdowns without spoiling solutions.",
   "action": {
     "default_popup": "index.html",
     "default_icon": "images/LeetCode_logo_black.png"
   },
-  "permissions": ["scripting"],
+  "side_panel": {
+    "default_path": "index.html"
+  },
+  "permissions": [
+    "scripting",
+    "tabs",
+    "sidePanel",
+    "commands",
+    "contextMenus",
+    "storage"
+  ],
   "icons": {
     "32": "images/LeetCode_logo_black.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://leetcode.com/problems/*", "http://localhost:5173/"],
+      "js": ["content.js"]
+    }
+  ],
+  "commands": {
+    "open_side_panel": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+L",
+        "mac": "Command+Shift+L"
+      },
+      "description": "Open the side panel"
+    }
   }
 }
