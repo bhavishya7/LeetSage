@@ -33,25 +33,72 @@ const App: React.FC = () => {
   const [stuckSuggestion, setStuckSuggestion] = useState<StuckSuggestion | null>(null);
   const stuckTimerRef = React.useRef<StuckTimer | null>(null);
 
-  useEffect(() => {
-    chrome.storage.local.get('problemData', (result) => {
-      if (result.problemData) {
-        const ctx = result.problemData as ProblemContext;
-        setProblemContext(ctx);
-        loadProgress(ctx.url).then(p => { setProgress(p); if (p) setLearningContent(p.contentHistory); });
-      }
+  // Applies a freshly obtained problem context to state + loads its progress.
+  const applyProblem = useCallback((ctx: ProblemContext) => {
+    setProblemContext(prev => {
+      // If it's a different problem, clear the transient content.
+      if (!prev || prev.url !== ctx.url) setLearningContent([]);
+      return ctx;
     });
-    const listener = (changes: Record<string, chrome.storage.StorageChange>) => {
-      if (changes.problemData?.newValue) {
-        const ctx = changes.problemData.newValue as ProblemContext;
-        setProblemContext(ctx);
-        setLearningContent([]);
-        loadProgress(ctx.url).then(p => { setProgress(p); if (p) setLearningContent(p.contentHistory); });
-      }
-    };
-    chrome.storage.onChanged.addListener(listener);
-    return () => chrome.storage.onChanged.removeListener(listener);
+    loadProgress(ctx.url).then(p => { setProgress(p); if (p) setLearningContent(p.contentHistory); });
   }, []);
+
+  // Pull problem data directly from the active tab's content script.
+  // This is the reliable path — the panel asks when it's ready, avoiding
+  // the MV3 race where the background worker is asleep at page-load time.
+  //
+  // Retries with backoff: on a fresh page load the content script may not be
+  // injected yet, or its initial extraction may still be running, so a single
+  // request can come back empty. We retry a few times over a few seconds.
+  const pullFromActiveTab = useCallback((attempt = 0) => {
+    const MAX_ATTEMPTS = 6;
+    const DELAY_MS = 700;
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tab = tabs[0];
+      if (!tab?.id || !tab.url?.includes('leetcode.com/problems/')) return;
+      chrome.tabs.sendMessage(tab.id, { type: 'REQUEST_PROBLEM_DATA' }, (response) => {
+        const notReady = chrome.runtime.lastError || !response?.success || !response?.data;
+        if (notReady) {
+          // Content script not injected yet or still extracting — retry.
+          if (attempt < MAX_ATTEMPTS) {
+            setTimeout(() => pullFromActiveTab(attempt + 1), DELAY_MS);
+          }
+          return;
+        }
+        applyProblem(response.data as ProblemContext);
+      });
+    });
+  }, [applyProblem]);
+
+  useEffect(() => {
+    // 1) Fast path: show whatever is cached in storage immediately.
+    chrome.storage.local.get('problemData', (result) => {
+      if (result.problemData) applyProblem(result.problemData as ProblemContext);
+    });
+
+    // 2) Reliable path: actively pull the current problem from the tab.
+    pullFromActiveTab();
+
+    // 3) Keep in sync when the user switches tabs or navigates.
+    const onActivated = () => pullFromActiveTab();
+    const onUpdated = (_tabId: number, info: { status?: string }, tab: chrome.tabs.Tab) => {
+      if (info.status === 'complete' && tab.active) pullFromActiveTab();
+    };
+    chrome.tabs.onActivated.addListener(onActivated);
+    chrome.tabs.onUpdated.addListener(onUpdated);
+
+    // 4) Still honor storage changes (push path) as a bonus.
+    const storageListener = (changes: Record<string, chrome.storage.StorageChange>) => {
+      if (changes.problemData?.newValue) applyProblem(changes.problemData.newValue as ProblemContext);
+    };
+    chrome.storage.onChanged.addListener(storageListener);
+
+    return () => {
+      chrome.tabs.onActivated.removeListener(onActivated);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      chrome.storage.onChanged.removeListener(storageListener);
+    };
+  }, [applyProblem, pullFromActiveTab]);
 
   useEffect(() => {
     getSettings().then(s => {
