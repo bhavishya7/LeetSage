@@ -18,7 +18,19 @@ const ACTION_LABELS: Record<string, string> = {
   TIME_COMPLEXITY_HINT: 'Complexity Hint', PATTERN_RECOGNITION: 'Pattern Recognition',
 };
 
-function renderInline(text: string): React.ReactNode {
+/**
+ * Defensive cleanup for math notation the model sometimes emits despite the
+ * prompt asking for plain text. Converts inline LaTeX ($...$ and \(...\)) into
+ * backtick code so it renders cleanly instead of showing raw dollar signs.
+ */
+function stripLatex(text: string): string {
+  return text
+    .replace(/\\\((.+?)\\\)/g, (_, inner) => `\`${inner.trim()}\``)
+    .replace(/\$([^$\n]+?)\$/g, (_, inner) => `\`${inner.trim()}\``);
+}
+
+function renderInline(raw: string): React.ReactNode {
+  const text = stripLatex(raw);
   return text.split(/(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g).map((part, i) => {
     if (part.startsWith('**') && part.endsWith('**')) return <strong key={i} className="font-semibold">{part.slice(2, -2)}</strong>;
     if (part.startsWith('`') && part.endsWith('`')) return <code key={i} className="bg-neutral-200 dark:bg-neutral-700 text-neutral-800 dark:text-neutral-100 px-1 rounded font-mono text-[11px]">{part.slice(1, -1)}</code>;

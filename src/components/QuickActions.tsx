@@ -17,7 +17,7 @@ const CHIPS: Chip[] = [
   { type: 'EXPLAIN_CONCEPT', label: 'Concept', icon: '📚', title: 'Explain a relevant concept' },
   { type: 'TIME_COMPLEXITY_HINT', label: 'Complexity', icon: '⏱️', title: 'Hint at optimal complexity' },
   { type: 'PATTERN_RECOGNITION', label: 'Pattern', icon: '🔍', title: 'Identify the algorithmic pattern' },
-  { type: 'CHECK_APPROACH', label: 'Check approach', icon: '✅', title: 'Review your proposed approach' },
+  { type: 'CHECK_APPROACH', label: 'Analyze my code', icon: '🔬', title: 'Analyze your current editor code — Approach, Efficiency, Code Style' },
 ];
 
 /**

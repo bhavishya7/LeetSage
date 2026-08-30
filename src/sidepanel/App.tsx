@@ -9,8 +9,19 @@ import { getSettings, saveSettings } from '../services/storage';
 import { streamLLMRequest } from '../services/llm-service';
 import { filterResponse } from '../services/solution-filter';
 import { checkRateLimit, recordRequest, getUsageToday } from '../services/rate-limiter';
+import { extractCurrentCode } from '../services/code-extractor';
 
 function generateId(): string { return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`; }
+
+/** Resolves the active tab's id if it's a LeetCode problem page, else null. */
+function getActiveLeetCodeTabId(): Promise<number | null> {
+  return new Promise((resolve) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tab = tabs[0];
+      resolve(tab?.id && tab.url?.includes('leetcode.com/problems/') ? tab.id : null);
+    });
+  });
+}
 
 function actionToContentType(actionType: ActionType): LearningContent['type'] {
   const map: Record<ActionType, LearningContent['type']> = {
@@ -37,11 +48,17 @@ const App: React.FC = () => {
   // Applies a freshly obtained problem context to state + loads its progress.
   const applyProblem = useCallback((ctx: ProblemContext) => {
     setProblemContext(prev => {
-      // If it's a different problem, clear the transient content.
-      if (!prev || prev.url !== ctx.url) setLearningContent([]);
+      // Same problem (URL is normalized to /problems/{slug}/, so it's stable
+      // across submissions/tab changes): keep the live in-memory content and
+      // progress as-is. Re-extraction on submit must NOT wipe the session.
+      if (prev && prev.url === ctx.url) return ctx;
+
+      // Genuinely a different problem: reset transient content and load that
+      // problem's saved progress/history.
+      setLearningContent([]);
+      loadProgress(ctx.url).then(p => { setProgress(p); if (p) setLearningContent(p.contentHistory); });
       return ctx;
     });
-    loadProgress(ctx.url).then(p => { setProgress(p); if (p) setLearningContent(p.contentHistory); });
   }, []);
 
   // Pull problem data directly from the active tab's content script.
@@ -140,6 +157,18 @@ const App: React.FC = () => {
       return;
     }
 
+    // For Check Approach: read the user's current editor code first so the
+    // analysis is grounded in what they've actually written.
+    let userCode: string | undefined;
+    let codeLanguage: string | undefined;
+    if (actionType === 'CHECK_APPROACH') {
+      const tabId = await getActiveLeetCodeTabId();
+      if (tabId != null) {
+        const extracted = await extractCurrentCode(tabId);
+        if (extracted) { userCode = extracted.code; codeLanguage = extracted.language; }
+      }
+    }
+
     setIsLoading(true); setError(null);
     const contentId = generateId();
     setStreamingId(contentId);
@@ -158,7 +187,7 @@ const App: React.FC = () => {
         problemContext, actionType, systemPrompt: '', userMessage: '',
         apiKey: settings.apiConfig.apiKey, model: settings.apiConfig.model,
         maxTokens: settings.guardrails.maxTokens, timeoutMs: settings.guardrails.requestTimeoutMs,
-        previousHintLevel: progress?.hintLevel ?? 0, userApproach,
+        previousHintLevel: progress?.hintLevel ?? 0, userApproach, userCode, codeLanguage,
       })) {
         fullContent += chunk;
         setLearningContent(prev => prev.map(c => c.id === contentId ? { ...c, content: fullContent } : c));
