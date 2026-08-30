@@ -27,6 +27,7 @@ function actionToContentType(actionType: ActionType): LearningContent['type'] {
   const map: Record<ActionType, LearningContent['type']> = {
     GET_HINT: 'HINT', GENERATE_EXAMPLES: 'EXAMPLES', BREAK_DOWN_PROBLEM: 'BREAKDOWN',
     EXPLAIN_CONCEPT: 'EXPLANATION', CHECK_APPROACH: 'FEEDBACK', TIME_COMPLEXITY_HINT: 'HINT', PATTERN_RECOGNITION: 'EXPLANATION',
+    UNDERSTAND_SOLUTION: 'EXPLANATION',
   };
   return map[actionType];
 }
@@ -43,6 +44,7 @@ const App: React.FC = () => {
   const [stuckSuggestion, setStuckSuggestion] = useState<StuckSuggestion | null>(null);
   const [usageCount, setUsageCount] = useState(0);
   const [chatInput, setChatInput] = useState('');
+  const [hasCode, setHasCode] = useState(false);
   const stuckTimerRef = React.useRef<StuckTimer | null>(null);
 
   // Applies a freshly obtained problem context to state + loads its progress.
@@ -104,6 +106,15 @@ const App: React.FC = () => {
     });
   }, [applyProblem]);
 
+  // Lightweight check of whether the editor currently has code, so the action
+  // bar can surface code-aware actions. Cheap enough to run on load/tab change.
+  const refreshHasCode = useCallback(async () => {
+    const tabId = await getActiveLeetCodeTabId();
+    if (tabId == null) { setHasCode(false); return; }
+    const extracted = await extractCurrentCode(tabId);
+    setHasCode(!!extracted && extracted.code.trim().length > 20);
+  }, []);
+
   useEffect(() => {
     // 1) Fast path: show whatever is cached in storage immediately.
     chrome.storage.local.get('problemData', (result) => {
@@ -112,11 +123,12 @@ const App: React.FC = () => {
 
     // 2) Reliable path: actively pull the current problem from the tab.
     pullFromActiveTab();
+    refreshHasCode();
 
     // 3) Keep in sync when the user switches tabs or navigates.
-    const onActivated = () => pullFromActiveTab();
+    const onActivated = () => { pullFromActiveTab(); refreshHasCode(); };
     const onUpdated = (_tabId: number, info: { status?: string }, tab: chrome.tabs.Tab) => {
-      if (info.status === 'complete' && tab.active) pullFromActiveTab();
+      if (info.status === 'complete' && tab.active) { pullFromActiveTab(); refreshHasCode(); }
     };
     chrome.tabs.onActivated.addListener(onActivated);
     chrome.tabs.onUpdated.addListener(onUpdated);
@@ -132,7 +144,7 @@ const App: React.FC = () => {
       chrome.tabs.onUpdated.removeListener(onUpdated);
       chrome.storage.onChanged.removeListener(storageListener);
     };
-  }, [applyProblem, pullFromActiveTab]);
+  }, [applyProblem, pullFromActiveTab, refreshHasCode]);
 
   useEffect(() => {
     getSettings().then(s => {
@@ -161,11 +173,12 @@ const App: React.FC = () => {
     // analysis is grounded in what they've actually written.
     let userCode: string | undefined;
     let codeLanguage: string | undefined;
-    if (actionType === 'CHECK_APPROACH') {
+    if (actionType === 'CHECK_APPROACH' || actionType === 'UNDERSTAND_SOLUTION') {
       const tabId = await getActiveLeetCodeTabId();
       if (tabId != null) {
         const extracted = await extractCurrentCode(tabId);
         if (extracted) { userCode = extracted.code; codeLanguage = extracted.language; }
+        setHasCode(!!extracted && extracted.code.trim().length > 20);
       }
     }
 
@@ -351,7 +364,7 @@ const App: React.FC = () => {
       {/* Bottom input bar: quick-command chips + free-form text input */}
       <div className="shrink-0 border-t border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2 space-y-2">
         <div className="flex items-center justify-between">
-          <QuickActions progress={progress} disabled={!canInteract} isLoading={isLoading} onAction={handleActionClick} />
+          <QuickActions progress={progress} disabled={!canInteract} isLoading={isLoading} hasCode={hasCode} onAction={handleActionClick} />
         </div>
         <div className="flex items-center gap-2">
           <input
