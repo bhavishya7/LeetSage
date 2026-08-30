@@ -685,3 +685,128 @@ Vite creates the `dist/` folder with:
 
 ### Viewing Chrome Storage
 DevTools → Application tab → Storage → Extension Storage → Local Storage
+
+
+---
+
+# Phase 1 Additions — Gemini, Guardrails, Chat-Hybrid UI, Theme
+
+This section documents what changed in Phase 1 (the "make it actually usable on
+the free tier" milestone). It builds on the architecture above.
+
+## 22. LLM Provider: Google Gemini (free-tier, BYOK)
+
+**File:** `src/services/llm-service.ts`
+
+LeetSage calls Google Gemini through its **OpenAI-compatible endpoint**, so the
+request/response shape is the familiar chat-completions format:
+
+```
+POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions
+Authorization: Bearer <user's Gemini API key>
+{ "model": "gemini-3.5-flash-lite", "messages": [...], "max_tokens": 800, "stream": true }
+```
+
+### Bring-your-own-key (BYOK)
+Each user supplies their own Gemini key (from aistudio.google.com — free, no
+billing). Why not ship one key? A client-side extension can't hide a secret;
+a shared key would be extracted and abused. A managed key would need a backend
+(cost + abuse surface). BYOK = each user's own free quota = zero cost/liability.
+
+### Gotchas learned the hard way
+- **Model names drift.** `gemini-2.5-flash-lite` is deprecated for new users and
+  returns **404**. Phase 1 uses `gemini-3.5-flash-lite` / `gemini-3.5-flash`.
+  Always check ai.google.dev/gemini-api/docs/models for current names.
+- **`AQ.` keys.** Google AI Studio now issues keys starting with `AQ.` (the old
+  `AIza` format is being retired). `AQ.` works fine with `Bearer` auth here.
+
+## 23. Free-Tier Guardrails
+
+**File:** `src/services/rate-limiter.ts` (+ types in `types/api.ts`)
+
+Protects the free tier from accidental overuse. All limits live in
+`UserSettings.guardrails` and are adjustable; defaults (`DEFAULT_GUARDRAILS`):
+
+| Guardrail | Default | Purpose |
+|-----------|---------|---------|
+| maxTokens | 800 | caps response length |
+| maxRequestsPerMinute | 8 | under Gemini's ~15/min |
+| maxRequestsPerDay | 200 | under Gemini's ~1000/day |
+| cooldownMs | 2000 | gap between requests |
+| requestTimeoutMs | 20000 | nothing hangs |
+| killSwitch | false | instant stop-all when on |
+
+`checkRateLimit()` runs before every call in this order: kill switch → daily cap
+→ per-minute cap → cooldown. `recordRequest()` increments a per-day counter
+persisted in `chrome.storage` (key `usage_YYYY-MM-DD`), so it survives the
+service worker sleeping. The header shows a live "X/Y today" counter.
+
+## 24. Chat-Hybrid UI
+
+**Files:** `src/sidepanel/App.tsx`, `src/components/QuickActions.tsx`,
+`src/components/ContentDisplay.tsx`
+
+The button-grid ActionPanel and separate ChatMode were replaced by one unified
+layout:
+
+```
+┌─────────────────────────────────┐
+│ Header: logo · usage · theme · ⚙ │
+├─────────────────────────────────┤
+│ Problem: "1768. ..."     Medium │
+├─────────────────────────────────┤
+│                                 │
+│   Content stream (cards +       │  ← scrollable
+│   user chat bubbles)            │
+│                                 │
+├─────────────────────────────────┤
+│ [Hint][Examples][Break down]... │  ← quick-command chips
+│ [ Ask a question…        ][Send]│  ← free-form input
+└─────────────────────────────────┘
+```
+
+- **QuickActions** = the 7 actions as compact chips (checkmark when used;
+  Get Hint disables at 3 hints).
+- **Free-form input** streams a coaching answer; the question shows as a blue
+  user bubble. Implemented via `LLMRequest.userQuery`, which `llm-service`
+  substitutes for the templated message (still grounded with problem context).
+- Design stays distinct from "Ask Leet": structured coaching cards + the
+  no-solutions filter, not a generic solve-it chatbot.
+
+## 25. Theme (dark/light)
+
+**Files:** `src/index.css`, `src/sidepanel/App.tsx`
+
+Tailwind v4 class-based dark mode via `@custom-variant dark (&:where(.dark, .dark *))`.
+The app root toggles a `dark` class from `settings.theme` (default dark). A
+☀️/🌙 header button flips and persists it. All components carry `dark:` variants.
+
+## 26. Content-Script Injection Resilience (Phase 1 fix)
+
+**Files:** `src/content/index.ts`, `src/sidepanel/App.tsx`
+
+Chrome only auto-injects content scripts on fresh page loads, so tabs open
+before the extension loaded have none. The side panel:
+1. Pulls problem data on demand (`REQUEST_PROBLEM_DATA`) with retry/backoff.
+2. If it gets "Receiving end does not exist", injects `content.js` via
+   `chrome.scripting.executeScript`, then retries.
+
+This is why the panel now reliably shows the problem even on already-open tabs.
+
+## 27. The Manifest V3 `type: module` Fix (the big one)
+
+The service worker was crashing on load — permanently "Inactive", breaking the
+icon-click AND the push data flow. Cause: the bundled `background.js` uses ES
+`import`, which requires `"type": "module"` in the manifest's `background`
+block. Without it, the worker never registers. This single line was the root of
+multiple symptoms we chased. Lesson: if an MV3 service worker won't start, check
+whether it uses `import` and whether the manifest declares it as a module.
+
+## Roadmap (future specs)
+
+- **Phase 2** (`.kiro/specs/leetsage-phase2-struggle-first/`): tiered
+  "explain your approach to unlock deeper hints" gate — the coaching identity.
+- **Phase 3** (`.kiro/specs/leetsage-phase3-analytics/`): learning analytics —
+  hints used, solution-revealed, time, submissions, and "problems to revisit".
+- Cross-platform (HackerRank, etc.) and a managed-key backend remain
+  someday-maybe, demand-dependent.
