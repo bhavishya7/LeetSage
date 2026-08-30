@@ -1,19 +1,49 @@
 /// <reference types="chrome"/>
 
 import { extractProblemContext, observeProblemChanges } from './extractor';
-import type { ProblemDataMessage } from '../types';
+import type { ProblemContext, ProblemDataMessage } from '../types';
+
+// Cache the most recent successful extraction so the side panel can
+// pull it on demand without waiting for a fresh extraction.
+let cachedProblem: ProblemContext | null = null;
 
 async function extractAndSendProblemData(): Promise<void> {
   try {
     const problemContext = await extractProblemContext();
+    cachedProblem = problemContext;
+
+    // Push to background/storage (best-effort — may be dropped if the
+    // service worker is asleep, which is why the side panel also pulls).
     const message: ProblemDataMessage = { type: 'PROBLEM_DATA', payload: problemContext };
     chrome.runtime.sendMessage(message, () => {
-      if (chrome.runtime.lastError) console.error('[LeetSage] Error sending message:', chrome.runtime.lastError);
+      // Swallow "no receiving end" errors — the side panel pull path covers this.
+      void chrome.runtime.lastError;
     });
   } catch (error) {
     console.error('[LeetSage] Failed to extract problem data:', error);
   }
 }
+
+// Respond to on-demand requests from the side panel. This is the reliable
+// path: the panel asks when IT is ready, sidestepping the MV3 race where
+// the service worker isn't awake when the content script first loads.
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === 'REQUEST_PROBLEM_DATA') {
+    if (cachedProblem) {
+      sendResponse({ success: true, data: cachedProblem });
+    } else {
+      // No cache yet — extract now and respond when ready.
+      extractProblemContext()
+        .then((ctx) => {
+          cachedProblem = ctx;
+          sendResponse({ success: true, data: ctx });
+        })
+        .catch((err) => sendResponse({ success: false, error: String(err) }));
+    }
+    return true; // async response
+  }
+  return false;
+});
 
 (async () => {
   await extractAndSendProblemData();

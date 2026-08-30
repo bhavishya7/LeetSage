@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "description": "AI-powered learning companion for LeetCode problems. Get hints, examples, and breakdowns without spoiling solutions.",
   "action": {
-    "default_popup": "index.html",
     "default_icon": "images/LeetCode_logo_black.png"
   },
   "side_panel": {
@@ -22,7 +21,8 @@
     "32": "images/LeetCode_logo_black.png"
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "host_permissions": ["http://*/*", "https://*/*"],
   "content_scripts": [

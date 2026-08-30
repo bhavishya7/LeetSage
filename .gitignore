@@ -23,3 +23,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Kiro local machine settings (MCP config with machine-specific paths)
+.kiro/settings/
