@@ -55,6 +55,8 @@ export interface ContentMetadata {
   hintLevel?: number;
   exampleComplexity?: 'Simple' | 'Medium' | 'Tricky';
   subProblems?: SubProblem[];
+  /** True when this entry is the user's own free-form question (chat bubble). */
+  isUserQuery?: boolean;
 }
 
 export interface SubProblem {

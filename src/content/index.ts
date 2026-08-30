@@ -20,6 +20,10 @@ async function extractAndSendProblemData(): Promise<void> {
       void chrome.runtime.lastError;
     });
   } catch (error) {
+    // "Extension context invalidated" happens when the extension is reloaded
+    // while an old content script is still alive in the page — harmless noise.
+    const msg = error instanceof Error ? error.message : String(error);
+    if (msg.includes('Extension context invalidated')) return;
     console.error('[LeetSage] Failed to extract problem data:', error);
   }
 }

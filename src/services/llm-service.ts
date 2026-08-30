@@ -1,24 +1,46 @@
-import type { LLMRequest, LLMResponse } from '../types';
-import { getSystemPrompt, buildUserMessage } from './prompts';
+import type { LLMRequest, LLMResponse, GeminiModel } from '../types';
+import { getSystemPrompt, buildUserMessage, formatProblemContext } from './prompts';
 
-const DEFAULT_MODEL = 'gpt-4o-mini';
-const OPENAI_BASE_URL = 'https://api.openai.com/v1';
-const REQUEST_TIMEOUT_MS = 30000;
+// Google Gemini via its OpenAI-compatible endpoint. This lets us keep the
+// standard chat-completions request/response shape while using a free-tier
+// provider (no billing required; over-limit requests are rejected, not billed).
+const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai';
+const DEFAULT_MODEL: GeminiModel = 'gemini-3.5-flash-lite';
+const DEFAULT_MAX_TOKENS = 800;
+const DEFAULT_TIMEOUT_MS = 20000;
+
+function buildMessages(request: LLMRequest) {
+  const systemPrompt = getSystemPrompt(request.actionType);
+  // Free-form questions replace the templated message but stay grounded by
+  // prepending the problem context so the coach knows what we're working on.
+  const userMessage = request.userQuery
+    ? `${formatProblemContext(request.problemContext)}\n\nMy question: ${request.userQuery}`
+    : buildUserMessage(request.actionType, request.problemContext, {
+        hintLevel: request.previousHintLevel,
+        userApproach: request.userApproach,
+      });
+  return [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userMessage },
+  ];
+}
 
 export async function sendLLMRequest(request: LLMRequest): Promise<LLMResponse> {
-  const systemPrompt = getSystemPrompt(request.actionType);
-  const userMessage = buildUserMessage(request.actionType, request.problemContext, {
-    hintLevel: request.previousHintLevel, userApproach: request.userApproach,
-  });
+  const model = request.model ?? DEFAULT_MODEL;
+  const maxTokens = request.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
   const body = JSON.stringify({
-    model: DEFAULT_MODEL,
-    messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userMessage }],
-    max_tokens: 1024, temperature: 0.7,
+    model,
+    messages: buildMessages(request),
+    max_tokens: maxTokens,
+    temperature: 0.7,
   });
+
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchWithRetry(`${OPENAI_BASE_URL}/chat/completions`, {
+    const response = await fetchWithRetry(`${GEMINI_BASE_URL}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${request.apiKey}` },
       body, signal: controller.signal,
@@ -33,20 +55,22 @@ export async function sendLLMRequest(request: LLMRequest): Promise<LLMResponse> 
 }
 
 export async function* streamLLMRequest(request: LLMRequest): AsyncGenerator<string> {
-  const systemPrompt = getSystemPrompt(request.actionType);
-  const userMessage = buildUserMessage(request.actionType, request.problemContext, {
-    hintLevel: request.previousHintLevel, userApproach: request.userApproach,
-  });
+  const model = request.model ?? DEFAULT_MODEL;
+  const maxTokens = request.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
+    const response = await fetch(`${GEMINI_BASE_URL}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${request.apiKey}` },
       body: JSON.stringify({
-        model: DEFAULT_MODEL,
-        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userMessage }],
-        max_tokens: 1024, temperature: 0.7, stream: true,
+        model,
+        messages: buildMessages(request),
+        max_tokens: maxTokens,
+        temperature: 0.7,
+        stream: true,
       }),
       signal: controller.signal,
     });
@@ -62,7 +86,7 @@ export async function* streamLLMRequest(request: LLMRequest): AsyncGenerator<str
         if (!line.startsWith('data: ')) continue;
         const data = line.slice(6).trim();
         if (data === '[DONE]') return;
-        try { const parsed = JSON.parse(data); const chunk = parsed.choices?.[0]?.delta?.content; if (chunk) yield chunk; } catch { /* skip */ }
+        try { const parsed = JSON.parse(data); const chunk = parsed.choices?.[0]?.delta?.content; if (chunk) yield chunk; } catch { /* skip malformed chunk */ }
       }
     }
   } finally { clearTimeout(timeoutId); }
@@ -88,7 +112,7 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries: num
 async function buildAPIError(response: Response): Promise<Error> {
   let message = `API Error ${response.status}`;
   try { const body = await response.json() as any; message = body?.error?.message ?? message; } catch { /* ignore */ }
-  if (response.status === 401) return new Error(`Invalid API key. ${message}`);
-  if (response.status === 429) return new Error(`Rate limit exceeded. Please wait and try again.`);
+  if (response.status === 401 || response.status === 403) return new Error(`Invalid or unauthorized Gemini API key. ${message}`);
+  if (response.status === 429) return new Error('Gemini rate limit / free-tier quota reached. Please wait and try again.');
   return new Error(message);
 }
