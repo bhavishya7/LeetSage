@@ -1,5 +1,5 @@
 import type { LLMRequest, LLMResponse, GeminiModel } from '../types';
-import { getSystemPrompt, buildUserMessage } from './prompts';
+import { getSystemPrompt, buildUserMessage, formatProblemContext } from './prompts';
 
 // Google Gemini via its OpenAI-compatible endpoint. This lets us keep the
 // standard chat-completions request/response shape while using a free-tier
@@ -11,10 +11,14 @@ const DEFAULT_TIMEOUT_MS = 20000;
 
 function buildMessages(request: LLMRequest) {
   const systemPrompt = getSystemPrompt(request.actionType);
-  const userMessage = buildUserMessage(request.actionType, request.problemContext, {
-    hintLevel: request.previousHintLevel,
-    userApproach: request.userApproach,
-  });
+  // Free-form questions replace the templated message but stay grounded by
+  // prepending the problem context so the coach knows what we're working on.
+  const userMessage = request.userQuery
+    ? `${formatProblemContext(request.problemContext)}\n\nMy question: ${request.userQuery}`
+    : buildUserMessage(request.actionType, request.problemContext, {
+        hintLevel: request.previousHintLevel,
+        userApproach: request.userApproach,
+      });
   return [
     { role: 'system', content: systemPrompt },
     { role: 'user', content: userMessage },

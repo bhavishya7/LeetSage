@@ -1,10 +1,39 @@
-import type { ProblemContext, ProgressState, UserSettings } from '../types';
+import type { ProblemContext, ProgressState, UserSettings, UsageState } from '../types';
+import { DEFAULT_GUARDRAILS } from '../types';
 
 export const STORAGE_KEYS = {
   PROBLEM_DATA: 'problemData',
   USER_SETTINGS: 'userSettings',
+  USAGE_PREFIX: 'usage_',
+  usageKey: (date: string) => `usage_${date}`,
   progressPrefix: (url: string) => `progress_${url}`,
 } as const;
+
+/** Local date string YYYY-MM-DD for keying daily usage. */
+export function todayKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+export async function getUsage(): Promise<UsageState> {
+  const key = STORAGE_KEYS.usageKey(todayKey());
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get(key, (result) => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else resolve(result[key] ?? { date: todayKey(), count: 0, recentTimestamps: [] });
+    });
+  });
+}
+
+export async function saveUsage(usage: UsageState): Promise<void> {
+  const key = STORAGE_KEYS.usageKey(usage.date);
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set({ [key]: usage }, () => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else resolve();
+    });
+  });
+}
 
 export async function saveProblemContext(context: ProblemContext): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -69,13 +98,22 @@ export async function getSettings(): Promise<UserSettings> {
   return new Promise((resolve, reject) => {
     chrome.storage.local.get(STORAGE_KEYS.USER_SETTINGS, (result) => {
       if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-      else resolve(result[STORAGE_KEYS.USER_SETTINGS] ?? {
-        apiConfig: { provider: 'gemini', apiKey: '', model: 'gemini-3.5-flash-lite' },
-        enableStuckTimer: true,
-        stuckTimerDelay: 300000,
-        enableChatMode: false,
-        theme: 'dark',
-      });
+      else {
+        const stored = result[STORAGE_KEYS.USER_SETTINGS] as UserSettings | undefined;
+        if (stored) {
+          // Backfill guardrails for settings saved before they existed.
+          resolve({ ...stored, guardrails: stored.guardrails ?? DEFAULT_GUARDRAILS });
+        } else {
+          resolve({
+            apiConfig: { provider: 'gemini', apiKey: '', model: 'gemini-3.5-flash-lite' },
+            guardrails: DEFAULT_GUARDRAILS,
+            enableStuckTimer: true,
+            stuckTimerDelay: 300000,
+            enableChatMode: false,
+            theme: 'dark',
+          });
+        }
+      }
     });
   });
 }
