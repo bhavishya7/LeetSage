@@ -70,11 +70,11 @@ export async function getSettings(): Promise<UserSettings> {
     chrome.storage.local.get(STORAGE_KEYS.USER_SETTINGS, (result) => {
       if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
       else resolve(result[STORAGE_KEYS.USER_SETTINGS] ?? {
-        apiConfig: { provider: 'openai', apiKey: '' },
+        apiConfig: { provider: 'gemini', apiKey: '', model: 'gemini-3.5-flash-lite' },
         enableStuckTimer: true,
         stuckTimerDelay: 300000,
         enableChatMode: false,
-        theme: 'auto',
+        theme: 'dark',
       });
     });
   });

@@ -1,11 +1,20 @@
 import type { ActionType, ProblemContext } from './models';
 
+/** Gemini models exposed to the user (free-tier friendly). */
+export type GeminiModel = 'gemini-3.5-flash-lite' | 'gemini-3.5-flash';
+
 export interface LLMRequest {
   problemContext: ProblemContext;
   actionType: ActionType;
   systemPrompt: string;
   userMessage: string;
   apiKey: string;
+  /** Which Gemini model to use. Defaults to flash-lite if omitted. */
+  model?: GeminiModel;
+  /** Per-response token cap. Defaults applied in the service if omitted. */
+  maxTokens?: number;
+  /** Hard request timeout in ms. Defaults applied in the service if omitted. */
+  timeoutMs?: number;
   previousHintLevel?: number;
   userApproach?: string;
 }
@@ -17,10 +26,10 @@ export interface LLMResponse {
 }
 
 export interface APIConfig {
-  provider: 'openai' | 'anthropic' | 'custom';
+  /** Phase 1 uses Gemini exclusively (bring-your-own-key). */
+  provider: 'gemini';
   apiKey: string;
-  baseUrl?: string;
-  model?: string;
+  model: GeminiModel;
 }
 
 export interface UserSettings {

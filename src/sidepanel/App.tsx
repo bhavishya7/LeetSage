@@ -56,17 +56,33 @@ const App: React.FC = () => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs[0];
       if (!tab?.id || !tab.url?.includes('leetcode.com/problems/')) return;
-      chrome.tabs.sendMessage(tab.id, { type: 'REQUEST_PROBLEM_DATA' }, (response) => {
-        const notReady = chrome.runtime.lastError || !response?.success || !response?.data;
-        if (notReady) {
-          // Content script not injected yet or still extracting — retry.
-          if (attempt < MAX_ATTEMPTS) {
-            setTimeout(() => pullFromActiveTab(attempt + 1), DELAY_MS);
-          }
+      const tabId = tab.id;
+
+      const ask = () => chrome.tabs.sendMessage(tabId, { type: 'REQUEST_PROBLEM_DATA' }, (response) => {
+        const lastError = chrome.runtime.lastError;
+        const notReady = lastError || !response?.success || !response?.data;
+        if (!notReady) { applyProblem(response!.data as ProblemContext); return; }
+
+        // "Could not establish connection. Receiving end does not exist."
+        // means no content script is running on this tab — this happens on
+        // tabs that were already open before the extension was (re)loaded,
+        // since Chrome only auto-injects on fresh page loads. Inject it
+        // manually once, then retry the message.
+        const noReceiver = !!lastError?.message?.includes('Receiving end does not exist');
+        if (noReceiver && attempt === 0) {
+          chrome.scripting.executeScript(
+            { target: { tabId }, files: ['content.js'] },
+            () => { setTimeout(() => pullFromActiveTab(1), 300); }
+          );
           return;
         }
-        applyProblem(response.data as ProblemContext);
+
+        if (attempt < MAX_ATTEMPTS) {
+          setTimeout(() => pullFromActiveTab(attempt + 1), DELAY_MS);
+        }
       });
+
+      ask();
     });
   }, [applyProblem]);
 
@@ -124,7 +140,8 @@ const App: React.FC = () => {
     try {
       let fullContent = '';
       for await (const chunk of streamLLMRequest({
-        problemContext, actionType, systemPrompt: '', userMessage: '', apiKey: settings.apiConfig.apiKey,
+        problemContext, actionType, systemPrompt: '', userMessage: '',
+        apiKey: settings.apiConfig.apiKey, model: settings.apiConfig.model,
         previousHintLevel: progress?.hintLevel ?? 0, userApproach,
       })) {
         fullContent += chunk;
