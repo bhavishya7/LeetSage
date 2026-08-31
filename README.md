@@ -1,69 +1,76 @@
-# React + TypeScript + Vite
+# LeetSage 🧠
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+**An AI-powered learning coach for LeetCode that helps you understand problems — without ever handing you the answer.**
 
-Currently, two official plugins are available:
+LeetSage is a Chrome extension that opens a side panel on LeetCode problem pages and offers on-demand coaching: progressive hints, problem breakdowns, alternative examples, pre-submission code analysis, and deep "why does this work" explanations. It is deliberately built to *teach*, not to solve — the opposite of a solve-it-for-you tool.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+It runs on your own free Google Gemini API key (bring-your-own-key), so there's no cost, no account, and no backend.
 
-## Expanding the ESLint configuration
+---
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## What it does
 
-```js
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+Coaching actions, all grounded in the specific problem you're on:
 
-      // Remove tseslint.configs.recommended and replace with this
-      ...tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      ...tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      ...tseslint.configs.stylisticTypeChecked,
+- **💡 Hint** — progressive, 3 levels (conceptual → approach → implementation), never a full solution
+- **🧩 Break down** — decomposes the problem into logical sub-steps
+- **🔬 Analyze my code** — reads your current editor code and gives feedback on Approach, Efficiency (with an operation-by-operation time/space breakdown), and Code Style — *before* you submit
+- **🧠 Understand solution** — after you've solved it, explains *why* your solution works: real-world analogy, key insight, why each part is necessary, and complexity
+- **🔢 Examples**, **📚 Concept**, **⏱️ Complexity hint**, **🔍 Pattern recognition** (secondary actions)
+- **Free-form chat** — ask your own question about the problem
+- Per-problem **history** that persists across sessions, a **dark/light** theme, and **free-tier guardrails** (rate limits, token caps, a usage counter, and a kill switch — all adjustable)
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+A solution filter keeps responses from spelling out complete answers, preserving the learning-first philosophy.
+
+## How it works
+
+Standard Chrome extension (Manifest V3) architecture:
+
+- **Content script** extracts the problem (title, difficulty, description) from the LeetCode page and reads your editor code from the Monaco editor.
+- **Side panel** (React + TypeScript + Tailwind) is the UI — it calls Google Gemini directly with your key, streams responses, and renders them.
+- **Background service worker** coordinates and persists state to `chrome.storage`.
+- Problem data flows via a **pull-based** model: the side panel requests the current problem from the content script when it's ready (robust against the MV3 service worker sleeping).
+
+See [`src/README.md`](src/README.md) for the source layout and [`docs/leetsage-learning-guide.md`](docs/leetsage-learning-guide.md) for a deep-dive on how everything works.
+
+## Getting started
+
+### Prerequisites
+- Node.js (LTS)
+- A free Google Gemini API key from [aistudio.google.com](https://aistudio.google.com) → **Get API key** (no billing required)
+
+### Build & install
+```bash
+npm install
+npm run build        # on Windows PowerShell, use: npm.cmd run build
 ```
+Then load it in Chrome:
+1. Go to `chrome://extensions`
+2. Enable **Developer mode** (top-right)
+3. Click **Load unpacked** and select the `dist/` folder
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### Use it
+1. Open any LeetCode problem (`leetcode.com/problems/...`)
+2. Click the LeetSage toolbar icon to open the side panel
+3. Open ⚙️ Settings, paste your Gemini API key, and pick a model (Flash-Lite is the fast, free-tier-friendly default)
+4. Tap a coaching action or ask your own question
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+> **Note:** After rebuilding, reload the extension at `chrome://extensions`. If a LeetCode tab was already open before a reload, refresh it.
 
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+## Tech stack
+
+React 19 · TypeScript 5.8 · Tailwind CSS 4 · Vite 7 · Chrome Extension Manifest V3 · Google Gemini (OpenAI-compatible endpoint)
+
+## Roadmap
+
+Planned enhancements are documented as specs under [`.kiro/specs/`](.kiro/specs/):
+
+- **Progress tracking & study notes** (`leetsage-progress-tracking`) — a living record of solved problems: approach, best solution, notes, and progress over time
+- **Language cheatsheets** (`leetsage-cheatsheet`) — static, zero-token Python/Java/C++ references + Big-O chart
+- **Pseudocode playground** (`leetsage-pseudocode-mode`) — a lightweight space to plan your approach and get feedback
+- **Struggle-first hint gating** (`leetsage-phase2-struggle-first`) — deeper hints unlock after you explain your reasoning
+- **Learning analytics** (`leetsage-phase3-analytics`) — hints used, submission outcomes, "problems to revisit"
+
+## Design philosophy
+
+LeetSage is a *learning* tool first. It withholds complete solutions on purpose, so the value is in building genuine understanding — not shipping green checkmarks. It's a personal project, free to run, with your data staying in your browser.

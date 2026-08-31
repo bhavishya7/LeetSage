@@ -18,6 +18,8 @@ function buildMessages(request: LLMRequest) {
     : buildUserMessage(request.actionType, request.problemContext, {
         hintLevel: request.previousHintLevel,
         userApproach: request.userApproach,
+        userCode: request.userCode,
+        codeLanguage: request.codeLanguage,
       });
   return [
     { role: 'system', content: systemPrompt },

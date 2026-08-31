@@ -19,6 +19,10 @@ export interface LLMRequest {
   userApproach?: string;
   /** A free-form user question. When set, it replaces the templated message. */
   userQuery?: string;
+  /** The user's current editor code (for CHECK_APPROACH analysis). */
+  userCode?: string;
+  /** The editor language for the code above (e.g. "python", "cpp"). */
+  codeLanguage?: string;
 }
 
 export interface LLMResponse {

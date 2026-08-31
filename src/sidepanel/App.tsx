@@ -9,13 +9,25 @@ import { getSettings, saveSettings } from '../services/storage';
 import { streamLLMRequest } from '../services/llm-service';
 import { filterResponse } from '../services/solution-filter';
 import { checkRateLimit, recordRequest, getUsageToday } from '../services/rate-limiter';
+import { extractCurrentCode } from '../services/code-extractor';
 
 function generateId(): string { return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`; }
+
+/** Resolves the active tab's id if it's a LeetCode problem page, else null. */
+function getActiveLeetCodeTabId(): Promise<number | null> {
+  return new Promise((resolve) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tab = tabs[0];
+      resolve(tab?.id && tab.url?.includes('leetcode.com/problems/') ? tab.id : null);
+    });
+  });
+}
 
 function actionToContentType(actionType: ActionType): LearningContent['type'] {
   const map: Record<ActionType, LearningContent['type']> = {
     GET_HINT: 'HINT', GENERATE_EXAMPLES: 'EXAMPLES', BREAK_DOWN_PROBLEM: 'BREAKDOWN',
     EXPLAIN_CONCEPT: 'EXPLANATION', CHECK_APPROACH: 'FEEDBACK', TIME_COMPLEXITY_HINT: 'HINT', PATTERN_RECOGNITION: 'EXPLANATION',
+    UNDERSTAND_SOLUTION: 'EXPLANATION',
   };
   return map[actionType];
 }
@@ -32,16 +44,23 @@ const App: React.FC = () => {
   const [stuckSuggestion, setStuckSuggestion] = useState<StuckSuggestion | null>(null);
   const [usageCount, setUsageCount] = useState(0);
   const [chatInput, setChatInput] = useState('');
+  const [hasCode, setHasCode] = useState(false);
   const stuckTimerRef = React.useRef<StuckTimer | null>(null);
 
   // Applies a freshly obtained problem context to state + loads its progress.
   const applyProblem = useCallback((ctx: ProblemContext) => {
     setProblemContext(prev => {
-      // If it's a different problem, clear the transient content.
-      if (!prev || prev.url !== ctx.url) setLearningContent([]);
+      // Same problem (URL is normalized to /problems/{slug}/, so it's stable
+      // across submissions/tab changes): keep the live in-memory content and
+      // progress as-is. Re-extraction on submit must NOT wipe the session.
+      if (prev && prev.url === ctx.url) return ctx;
+
+      // Genuinely a different problem: reset transient content and load that
+      // problem's saved progress/history.
+      setLearningContent([]);
+      loadProgress(ctx.url).then(p => { setProgress(p); if (p) setLearningContent(p.contentHistory); });
       return ctx;
     });
-    loadProgress(ctx.url).then(p => { setProgress(p); if (p) setLearningContent(p.contentHistory); });
   }, []);
 
   // Pull problem data directly from the active tab's content script.
@@ -87,6 +106,15 @@ const App: React.FC = () => {
     });
   }, [applyProblem]);
 
+  // Lightweight check of whether the editor currently has code, so the action
+  // bar can surface code-aware actions. Cheap enough to run on load/tab change.
+  const refreshHasCode = useCallback(async () => {
+    const tabId = await getActiveLeetCodeTabId();
+    if (tabId == null) { setHasCode(false); return; }
+    const extracted = await extractCurrentCode(tabId);
+    setHasCode(!!extracted && extracted.code.trim().length > 20);
+  }, []);
+
   useEffect(() => {
     // 1) Fast path: show whatever is cached in storage immediately.
     chrome.storage.local.get('problemData', (result) => {
@@ -95,11 +123,12 @@ const App: React.FC = () => {
 
     // 2) Reliable path: actively pull the current problem from the tab.
     pullFromActiveTab();
+    refreshHasCode();
 
     // 3) Keep in sync when the user switches tabs or navigates.
-    const onActivated = () => pullFromActiveTab();
+    const onActivated = () => { pullFromActiveTab(); refreshHasCode(); };
     const onUpdated = (_tabId: number, info: { status?: string }, tab: chrome.tabs.Tab) => {
-      if (info.status === 'complete' && tab.active) pullFromActiveTab();
+      if (info.status === 'complete' && tab.active) { pullFromActiveTab(); refreshHasCode(); }
     };
     chrome.tabs.onActivated.addListener(onActivated);
     chrome.tabs.onUpdated.addListener(onUpdated);
@@ -115,7 +144,7 @@ const App: React.FC = () => {
       chrome.tabs.onUpdated.removeListener(onUpdated);
       chrome.storage.onChanged.removeListener(storageListener);
     };
-  }, [applyProblem, pullFromActiveTab]);
+  }, [applyProblem, pullFromActiveTab, refreshHasCode]);
 
   useEffect(() => {
     getSettings().then(s => {
@@ -123,11 +152,23 @@ const App: React.FC = () => {
       stuckTimerRef.current = new StuckTimer((suggestion) => setStuckSuggestion(suggestion), s.enableStuckTimer);
     });
     getUsageToday().then(u => setUsageCount(u.count));
+
+    // Refresh the usage counter whenever the panel becomes visible again.
+    // getUsageToday() keys on the current date, so this also clears a stale
+    // count left over from a previous day (the daily reset).
+    const onVisible = () => { if (!document.hidden) getUsageToday().then(u => setUsageCount(u.count)); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
 
   useEffect(() => {
-    if (problemContext) stuckTimerRef.current?.start(problemContext.difficulty);
-  }, [problemContext?.url]);
+    if (problemContext) {
+      stuckTimerRef.current?.start({
+        difficulty: problemContext.difficulty,
+        hintsExhausted: (progress?.hintLevel ?? 0) >= 3,
+      });
+    }
+  }, [problemContext?.url, progress?.hintLevel]);
 
   const handleActionClick = useCallback(async (actionType: ActionType, userApproach?: string) => {
     if (!problemContext || !settings?.apiConfig.apiKey) return;
@@ -138,6 +179,19 @@ const App: React.FC = () => {
       const wait = check.retryAfterMs ? ` (try again in ${Math.ceil(check.retryAfterMs / 1000)}s)` : '';
       setError((check.reason ?? 'Request blocked by rate limits.') + wait);
       return;
+    }
+
+    // For Check Approach: read the user's current editor code first so the
+    // analysis is grounded in what they've actually written.
+    let userCode: string | undefined;
+    let codeLanguage: string | undefined;
+    if (actionType === 'CHECK_APPROACH' || actionType === 'UNDERSTAND_SOLUTION') {
+      const tabId = await getActiveLeetCodeTabId();
+      if (tabId != null) {
+        const extracted = await extractCurrentCode(tabId);
+        if (extracted) { userCode = extracted.code; codeLanguage = extracted.language; }
+        setHasCode(!!extracted && extracted.code.trim().length > 20);
+      }
     }
 
     setIsLoading(true); setError(null);
@@ -158,7 +212,7 @@ const App: React.FC = () => {
         problemContext, actionType, systemPrompt: '', userMessage: '',
         apiKey: settings.apiConfig.apiKey, model: settings.apiConfig.model,
         maxTokens: settings.guardrails.maxTokens, timeoutMs: settings.guardrails.requestTimeoutMs,
-        previousHintLevel: progress?.hintLevel ?? 0, userApproach,
+        previousHintLevel: progress?.hintLevel ?? 0, userApproach, userCode, codeLanguage,
       })) {
         fullContent += chunk;
         setLearningContent(prev => prev.map(c => c.id === contentId ? { ...c, content: fullContent } : c));
@@ -169,7 +223,7 @@ const App: React.FC = () => {
       const updatedProgress = await trackAction(problemContext.url, actionType);
       setProgress(updatedProgress);
       await appendContent(problemContext.url, finalContent);
-      stuckTimerRef.current?.start(problemContext.difficulty);
+      stuckTimerRef.current?.start({ difficulty: problemContext.difficulty, hintsExhausted: updatedProgress.hintLevel >= 3 });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong');
       setLearningContent(prev => prev.filter(c => c.id !== contentId));
@@ -221,7 +275,7 @@ const App: React.FC = () => {
       setLearningContent(prev => prev.map(c => c.id === respId ? finalResp : c));
       await appendContent(problemContext.url, userMsg);
       await appendContent(problemContext.url, finalResp);
-      stuckTimerRef.current?.start(problemContext.difficulty);
+      stuckTimerRef.current?.start({ difficulty: problemContext.difficulty, hintsExhausted: (progress?.hintLevel ?? 0) >= 3 });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong');
       setLearningContent(prev => prev.filter(c => c.id !== respId));
@@ -260,12 +314,23 @@ const App: React.FC = () => {
 
   return (
     <div className={`${isDark ? 'dark' : ''} flex flex-col h-screen bg-neutral-50 dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 text-sm`}>
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 bg-white dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700 shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="text-base font-bold text-orange-500">LeetSage</span>
+      {/* Single consolidated header: problem title + difficulty on the left,
+          usage counter + theme + settings on the right. (Chrome's side-panel
+          title bar already shows the "LeetSage" name, so we don't repeat it.) */}
+      <div className="flex items-start justify-between gap-2 px-3 py-2 bg-white dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700 shrink-0">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 min-w-0 flex-1">
+          {problemContext ? (
+            <>
+              <span className="text-sm font-semibold break-words">{problemContext.title}</span>
+              <span className={`text-xs font-bold shrink-0 ${difficultyColor[problemContext.difficulty] ?? 'text-neutral-400'}`}>
+                {problemContext.difficulty}
+              </span>
+            </>
+          ) : (
+            <span className="text-xs text-neutral-400 italic">Open a LeetCode problem to get started</span>
+          )}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5 shrink-0">
           {settings && (
             <span className="text-[11px] text-neutral-400" title={`AI requests used today (limit ${settings.guardrails.maxRequestsPerDay})`}>
               {usageCount}/{settings.guardrails.maxRequestsPerDay}
@@ -277,20 +342,6 @@ const App: React.FC = () => {
           <button onClick={() => setShowSettings(true)} className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 transition-colors" aria-label="Settings">⚙️</button>
         </div>
       </div>
-
-      {/* Problem context bar */}
-      {problemContext ? (
-        <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-white dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700 shrink-0">
-          <span className="text-xs font-medium truncate">{problemContext.title}</span>
-          <span className={`text-[11px] font-semibold shrink-0 ${difficultyColor[problemContext.difficulty] ?? 'text-neutral-400'}`}>
-            {problemContext.difficulty}
-          </span>
-        </div>
-      ) : (
-        <div className="px-3 py-1.5 bg-white dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700 shrink-0 text-[11px] text-neutral-400 italic">
-          Open a LeetCode problem to get started
-        </div>
-      )}
 
       {/* API key prompt */}
       {!apiKeyConfigured && (
@@ -309,7 +360,7 @@ const App: React.FC = () => {
           {error} <button onClick={() => setError(null)} className="ml-2 underline">Dismiss</button>
         </div>
       )}
-      {stuckSuggestion && (
+      {stuckSuggestion && !(stuckSuggestion.suggestedAction === 'GET_HINT' && (progress?.hintLevel ?? 0) >= 3) && (
         <div className="mx-3 mb-2 p-2 bg-blue-500/10 border border-blue-500/30 rounded text-xs flex items-center justify-between shrink-0">
           <span className="text-blue-500">{stuckSuggestion.message}</span>
           <div className="flex gap-2 ml-2 shrink-0">
@@ -322,7 +373,7 @@ const App: React.FC = () => {
       {/* Bottom input bar: quick-command chips + free-form text input */}
       <div className="shrink-0 border-t border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2 space-y-2">
         <div className="flex items-center justify-between">
-          <QuickActions progress={progress} disabled={!canInteract} isLoading={isLoading} onAction={handleActionClick} />
+          <QuickActions progress={progress} disabled={!canInteract} isLoading={isLoading} hasCode={hasCode} onAction={handleActionClick} />
         </div>
         <div className="flex items-center gap-2">
           <input

@@ -83,6 +83,21 @@ async function extractConstraints(): Promise<string[]> {
   } catch { return []; }
 }
 
+/**
+ * Normalizes a LeetCode URL to a stable per-problem identity:
+ * `https://leetcode.com/problems/{slug}/`.
+ *
+ * The raw href changes as the user navigates within a problem — e.g.
+ * `/problems/two-sum/description/`, `/problems/two-sum/submissions/`, or with
+ * `?envType=...` query params. Keying progress/history on the raw href means a
+ * submission (which changes the URL) looks like a different problem and wipes
+ * state. Collapsing to `/problems/{slug}/` keeps one stable identity.
+ */
+export function normalizeProblemUrl(href: string): string {
+  const match = href.match(/^(https?:\/\/[^/]*leetcode\.com\/problems\/[^/?#]+)/i);
+  return match ? `${match[1]}/` : href;
+}
+
 export async function extractProblemContext(maxRetries = 3): Promise<ProblemContext> {
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -90,7 +105,7 @@ export async function extractProblemContext(maxRetries = 3): Promise<ProblemCont
       const [title, difficulty, description] = await Promise.all([extractTitle(), extractDifficulty(), extractDescription()]);
       const [examples, constraints] = await Promise.all([extractExamples(), extractConstraints()]);
       const testCases: TestCase[] = examples.map(ex => ({ input: ex.input, expectedOutput: ex.output }));
-      return { title, url: window.location.href, difficulty, description, examples, constraints, testCases, extractedAt: Date.now() };
+      return { title, url: normalizeProblemUrl(window.location.href), difficulty, description, examples, constraints, testCases, extractedAt: Date.now() };
     } catch (error) {
       lastError = error as Error;
       if (attempt < maxRetries - 1) await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
