@@ -1,5 +1,15 @@
 # Requirements Document
 
+> **⚠️ HISTORICAL SPEC.** This is the ORIGINAL requirements doc that shaped the
+> action-button design. It has since been implemented and substantially evolved.
+> For the current, authoritative state see:
+> - `.kiro/specs/leetsage-phase1-gemini/` — the shipped Gemini/free-tier build + implementation record
+> - The root `README.md` and `docs/leetsage-learning-guide.md` — current architecture and features
+> - The other `leetsage-*` specs — planned future enhancements
+>
+> Kept for historical context; do not treat details here (e.g. OpenAI/Anthropic
+> provider assumptions, chat-mode design) as the current implementation.
+
 ## Introduction
 
 The AI Learning Assistant feature enhances the LeetSage Chrome extension by providing immediate, action-button-driven access to AI-powered learning aids. Users can instantly request hints, generate examples, break down problems, and access other learning tools through prominent action buttons rather than typing queries. The assistant provides progressive, interactive learning content without revealing complete solutions. This feature transforms the extension from a simple problem tracker into an engaging learning companion that deepens algorithmic understanding through quick, actionable help.
