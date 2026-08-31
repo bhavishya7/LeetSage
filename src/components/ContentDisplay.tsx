@@ -29,13 +29,68 @@ function stripLatex(text: string): string {
     .replace(/\$([^$\n]+?)\$/g, (_, inner) => `\`${inner.trim()}\``);
 }
 
+/**
+ * Renders Big-O / complexity notation with proper formatting:
+ * - O(N²) instead of O(n^2)
+ * - Styled as a visually distinct inline badge
+ * Handles: O(1), O(N), O(N²), O(N³), O(N log N), O(2^N), O(N!), etc.
+ */
+function renderComplexity(text: string, keyBase: number): React.ReactNode[] {
+  // Match O(...) patterns, including nested content like "N log N", "N^2", "2^N"
+  const regex = /O\(([^)]+)\)/gi;
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    // Text before this match
+    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
+
+    const inner = match[1];
+    // Convert ^2 -> superscript, uppercase N for consistency
+    const formatted = inner
+      .replace(/\^(\d+)/g, '⁰¹²³⁴⁵⁶⁷⁸⁹'.includes('') ? '$1' : '^$1') // fallback
+      .replace(/n/g, 'N');
+
+    // Build the styled content with real superscripts
+    const superscripted = formatSuperscripts(formatted);
+
+    parts.push(
+      <span key={`complexity-${keyBase}-${match.index}`}
+        className="inline-flex items-baseline px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 font-mono text-[11px] font-semibold whitespace-nowrap">
+        O({superscripted})
+      </span>
+    );
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts.length > 0 ? parts : [text];
+}
+
+/** Converts ^2, ^3 etc. AND bare trailing digits like N2 into superscript elements. */
+function formatSuperscripts(text: string): React.ReactNode {
+  // First normalize: if the model wrote "N2" or "n2" (no caret), insert one.
+  // Match a letter followed directly by a digit (e.g. N2 → N^2, N3 → N^3).
+  const normalized = text.replace(/([A-Za-z])(\d+)/g, '$1^$2');
+  const parts = normalized.split(/(\^\d+)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith('^')) {
+      return <sup key={i} className="text-[9px]">{part.slice(1)}</sup>;
+    }
+    return part;
+  });
+}
+
 function renderInline(raw: string): React.ReactNode {
   const text = stripLatex(raw);
+  // Split on markdown inline formatting first.
   return text.split(/(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g).map((part, i) => {
     if (part.startsWith('**') && part.endsWith('**')) return <strong key={i} className="font-semibold">{part.slice(2, -2)}</strong>;
     if (part.startsWith('`') && part.endsWith('`')) return <code key={i} className="bg-neutral-200 dark:bg-neutral-700 text-neutral-800 dark:text-neutral-100 px-1 rounded font-mono text-[11px]">{part.slice(1, -1)}</code>;
     if (part.startsWith('*') && part.endsWith('*')) return <em key={i}>{part.slice(1, -1)}</em>;
-    return part;
+    // For plain text, render complexity notation with nice formatting.
+    return <React.Fragment key={i}>{renderComplexity(part, i)}</React.Fragment>;
   });
 }
 

@@ -152,11 +152,23 @@ const App: React.FC = () => {
       stuckTimerRef.current = new StuckTimer((suggestion) => setStuckSuggestion(suggestion), s.enableStuckTimer);
     });
     getUsageToday().then(u => setUsageCount(u.count));
+
+    // Refresh the usage counter whenever the panel becomes visible again.
+    // getUsageToday() keys on the current date, so this also clears a stale
+    // count left over from a previous day (the daily reset).
+    const onVisible = () => { if (!document.hidden) getUsageToday().then(u => setUsageCount(u.count)); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
 
   useEffect(() => {
-    if (problemContext) stuckTimerRef.current?.start(problemContext.difficulty);
-  }, [problemContext?.url]);
+    if (problemContext) {
+      stuckTimerRef.current?.start({
+        difficulty: problemContext.difficulty,
+        hintsExhausted: (progress?.hintLevel ?? 0) >= 3,
+      });
+    }
+  }, [problemContext?.url, progress?.hintLevel]);
 
   const handleActionClick = useCallback(async (actionType: ActionType, userApproach?: string) => {
     if (!problemContext || !settings?.apiConfig.apiKey) return;
@@ -211,7 +223,7 @@ const App: React.FC = () => {
       const updatedProgress = await trackAction(problemContext.url, actionType);
       setProgress(updatedProgress);
       await appendContent(problemContext.url, finalContent);
-      stuckTimerRef.current?.start(problemContext.difficulty);
+      stuckTimerRef.current?.start({ difficulty: problemContext.difficulty, hintsExhausted: updatedProgress.hintLevel >= 3 });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong');
       setLearningContent(prev => prev.filter(c => c.id !== contentId));
@@ -263,7 +275,7 @@ const App: React.FC = () => {
       setLearningContent(prev => prev.map(c => c.id === respId ? finalResp : c));
       await appendContent(problemContext.url, userMsg);
       await appendContent(problemContext.url, finalResp);
-      stuckTimerRef.current?.start(problemContext.difficulty);
+      stuckTimerRef.current?.start({ difficulty: problemContext.difficulty, hintsExhausted: (progress?.hintLevel ?? 0) >= 3 });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong');
       setLearningContent(prev => prev.filter(c => c.id !== respId));
@@ -302,12 +314,23 @@ const App: React.FC = () => {
 
   return (
     <div className={`${isDark ? 'dark' : ''} flex flex-col h-screen bg-neutral-50 dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 text-sm`}>
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 bg-white dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700 shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="text-base font-bold text-orange-500">LeetSage</span>
+      {/* Single consolidated header: problem title + difficulty on the left,
+          usage counter + theme + settings on the right. (Chrome's side-panel
+          title bar already shows the "LeetSage" name, so we don't repeat it.) */}
+      <div className="flex items-start justify-between gap-2 px-3 py-2 bg-white dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700 shrink-0">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 min-w-0 flex-1">
+          {problemContext ? (
+            <>
+              <span className="text-sm font-semibold break-words">{problemContext.title}</span>
+              <span className={`text-xs font-bold shrink-0 ${difficultyColor[problemContext.difficulty] ?? 'text-neutral-400'}`}>
+                {problemContext.difficulty}
+              </span>
+            </>
+          ) : (
+            <span className="text-xs text-neutral-400 italic">Open a LeetCode problem to get started</span>
+          )}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5 shrink-0">
           {settings && (
             <span className="text-[11px] text-neutral-400" title={`AI requests used today (limit ${settings.guardrails.maxRequestsPerDay})`}>
               {usageCount}/{settings.guardrails.maxRequestsPerDay}
@@ -319,20 +342,6 @@ const App: React.FC = () => {
           <button onClick={() => setShowSettings(true)} className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 transition-colors" aria-label="Settings">⚙️</button>
         </div>
       </div>
-
-      {/* Problem context bar */}
-      {problemContext ? (
-        <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-white dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700 shrink-0">
-          <span className="text-xs font-medium truncate">{problemContext.title}</span>
-          <span className={`text-[11px] font-semibold shrink-0 ${difficultyColor[problemContext.difficulty] ?? 'text-neutral-400'}`}>
-            {problemContext.difficulty}
-          </span>
-        </div>
-      ) : (
-        <div className="px-3 py-1.5 bg-white dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700 shrink-0 text-[11px] text-neutral-400 italic">
-          Open a LeetCode problem to get started
-        </div>
-      )}
 
       {/* API key prompt */}
       {!apiKeyConfigured && (
@@ -351,7 +360,7 @@ const App: React.FC = () => {
           {error} <button onClick={() => setError(null)} className="ml-2 underline">Dismiss</button>
         </div>
       )}
-      {stuckSuggestion && (
+      {stuckSuggestion && !(stuckSuggestion.suggestedAction === 'GET_HINT' && (progress?.hintLevel ?? 0) >= 3) && (
         <div className="mx-3 mb-2 p-2 bg-blue-500/10 border border-blue-500/30 rounded text-xs flex items-center justify-between shrink-0">
           <span className="text-blue-500">{stuckSuggestion.message}</span>
           <div className="flex gap-2 ml-2 shrink-0">

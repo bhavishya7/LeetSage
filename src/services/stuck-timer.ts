@@ -1,7 +1,15 @@
-import type { ActionType, StuckSuggestion } from '../types';
+import type { StuckSuggestion } from '../types';
 
-const STUCK_DELAY_MS = 5 * 60 * 1000;
-const COOLDOWN_MS = 10 * 60 * 1000;
+// Less frequent than before (was 5min / 10min) to avoid nagging.
+const STUCK_DELAY_MS = 8 * 60 * 1000;   // wait 8 min of inactivity
+const COOLDOWN_MS = 20 * 60 * 1000;     // at most one suggestion per 20 min
+
+/** Context the timer uses to pick a still-useful suggestion. */
+export interface StuckContext {
+  difficulty?: string;
+  /** True when all 3 hints have already been used (don't suggest Hint). */
+  hintsExhausted?: boolean;
+}
 
 export class StuckTimer {
   private timerId: ReturnType<typeof setTimeout> | null = null;
@@ -14,19 +22,27 @@ export class StuckTimer {
     this.enabled = enabled;
   }
 
-  start(difficulty?: string): void {
+  start(ctx: StuckContext = {}): void {
     this.stop();
     if (!this.enabled) return;
     this.timerId = setTimeout(() => {
       const now = Date.now();
       if (now - this.lastSuggestionTime < COOLDOWN_MS) return;
       this.lastSuggestionTime = now;
-      const suggestedAction: ActionType = difficulty === 'Hard' ? 'BREAK_DOWN_PROBLEM' : 'GET_HINT';
-      this.onSuggestion({
-        message: difficulty === 'Hard' ? "Hard problem? Try breaking it into smaller pieces 🧩" : "Feeling stuck? A hint might help 💡",
-        suggestedAction, canDismiss: true,
-      });
+      this.onSuggestion(this.pickSuggestion(ctx));
     }, STUCK_DELAY_MS);
+  }
+
+  private pickSuggestion(ctx: StuckContext): StuckSuggestion {
+    // If hints are used up, never suggest Hint (that action is gone from the UI).
+    if (ctx.hintsExhausted) {
+      return ctx.difficulty === 'Hard'
+        ? { message: 'Still stuck? Try breaking it into smaller pieces 🧩', suggestedAction: 'BREAK_DOWN_PROBLEM', canDismiss: true }
+        : { message: 'Want me to look at your approach? 🔬', suggestedAction: 'CHECK_APPROACH', canDismiss: true };
+    }
+    return ctx.difficulty === 'Hard'
+      ? { message: 'Hard problem? Try breaking it into smaller pieces 🧩', suggestedAction: 'BREAK_DOWN_PROBLEM', canDismiss: true }
+      : { message: 'Feeling stuck? A hint might help 💡', suggestedAction: 'GET_HINT', canDismiss: true };
   }
 
   stop(): void { if (this.timerId !== null) { clearTimeout(this.timerId); this.timerId = null; } }
