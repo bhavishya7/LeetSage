@@ -31,7 +31,7 @@ Standard Chrome extension (Manifest V3) architecture:
 - **Background service worker** coordinates and persists state to `chrome.storage`.
 - Problem data flows via a **pull-based** model: the side panel requests the current problem from the content script when it's ready (robust against the MV3 service worker sleeping).
 
-See [`src/README.md`](src/README.md) for the source layout and [`docs/leetsage-learning-guide.md`](docs/leetsage-learning-guide.md) for a deep-dive on how everything works.
+See [`src/README.md`](src/README.md) for the source layout and [`docs/leetsage-learning-guide.md`](docs/leetsage-learning-guide.md) for a deep-dive on how everything works. For the *why* behind the architecture — plus interview prep, resume material, and the learning roadmap — see [`docs/career/`](docs/career/).
 
 ## Getting started
 
