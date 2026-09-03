@@ -168,21 +168,6 @@ const ContentCard: React.FC<{ item: LearningContent; isStreaming: boolean }> = (
           {isStreaming && <span className="text-[10px] text-neutral-400 animate-pulse">generating…</span>}
         </div>
         <div className="flex items-center gap-2">
-          {item.content && !isStreaming && (
-            <span
-              role="button"
-              tabIndex={0}
-              onClick={handleCopy}
-              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') handleCopy(e as unknown as React.MouseEvent); }}
-              title="Copy to clipboard"
-              className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors cursor-pointer
-                ${copied
-                  ? 'border-green-500 text-green-600 dark:text-green-400'
-                  : 'border-neutral-300 dark:border-neutral-600 text-neutral-500 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-600'}`}
-            >
-              {copied ? '✓ Copied' : '⧉ Copy'}
-            </span>
-          )}
           <span className="text-[10px] text-neutral-400">{time}</span>
           <span className="text-neutral-400 text-xs">{expanded ? '▲' : '▼'}</span>
         </div>
@@ -191,6 +176,21 @@ const ContentCard: React.FC<{ item: LearningContent; isStreaming: boolean }> = (
         <div className="px-3 pb-2">
           {item.content ? renderContent(item.content) : <div className="h-4 bg-neutral-200 dark:bg-neutral-700 rounded animate-pulse" />}
           {isStreaming && item.content && <span className="inline-block w-1 h-3 bg-neutral-400 animate-pulse ml-0.5" />}
+          {item.content && !isStreaming && (
+            <div className="flex justify-end mt-1.5">
+              <button
+                onClick={handleCopy}
+                title={copied ? 'Copied!' : 'Copy to clipboard'}
+                aria-label="Copy to clipboard"
+                className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs transition-colors cursor-pointer
+                  ${copied
+                    ? 'text-green-600 dark:text-green-400'
+                    : 'text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700'}`}
+              >
+                {copied ? '✓' : '⧉'}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
