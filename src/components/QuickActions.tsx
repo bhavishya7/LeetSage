@@ -26,6 +26,7 @@ const SECONDARY: Chip[] = [
   { type: 'EXPLAIN_CONCEPT', label: 'Concept', icon: '📚', title: 'Explain a relevant concept' },
   { type: 'TIME_COMPLEXITY_HINT', label: 'Complexity', icon: '⏱️', title: 'Hint at optimal complexity' },
   { type: 'PATTERN_RECOGNITION', label: 'Pattern', icon: '🔍', title: 'Identify the algorithmic pattern' },
+  { type: 'GENERATE_REPORT', label: 'Generate report', icon: '📝', title: 'Generate a study-note / progress report for this problem to save to your notes' },
 ];
 
 // Actions that operate on the user's code — emphasized once code is present.

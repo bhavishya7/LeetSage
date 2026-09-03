@@ -3,8 +3,11 @@ import type { ActionType, FilterResult } from '../types';
 const MAX_CODE_BLOCK_LINES = 14;
 const MAX_SNIPPET_LINES = 8;
 
-/** Actions where explaining the actual solution is the point (user's own code). */
-const SOLUTION_EXEMPT_ACTIONS: ReadonlySet<ActionType> = new Set(['CHECK_APPROACH', 'UNDERSTAND_SOLUTION']);
+/**
+ * Actions where including the actual solution is the point: analyzing/explaining
+ * the user's own code, or generating a study-note report that records it.
+ */
+const SOLUTION_EXEMPT_ACTIONS: ReadonlySet<ActionType> = new Set(['CHECK_APPROACH', 'UNDERSTAND_SOLUTION', 'GENERATE_REPORT']);
 
 const SOLUTION_PHRASES = [
   "here's the complete solution", "here is the complete solution", "here's the full solution",

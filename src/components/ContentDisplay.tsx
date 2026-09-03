@@ -16,7 +16,7 @@ const ACTION_LABELS: Record<string, string> = {
   GET_HINT: 'Hint', GENERATE_EXAMPLES: 'New Examples', BREAK_DOWN_PROBLEM: 'Problem Breakdown',
   EXPLAIN_CONCEPT: 'Concept Explanation', CHECK_APPROACH: 'Approach Review',
   TIME_COMPLEXITY_HINT: 'Complexity Hint', PATTERN_RECOGNITION: 'Pattern Recognition',
-  UNDERSTAND_SOLUTION: 'Understand Solution',
+  UNDERSTAND_SOLUTION: 'Understand Solution', GENERATE_REPORT: 'Study Report',
 };
 
 /**
@@ -142,9 +142,21 @@ const UserBubble: React.FC<{ text: string }> = ({ text }) => (
 
 const ContentCard: React.FC<{ item: LearningContent; isStreaming: boolean }> = ({ item, isStreaming }) => {
   const [expanded, setExpanded] = React.useState(true);
+  const [copied, setCopied] = React.useState(false);
   const meta = TYPE_META[item.type];
   const label = ACTION_LABELS[item.actionType] ?? item.actionType;
   const time = new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation(); // don't toggle the card's expand/collapse
+    try {
+      await navigator.clipboard.writeText(item.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard can fail if the document isn't focused; fail silently.
+    }
+  };
 
   return (
     <div className={`border border-neutral-200 dark:border-neutral-700 border-l-2 ${meta.accent} bg-white dark:bg-neutral-800 rounded-lg overflow-hidden mb-2`}>
@@ -156,6 +168,21 @@ const ContentCard: React.FC<{ item: LearningContent; isStreaming: boolean }> = (
           {isStreaming && <span className="text-[10px] text-neutral-400 animate-pulse">generating…</span>}
         </div>
         <div className="flex items-center gap-2">
+          {item.content && !isStreaming && (
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={handleCopy}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') handleCopy(e as unknown as React.MouseEvent); }}
+              title="Copy to clipboard"
+              className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors cursor-pointer
+                ${copied
+                  ? 'border-green-500 text-green-600 dark:text-green-400'
+                  : 'border-neutral-300 dark:border-neutral-600 text-neutral-500 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-600'}`}
+            >
+              {copied ? '✓ Copied' : '⧉ Copy'}
+            </span>
+          )}
           <span className="text-[10px] text-neutral-400">{time}</span>
           <span className="text-neutral-400 text-xs">{expanded ? '▲' : '▼'}</span>
         </div>
