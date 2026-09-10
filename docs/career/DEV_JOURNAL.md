@@ -199,6 +199,39 @@ inside the header button).
 nested interactive elements).
 **Commits.** `12aa35e`.
 
+
+## 2026-09-02 — Steering files, spec index, and doc-drift reconciliation
+
+**What.** Set up the three Kiro **steering files** (`product.md`, `tech.md`,
+`workflow.md`) and a **spec index** (`.kiro/specs/README.md`); reconciled the
+code-level docs (`leetsage-learning-guide.md`, `chrome-extension-guide.md`) with
+the shipped code; resolved the Gemini model-version drift across code and specs;
+and hardened the project-historian agent's verification instructions.
+**Why.** The real trigger was a *process* problem: this work had been running in
+one long session, and context kept compacting and losing detail. The fix was to
+**externalize durable knowledge into files** so a *fresh* session can orient from
+`product`/`tech`/`workflow` steering + the spec index instead of relying on a
+lossy conversation. Same instinct that motivates the dev journal, applied to the
+working rules themselves.
+**What broke / the hard part.** The docs and code had genuinely drifted — most
+concretely the model name: specs said `gemini-2.5-*`, but those identifiers 404
+("no longer available to new users") and the code had already moved to
+`gemini-3.5-*`. Two sources disagreed and only the code was right.
+**How solved.** Wrote the steering files as standing facts (stack, build gotchas,
+the no-solution product constraint, git/UX conventions); added the spec index
+marking each spec shipped/designed/planned; corrected the model name in the specs
+with a dated *superseded* note (kept the README version-agnostic — "Flash-Lite");
+and added an explicit "verify model names against provider docs" rule to `tech.md`
+and the historian so the same stale-name loop cannot recur.
+**Interview angle.** **Context engineering as an engineering discipline** — noticing
+that a long single session degrades quality, then treating durable knowledge as
+files (steering, specs, ADRs, journal) that any fresh session or agent can load,
+rather than trusting chat memory. Plus the concrete "docs-vs-code drift, code was
+right" cleanup and building a repeatable guardrail against the specific failure
+(a stale model name) rather than just fixing the one instance.
+**Commits.** `ca7337c` (steering + spec index), `e3554e9` (learning/chrome-ext
+guide reconciliation), `449d82b` (model-drift resolution + historian hardening).
+
 ---
 
 ## Next up (see [LEARNING_ROADMAP.md](./LEARNING_ROADMAP.md))
