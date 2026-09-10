@@ -66,12 +66,20 @@ MV3 service-worker registration so problem data displays reliably.
 backend. (See [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md) ADR-001/003/005.)
 **What broke.** (1) The MV3 **service worker was crashing silently** on ES-module
 imports. (2) A push-based problem-data flow dropped data whenever the worker slept.
+(3) The API returned **404s** that were first (wrongly) blamed on the `AQ.`-prefixed
+API key — the real cause was a **stale model name**: the specced `gemini-2.5-*`
+identifiers were "no longer available to new users."
 **How solved.** (1) Added `"type": "module"` to the manifest's background entry.
 (2) Switched to a **pull-based** flow — the panel requests the problem on demand
 with retry/backoff, plus a `chrome.scripting.executeScript` inject fallback.
+(3) Switched to `gemini-3.5-flash-lite` / `gemini-3.5-flash` (verified against
+Google's model docs); confirmed the `AQ.` key works fine with Bearer auth.
 **Interview angle.** Real MV3 systems debugging (worker lifecycle, silent crashes,
 push-vs-pull) — a strong "tell me about a hard bug" story. Plus the BYOK/no-backend
-cost & security tradeoff.
+cost & security tradeoff. And a debugging-discipline lesson: an error's *first
+suspected cause* (the unusual key format) was a red herring; the real cause was a
+deprecated model name — now the rule is "verify model names against provider docs
+before assuming."
 **Commits.** `28e9de0`, `425621b`, `75305b0`, `839993d`.
 
 ## 2026-08-30 — Session persistence + pre-submission code analysis + "Understand solution"
@@ -204,3 +212,82 @@ nested interactive elements).
 
 *When each lands, add an entry above (via the project-historian agent) and backfill
 any resulting numbers into [RESUME.md](./RESUME.md).*
+
+---
+
+## Reference — Shipped vs. spec (verified 2026-09-02)
+
+> Not a dated build entry — a **standing reference** you can re-read before an
+> interview to state precisely *what LeetSage does today* and *what is designed
+> but not yet built*, without over-claiming. Grounded in a read of the actual
+> `src/` at commit `7d4d71b`, cross-checked against the specs. Update this when
+> the shipped surface changes.
+
+### Where the specs live (and which is authoritative)
+
+- **`.kiro/specs/ai-learning-assistant/`** — the ORIGINAL vision spec (7 action
+  buttons, OpenAI/Anthropic, chat mode, stuck timer). Explicitly marked
+  **historical**: it shaped the design, then evolved. Do not describe it as the
+  current build.
+- **`.kiro/specs/leetsage-phase1-gemini/`** — the **authoritative shipped spec**:
+  Gemini free-tier + BYOK, chat-hybrid UI, guardrails, MV3 icon fix.
+- **`.kiro/specs/leetsage-{progress-tracking,structured-output,cheatsheet,
+  pseudocode-mode,phase2-struggle-first,phase3-analytics}/`** — **planned /
+  designed**, not yet shipped (structured-output and progress-tracking B/C have
+  detailed design docs; the rest are requirements only).
+
+### Shipped and verified in `src/`
+
+- **Coaching actions (9 `ActionType`s in `types/models.ts`).** Primary chips:
+  `GET_HINT`, `BREAK_DOWN_PROBLEM`, `CHECK_APPROACH` ("Analyze my code"),
+  `UNDERSTAND_SOLUTION`. Secondary (under "More"): `GENERATE_EXAMPLES`,
+  `EXPLAIN_CONCEPT`, `TIME_COMPLEXITY_HINT`, `PATTERN_RECOGNITION`,
+  `GENERATE_REPORT`. (`QuickActions.tsx`.) Note: this evolved past the original
+  spec's 7 — `UNDERSTAND_SOLUTION` and `GENERATE_REPORT` were added later.
+- **Chat-hybrid UI**, not the original button-only panel. Free-form questions go
+  through the same pipeline, grounded by prepending problem context
+  (`llm-service.ts` `buildMessages`).
+- **Gemini via the OpenAI-compatible endpoint** (`llm-service.ts`), BYOK, with
+  streaming (SSE) + non-streaming paths, `max_tokens` cap, `AbortController`
+  timeout, and retry/backoff on 5xx (401/403/429 surfaced, not retried).
+- **Free-tier guardrails** (`rate-limiter.ts`, `DEFAULT_GUARDRAILS` in `api.ts`):
+  per-minute + per-day caps, cooldown, request timeout, usage counter, kill
+  switch — all adjustable in settings.
+- **Solution filter** (`solution-filter.ts`): blocks solution-revealing phrases,
+  over-long code blocks (>14 lines), complete-function patterns, and full
+  step-by-step pseudocode. **Exempts** `CHECK_APPROACH`, `UNDERSTAND_SOLUTION`,
+  `GENERATE_REPORT` (those legitimately involve the user's own code / a report).
+- **Editor code reading** (`code-extractor.ts`): MAIN-world injection to read
+  Monaco's model value, with a `.view-lines` DOM fallback and a toolbar-based
+  language detector.
+- **Progress tracking + persistence** (`progress-tracker.ts`, `storage.ts`): used
+  actions + hint level + history per normalized problem URL, in `chrome.storage`.
+- **Report action** (`GENERATE_REPORT`) producing a Markdown study note; Copy
+  button on responses (Phase A MVP).
+
+### Designed but NOT yet shipped (say "planned", not "built")
+
+- **Structured `data` output** (`StructuredResponse<T>`) — designed as the next
+  backbone; responses today are prose only.
+- **Persistent per-problem records + "My Progress" view** (progress-tracking
+  Phase B/C) — designed; today only the on-demand report exists.
+- **Cheatsheets, pseudocode playground, struggle-first hint gating, learning
+  analytics** — requirements/spec only.
+- **Chat Mode toggle & Stuck Timer as originally specced** — a `stuck-timer.ts`
+  exists and the chat surface shipped as the hybrid input, but the original
+  spec's standalone Chat Mode component and full stuck-timer UX are not the
+  shipped shape; describe the hybrid input + tuned timer as what actually ships.
+- **Evals / automated tests / metrics** — not yet; the optional property tests in
+  the task plans (`*`-marked) were not implemented.
+
+### ✅ Model version — resolved (safe to state in an interview)
+
+The shipped model is **`gemini-3.5-flash-lite` (default) / `gemini-3.5-flash`**
+(`types/api.ts`, `services/storage.ts`, `services/llm-service.ts`), verified
+against Google's current model docs (2026). The earlier Phase 1 *spec* had
+specified `gemini-2.5-*`; those identifiers returned 404 ("no longer available to
+new users") against the endpoint, so implementation switched to `3.5-*`. The
+Phase 1 spec has since been updated with a dated superseded note; the README only
+says "Flash-Lite" generically (no stale version). So: **code is correct, docs are
+aligned, `2.5` was the tried-first-and-failed name — that's the story, not a
+discrepancy.**

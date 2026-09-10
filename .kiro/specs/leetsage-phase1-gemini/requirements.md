@@ -12,7 +12,13 @@ Primary user: the developer. Then interview preppers. Then students. Not current
 
 ## Requirements
 
-1. **Gemini provider (free tier).** Use Google Gemini through its OpenAI-compatible endpoint. Default model `gemini-2.5-flash-lite`, switchable to `gemini-2.5-flash` in settings. No other providers surfaced in the UI.
+1. **Gemini provider (free tier).** Use Google Gemini through its OpenAI-compatible endpoint. Default model `gemini-3.5-flash-lite`, switchable to `gemini-3.5-flash` in settings. No other providers surfaced in the UI.
+   > **Superseded note (2026-09-02):** this requirement originally specified
+   > `gemini-2.5-flash-lite` / `gemini-2.5-flash`. Those identifiers returned 404
+   > ("no longer available to new users") against the endpoint during Phase 1
+   > implementation, so the shipped code uses `gemini-3.5-flash-lite` /
+   > `gemini-3.5-flash` (verified against Google's model docs). Updated here to
+   > match what shipped.
 
 2. **Chat-hybrid side-panel UI.** One clean text input as the primary surface. The 7 existing actions become quick-command chips. Responses render as structured hint cards. Coaching feel, not a generic chatbot.
 

@@ -15,7 +15,8 @@ The pull-based problem-data flow (side panel requests `REQUEST_PROBLEM_DATA` fro
 ### 1. LLM Service (`src/services/llm-service.ts`) — modified
 - Base URL: `https://generativelanguage.googleapis.com/v1beta/openai/`
 - Auth: `Authorization: Bearer <geminiApiKey>`
-- Default model: `gemini-2.5-flash-lite`; alt: `gemini-2.5-flash`
+- Default model: `gemini-3.5-flash-lite`; alt: `gemini-3.5-flash` (originally
+  specced as `2.5-*`, which 404'd; see the requirements superseded note)
 - Keep the streaming (SSE) generator and non-streaming paths.
 - Before every request, consult the rate limiter; abort if blocked.
 - Enforce a per-response `max_tokens` cap and a hard timeout.
@@ -28,7 +29,7 @@ The pull-based problem-data flow (side panel requests `REQUEST_PROBLEM_DATA` fro
 - Daily counter resets at local midnight.
 
 ### 3. Settings (`src/types/api.ts` UserSettings, `SettingsModal.tsx`) — modified
-- `APIConfig.provider` → `'gemini'`; add `model: 'gemini-2.5-flash-lite' | 'gemini-2.5-flash'`.
+- `APIConfig.provider` → `'gemini'`; add `model: 'gemini-3.5-flash-lite' | 'gemini-3.5-flash'`.
 - New guardrail settings: `maxTokens`, `maxRequestsPerMinute`, `maxRequestsPerDay`, `cooldownMs`, `requestTimeoutMs`, `killSwitch`.
 - New `theme: 'light' | 'dark'` (default `'dark'`).
 - Gemini key validation (Gemini keys typically start with `AIza`).
@@ -48,7 +49,7 @@ The pull-based problem-data flow (side panel requests `REQUEST_PROBLEM_DATA` fro
 
 ```
 UserSettings {
-  apiConfig: { provider: 'gemini'; apiKey: string; model: 'gemini-2.5-flash-lite' | 'gemini-2.5-flash' }
+  apiConfig: { provider: 'gemini'; apiKey: string; model: 'gemini-3.5-flash-lite' | 'gemini-3.5-flash' }
   theme: 'light' | 'dark'
   guardrails: {
     maxTokens: number            // e.g. 800

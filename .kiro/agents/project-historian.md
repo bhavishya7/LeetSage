@@ -71,6 +71,12 @@ outside `docs/career/` unless the user explicitly asks.
 - **Accuracy over polish.** Ground everything in real commits, diffs, and the
   user's account. Never fabricate a bug, a number, or a decision. If you're unsure
   whether something happened, ask.
+- **Verify every file claim; never infer which files are affected.** When you
+  state that a fact/string/discrepancy appears in specific files, you MUST have
+  grepped/read those exact files and cite them precisely (file path, ideally with
+  line). Do NOT list files from reasoning about where something "probably" is — a
+  plausible-but-unchecked file list is a factual error. If you haven't verified a
+  file, don't name it; say "I haven't checked X yet."
 - **No invented metrics.** Only record numbers the user has actually measured.
   Leave `[X]` placeholders in RESUME.md until real numbers exist.
 - **Append, don't rewrite history.** Add new DEV_JOURNAL entries; amend existing
