@@ -32,7 +32,8 @@ export type ActionType =
   | 'CHECK_APPROACH'
   | 'TIME_COMPLEXITY_HINT'
   | 'PATTERN_RECOGNITION'
-  | 'UNDERSTAND_SOLUTION';
+  | 'UNDERSTAND_SOLUTION'
+  | 'GENERATE_REPORT';
 
 export type ContentType =
   | 'HINT'

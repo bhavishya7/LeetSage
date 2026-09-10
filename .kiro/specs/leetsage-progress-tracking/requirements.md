@@ -1,9 +1,18 @@
 # LeetSage — Progress Tracking & Study Notes (PLANNED / HIGH PRIORITY IDEA)
 
-> Status: **Idea, documented. The user's most important future feature.**
-> Not started. Overlaps with the existing Phase 3 analytics spec
-> (.kiro/specs/leetsage-phase3-analytics/) — these should likely be merged or
-> cross-referenced when we build them.
+> Status: **Phase A DONE** (single-problem "Generate report" action + copy button,
+> shipped on `feature/progress-tracking`). Phases B/C designed in detail — see
+> [design.md](./design.md), which also serves as a system-design teaching doc.
+>
+> **Decisions locked in for the build:**
+> - Pattern source: **LLM classification into a fixed vocabulary first**; scrape
+>   LeetCode topic tags later.
+> - Save trigger: **explicit "Save to my progress" button first**; auto-save on
+>   detected Accepted submission later (Phase D).
+>
+> Overlaps with the Phase 3 analytics spec
+> (.kiro/specs/leetsage-phase3-analytics/) — the cross-problem analytics (Tier C
+> in design.md) is where they converge; build them together.
 
 ## The vision (in the user's words)
 

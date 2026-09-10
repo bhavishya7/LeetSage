@@ -186,6 +186,45 @@ concrete mistake.
 
 ---
 
+### Q8. "Tell me about an architecture decision you made." (structured output) ⭐ favorite
+
+> Lead with this when asked about design, refactoring, or a decision you're proud
+> of. It shows you diagnose root causes, not just patch symptoms.
+
+**Short answer.** I built a "generate report" feature that summarizes a practice
+session, and it produced generic, textbook writeups that ignored what the user
+actually did. The root cause wasn't the prompt — it was architectural: every
+action returned **freeform prose with no machine-readable data**, so the report
+had nothing structured to summarize and fell back to generic content. The fix was
+to introduce a **hybrid response** — the human-readable prose *plus* a small
+structured `data` block conforming to a schema.
+
+**Deeper — why it's the right fix.** Once responses carry structured data, that
+data becomes a **single source of truth** that many features consume: the report
+aggregates it, the persistent progress records populate from it, the cross-problem
+analytics group on it, and evals assert on it (`data.time === "O(N^2)"` instead of
+regex-scraping prose). Building the progress feature on prose first would've meant
+fragile extraction now and a rip-out later — so I resequenced to do structured
+output first, as the load-bearing wall the other features stand on.
+
+**The hard parts I had to reason about.**
+- **Non-deterministic boundary:** the model can emit malformed JSON, so I parse
+  defensively and degrade to prose-only rather than breaking the UI.
+- **Streaming vs. structured parsing:** streaming gives responsive UX but you can't
+  parse JSON until it's complete — so I stream the human prose and finalize the
+  small data block at the end.
+- **Consistency:** two representations of the same fact can diverge, so the data
+  block is the source of truth and the prose must match it (some prose can even be
+  rendered from the data).
+
+**Signal.** Root-cause diagnosis over symptom-patching; separation of data from
+presentation / single source of truth; recognizing a load-bearing primitive and
+sequencing around it; defensive handling of an unreliable boundary. **This is your
+strongest *architecture* story — pair it with the guardrail (Q3) as your strongest
+*safety* story.**
+
+---
+
 ## General 2026 AI-engineering questions (use LeetSage as your example)
 
 These come up in AI/LLM interviews regardless of the project. For each, the goal
@@ -199,8 +238,9 @@ is to answer generally **and** ground it in LeetSage.
   eval target — I plan an eval suite that asserts the model never leaks a full
   solution and hints stay progressive.
 - **"Structured output / function calling?"** Constraining the model to emit JSON
-  matching a schema, so downstream code can rely on it. *Tie-in:* LeetSage currently
-  parses freeform text; moving hints/complexity to schema'd JSON would make
+  matching a schema, so downstream code can rely on it. *Tie-in:* see **Q8** — this
+  is a designed, load-bearing decision in LeetSage, not a hypothetical. Moving the
+  report-feeding actions to schema'd JSON would make
   rendering robust. (On the roadmap.)
 - **"RAG?"** Retrieval-augmented generation — fetch relevant context and put it in
   the prompt instead of relying on model memory. *Tie-in:* the planned language
@@ -245,7 +285,9 @@ state live?
 
 **AI-specific:** How do you stop it revealing solutions? · How would you test that
 it doesn't? · Design an eval for the guardrail. · Are you exposed to prompt
-injection? · How do you control cost?
+injection? · How do you control cost? · Tell me about an architecture decision you
+made and why (→ structured output, Q8). · How do you get reliable structured data
+out of a non-deterministic model while still streaming?
 
 **Depth probes:** Why `chrome.storage.local` and not `sync`? · What breaks if the
 service worker sleeps mid-request? · How do you keep chat history per problem? ·

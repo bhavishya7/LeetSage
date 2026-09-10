@@ -83,27 +83,41 @@ avoid losing stored data during the required remove/re-add.
 
 ## Tier 2 — Strong features that teach headline skills
 
-### 5. Progress tracking & study notes (agentic summarization)
-**Spec:** `leetsage-progress-tracking`. **Skill:** agentic flows, structured
-output, summarization.
-**MVP (do this slice first).** A "generate report" button that summarizes a solved
-problem (pattern/category, approach, key insight, complexity) and a **copy-text**
-button so you can paste it elsewhere. This MVP also **doubles as the data-export**
-that must precede the permission change (#4).
-**Fuller vision.** A living record that updates as you solve/re-solve problems —
-framed as a small **agent** that categorizes and maintains notes.
-**Interview payoff.** "I built an agentic feature that summarizes and categorizes."
-Also solves your real need (tracking your own LeetCode progress).
-**Effort:** Medium (MVP) → High (full sync/analytics).
+### 5. Structured output — the backbone (do BEFORE progress-tracking Phase B)
+**Spec:** `leetsage-structured-output`. **Skill:** modern LLM I/O,
+schema-constrained generation, separation of data from presentation.
+**What to build.** A **hybrid prose + `data` response**: each report-feeding action
+(`CHECK_APPROACH`, `UNDERSTAND_SOLUTION`) returns the human Markdown *plus* a small
+schema-conforming `data` block, stored on `ContentMetadata.structured`. Add
+tolerant JSON parsing with a prose-only fallback; resolve the streaming-vs-parsing
+tension.
+**Why it moved up.** Discovered while testing the report MVP: the report produced
+generic textbook writeups because responses were freeform prose with no
+machine-readable data. Structured output is the **load-bearing wall** that
+de-risks the report, progress records, analytics, AND evals — each becomes a clean
+consumer of one structured contract instead of re-parsing prose. Building
+progress-tracking on prose first would mean fragile extraction now and a rip-out
+later.
+**Interview payoff.** Strong architecture story: recognizing a root cause, single
+source of truth, incremental migration, defensive handling of a non-deterministic
+boundary. See [INTERVIEW_PREP.md](./INTERVIEW_PREP.md). **Effort:** Medium.
 
-### 6. Structured output / function calling
-**Skill:** modern LLM I/O, schema-constrained generation.
-**What to build.** Move hints, complexity breakdowns, and examples from freeform
-text to **JSON matching a schema**, so rendering is robust and the guardrail can
-inspect structured fields instead of scraping prose.
-**Why.** Named 2026 skill; makes the UI more reliable; complements the filter.
-**Interview payoff.** "I used structured output to make LLM responses
-machine-reliable." **Effort:** Medium.
+### 6. Progress tracking & study notes (built on #5)
+**Spec:** `leetsage-progress-tracking` (Phase A DONE; Phases B/C designed).
+**Skill:** data modeling, storage access patterns, schema versioning, agentic
+summarization.
+**Phase A — DONE.** "Generate report" action + copy button shipped. (Serves as the
+data-export that must precede the permission change #4.) Testing it surfaced the
+need for #5 above.
+**Phase B (next, needs #5).** Persistent per-problem `ProblemRecord`s in
+`chrome.storage.local` (one key per record + a light index), a "My Progress" view,
+and re-solve-updates-record. Records populate from #5's structured `data` fields.
+**Phase C.** Cross-problem analytics ("weakest link", "revisit these") — a
+deterministic aggregation pipeline over the records, optionally with an LLM
+narrative on top.
+**Interview payoff.** Real system-design substance (schema, index/summary
+projection, event-log `attempts[]`, migration, the backend boundary). Also solves
+your real need. **Effort:** Medium (B) → Higher (C).
 
 ### 7. Prompt-injection hardening
 **Skill:** LLM security (OWASP #1 risk), structural prompt separation.
@@ -168,15 +182,20 @@ is exactly the GenAI system-design interview. Rehearse it either way — it's in
 
 ## Suggested sequence (the TL;DR)
 
-1. **Progress-tracking MVP** (#5 slice) — needed as data-export before #4, and it's
-   your first agentic feature.
-2. **Eval suite + tests + metrics** (#1–3, built together) — the biggest
-   resume/interview unlock; produces your numbers.
-3. **Scope permissions** (#4) — quick security win, safe to do now that data is
+1. **Progress-tracking Phase A** (#6 MVP) — DONE. Testing it revealed the report
+   was generic because responses were unstructured → motivated moving #5 up.
+2. **Structured output** (#5) — the backbone. Hybrid prose + `data` for the
+   report-feeding actions; makes the report session-aware and de-risks records,
+   analytics, and evals. Do this **before** progress-tracking Phase B.
+3. **Progress-tracking Phase B/C** (#6) — persistent records + "My Progress" +
+   analytics, populated from #5's structured fields.
+4. **Eval suite + tests + metrics** (#1–3, built together) — the biggest
+   resume/interview unlock; produces your numbers. (Evals get much easier once #5
+   exists — assert on structured fields, not prose.)
+5. **Scope permissions** (#4) — quick security win, safe once progress data is
    exportable.
-4. **Structured output** (#6) then **prompt-injection hardening** (#7) — reliability
-   + security depth.
-5. **Cheatsheet / RAG** (#8), then Tier 3 stretch items.
+6. **Prompt-injection hardening** (#7), then **cheatsheet / RAG** (#8), then Tier 3
+   stretch items.
 
 At each step, backfill numbers into [RESUME.md](./RESUME.md) and new Q&A into
 [INTERVIEW_PREP.md](./INTERVIEW_PREP.md). The docs are living — grow them with the code.

@@ -16,7 +16,7 @@ const ACTION_LABELS: Record<string, string> = {
   GET_HINT: 'Hint', GENERATE_EXAMPLES: 'New Examples', BREAK_DOWN_PROBLEM: 'Problem Breakdown',
   EXPLAIN_CONCEPT: 'Concept Explanation', CHECK_APPROACH: 'Approach Review',
   TIME_COMPLEXITY_HINT: 'Complexity Hint', PATTERN_RECOGNITION: 'Pattern Recognition',
-  UNDERSTAND_SOLUTION: 'Understand Solution',
+  UNDERSTAND_SOLUTION: 'Understand Solution', GENERATE_REPORT: 'Study Report',
 };
 
 /**
@@ -142,9 +142,21 @@ const UserBubble: React.FC<{ text: string }> = ({ text }) => (
 
 const ContentCard: React.FC<{ item: LearningContent; isStreaming: boolean }> = ({ item, isStreaming }) => {
   const [expanded, setExpanded] = React.useState(true);
+  const [copied, setCopied] = React.useState(false);
   const meta = TYPE_META[item.type];
   const label = ACTION_LABELS[item.actionType] ?? item.actionType;
   const time = new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation(); // don't toggle the card's expand/collapse
+    try {
+      await navigator.clipboard.writeText(item.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard can fail if the document isn't focused; fail silently.
+    }
+  };
 
   return (
     <div className={`border border-neutral-200 dark:border-neutral-700 border-l-2 ${meta.accent} bg-white dark:bg-neutral-800 rounded-lg overflow-hidden mb-2`}>
@@ -164,6 +176,21 @@ const ContentCard: React.FC<{ item: LearningContent; isStreaming: boolean }> = (
         <div className="px-3 pb-2">
           {item.content ? renderContent(item.content) : <div className="h-4 bg-neutral-200 dark:bg-neutral-700 rounded animate-pulse" />}
           {isStreaming && item.content && <span className="inline-block w-1 h-3 bg-neutral-400 animate-pulse ml-0.5" />}
+          {item.content && !isStreaming && (
+            <div className="flex justify-end mt-1.5">
+              <button
+                onClick={handleCopy}
+                title={copied ? 'Copied!' : 'Copy to clipboard'}
+                aria-label="Copy to clipboard"
+                className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs transition-colors cursor-pointer
+                  ${copied
+                    ? 'text-green-600 dark:text-green-400'
+                    : 'text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700'}`}
+              >
+                {copied ? '✓' : '⧉'}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

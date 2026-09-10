@@ -17,7 +17,7 @@ const PRIMARY: Chip[] = [
   { type: 'GET_HINT', label: 'Hint', icon: '💡', title: 'Progressive hint (3 levels)' },
   { type: 'BREAK_DOWN_PROBLEM', label: 'Break down', icon: '🧩', title: 'Decompose into sub-problems' },
   { type: 'CHECK_APPROACH', label: 'Analyze my code', icon: '🔬', title: 'Analyze your current code — Approach, Efficiency, Code Style' },
-  { type: 'UNDERSTAND_SOLUTION', label: 'Understand solution', icon: '🧠', title: 'Understand why your solution works — analogy, key insight, why it works, complexity' },
+  { type: 'UNDERSTAND_SOLUTION', label: 'Understand solution', icon: '🧠', title: 'Understand the optimal solution — analogy, key insight, why it works, complexity (uses your code only as light context)' },
 ];
 
 // Secondary actions — hidden behind "More" to reduce clutter.
@@ -26,6 +26,7 @@ const SECONDARY: Chip[] = [
   { type: 'EXPLAIN_CONCEPT', label: 'Concept', icon: '📚', title: 'Explain a relevant concept' },
   { type: 'TIME_COMPLEXITY_HINT', label: 'Complexity', icon: '⏱️', title: 'Hint at optimal complexity' },
   { type: 'PATTERN_RECOGNITION', label: 'Pattern', icon: '🔍', title: 'Identify the algorithmic pattern' },
+  { type: 'GENERATE_REPORT', label: 'Generate report', icon: '📝', title: 'Generate a study-note / progress report for this problem to save to your notes' },
 ];
 
 // Actions that operate on the user's code — emphasized once code is present.

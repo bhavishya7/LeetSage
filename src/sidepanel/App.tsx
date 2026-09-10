@@ -27,7 +27,7 @@ function actionToContentType(actionType: ActionType): LearningContent['type'] {
   const map: Record<ActionType, LearningContent['type']> = {
     GET_HINT: 'HINT', GENERATE_EXAMPLES: 'EXAMPLES', BREAK_DOWN_PROBLEM: 'BREAKDOWN',
     EXPLAIN_CONCEPT: 'EXPLANATION', CHECK_APPROACH: 'FEEDBACK', TIME_COMPLEXITY_HINT: 'HINT', PATTERN_RECOGNITION: 'EXPLANATION',
-    UNDERSTAND_SOLUTION: 'EXPLANATION',
+    UNDERSTAND_SOLUTION: 'EXPLANATION', GENERATE_REPORT: 'EXPLANATION',
   };
   return map[actionType];
 }
@@ -185,7 +185,7 @@ const App: React.FC = () => {
     // analysis is grounded in what they've actually written.
     let userCode: string | undefined;
     let codeLanguage: string | undefined;
-    if (actionType === 'CHECK_APPROACH' || actionType === 'UNDERSTAND_SOLUTION') {
+    if (actionType === 'CHECK_APPROACH' || actionType === 'UNDERSTAND_SOLUTION' || actionType === 'GENERATE_REPORT') {
       const tabId = await getActiveLeetCodeTabId();
       if (tabId != null) {
         const extracted = await extractCurrentCode(tabId);
