@@ -108,7 +108,7 @@ Only list what you can defend. Currently truthful for LeetSage:
 `LLM integration` · `Google Gemini` · `prompt engineering` · `streaming responses`
 · `AI output guardrails` · `Chrome Extension (Manifest V3)` · `React` ·
 `TypeScript` · `Tailwind CSS` · `Vite` · `client-side architecture` ·
-`cost optimization / rate limiting`
+`cost optimization / rate limiting` · `AI-assisted development (custom agents)`
 
 Add once built: `LLM evals` · `LLM-as-judge` · `structured output / function
 calling` · `RAG` · `unit testing (Vitest)` · `prompt-injection mitigation`.
@@ -126,14 +126,21 @@ ordered by resume-value-per-effort. Each maps to
 | **No evals** | "I wrote evals for my LLM feature" is a top 2026 signal; it also proves the guardrail works | Eval suite for the solution-filter (deterministic + LLM-as-judge) | Medium |
 | **No quantified impact** | Resumes reward numbers; you currently have none | Instrument basics: requests handled, filter catch-rate, p50/p95 latency, tokens/request | Low–Med |
 | **No automated tests** | Signals engineering rigor | Vitest on filter, rate-limiter, URL normalization | Low–Med |
-| **No structured output** | Named modern-LLM-I/O skill | Move hints/complexity to JSON schema output | Medium |
-| **Broad permissions** | Reviewers/users notice; weakens "security-minded" claim | Scope `host_permissions` to leetcode.com (already staged, deferred) | Low |
-| **No RAG/agentic element** | Both are headline 2026 keywords | Cheatsheet (local RAG) or agentic progress-tracking | Med–High |
+| **No structured output** *(designed, not built)* | Named modern-LLM-I/O skill | Hybrid prose + `data` response for report-feeding actions — **designed** (see structured-output spec) as the next build; strong architecture story either way | Medium |
+| **Broad permissions** | Reviewers/users notice; weakens "security-minded" claim | Scope `host_permissions` to leetcode.com (prototyped + reverted; deferred until progress export lands) | Low |
+| **RAG/agentic element** *(partial)* | Both are headline 2026 keywords | Progress-tracking MVP shipped + a custom Kiro **project-historian agent** built; fuller agentic records + RAG cheatsheet still ahead | Med–High |
 
 **The single highest-leverage move:** build the **eval suite for the guardrail.**
 It hardens the core product promise *and* unlocks the strongest resume bullet
 ("designed evals that measure an AI safety constraint at scale") *and* gives you
 the quantified numbers every other bullet is missing.
+
+> **Recent progress (keep this honest as it ships):** progress-tracking MVP
+> shipped; "Understand solution" correctness bug fixed; structured-output
+> architecture designed and prioritized ahead of persistence; a custom Kiro
+> project-historian agent now maintains these docs. See
+> [DEV_JOURNAL.md](./DEV_JOURNAL.md) for the full narrative. The gaps above stay
+> listed until the work is actually *built*, not just designed.
 
 ---
 
