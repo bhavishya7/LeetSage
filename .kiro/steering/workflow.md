@@ -55,3 +55,43 @@ When beginning work, read these to get current — don't rely on chat memory:
   (`.kiro/agents/project-historian.md`) updates `docs/career/` — run it on demand
   and review its drafts before committing.
 - Never fabricate facts, numbers, or history in docs; verify against code/commits.
+- **Capture workflow / AI-usage lessons at session end, not just code changes.**
+  Insights about *how* the work was done — context management, agent behavior,
+  tooling decisions, a debugging discipline — are prime interview material and are
+  the easiest thing to lose (they live in conversation, not in diffs). They belong
+  in `INTERVIEW_PREP.md` as Q&A (and a dated `DEV_JOURNAL.md` note when tied to a
+  specific event). The historian captures these too — but only if the handoff
+  below carries them.
+
+## Session-end handoff (emit this at the end of a working session)
+
+At the end of a session, produce a **handoff block** in the shape below. Its
+purpose is to carry context across the session boundary to the project-historian
+(which cannot see this conversation). The user pastes this block into the
+historian's chat; the historian turns it into doc updates for review. Always
+include every section — if a section is empty, say "none" (especially the lesson
+one, so it's never silently dropped).
+
+```
+### Session Handoff
+
+**What changed** (features/fixes, with commit hashes if committed):
+- …
+
+**Why** (motivation / key decisions made and the reasoning):
+- …
+
+**Workflow / AI-usage lesson learned** (how we worked; interview-worthy meta —
+"none" if truly nothing):
+- …
+
+**Designed but NOT built** (so docs don't overstate):
+- …
+
+**Docs to update**: DEV_JOURNAL / RESUME / INTERVIEW_PREP / LEARNING_ROADMAP /
+specs index — whichever apply.
+```
+
+The loop: session ends → emit this handoff → paste into the historian → historian
+drafts doc updates → review → commit. Keep it a habit; it's what stops
+conversational insight from evaporating.
