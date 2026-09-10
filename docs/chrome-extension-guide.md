@@ -26,7 +26,7 @@ Each component has different capabilities and restrictions:
 | Component | Can Access DOM | Can Use Chrome APIs | Lifespan |
 |-----------|---------------|---------------------|----------|
 | Content Script | ✅ Yes (webpage DOM) | ⚠️ Limited | While page is open |
-| Background Worker | ❌ No | ✅ Full access | Persistent (event-driven) |
+| Background Worker | ❌ No | ✅ Full access | Event-driven — sleeps when idle |
 | UI Pages | ✅ Yes (own DOM only) | ✅ Full access | While UI is open |
 
 ## Manifest V3 Basics

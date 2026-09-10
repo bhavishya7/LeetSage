@@ -258,6 +258,60 @@ is to answer generally **and** ground it in LeetSage.
 
 ---
 
+## Working with AI agents — how you built it (a distinct 2026 theme)
+
+Interviewers increasingly ask not just *what* you built but *how you worked with
+AI to build it.* These answers are drawn from the real practices on this project.
+
+### "How do you work effectively with coding agents?"
+
+**Answer.** I treat the context window as a managed resource — *context
+engineering*. I scope a session to roughly one feature or spec, and critically, I
+**externalize decisions into durable artifacts** — specs, an architecture decision
+log, a dev journal, and always-on steering files — rather than relying on the
+conversation to remember them. That way, when context compacts or I start a fresh
+session, the knowledge persists and the agent stays grounded. I use **layered
+context**: always-on steering carries the product definition and conventions, and
+it *references* heavier documentation rather than inlining it, so each session is
+grounded without wasting the context budget (conditional steering can load deep
+implementation notes only when I touch the relevant code). I even built a **custom
+agent** to keep that documentation current. The failure mode I avoid is a
+sprawling session where unrelated work pollutes the context and the agent starts
+conflating threads or losing earlier decisions.
+
+**Signal.** Understanding context *economics*, not just "I wrote some rules" —
+and having built tooling and habits around it.
+
+### "Tell me about a time you had to constrain or debug an AI agent's behavior."
+
+**Answer.** My documentation agent corrupted a file by editing it through a shell
+command (`Set-Content`), which re-encoded the whole file and mangled its UTF-8
+characters and line endings. The root cause was a tooling gap: I'd given the agent
+shell access but no proper file-editing tool, so it fell back to shell text
+manipulation. The fix was to **constrain its tools** — grant a surgical write/edit
+tool, restrict shell to read-only git, and add an explicit rule never to edit files
+via `Set-Content`/`sed`/`echo`. The general lesson: agents should use dedicated,
+surgical file-editing tools, not shell text manipulation, which re-encodes and
+clobbers. Give an agent exactly the tools its job needs — no more.
+
+**Signal.** Diagnosing an agent failure to its root cause (tool availability, not
+"the model messed up"), and hardening via least-privilege tooling.
+
+### "How do you make sure knowledge isn't lost across sessions?"
+
+**Answer.** Beyond externalizing into files, I formalized a **session-handoff
+block** that a working session emits at the end (what changed, why, any
+workflow/AI-usage lesson, and what's designed-but-not-built), which I pass to the
+documentation agent so the *why* and the process lessons — the things that live in
+conversation, not diffs — get captured, not just the code changes. I noticed the
+gap when I realized my best interview material (how I worked) was the thing most
+likely to evaporate, and I closed it by making capture a repeatable ritual.
+
+**Signal.** Systems thinking about your own workflow; iterating on your tooling
+when you spot a gap.
+
+---
+
 ## Behavioral / judgment questions
 
 - **"Why did you build this?"** Genuine: I use it for my own LeetCode practice, and
@@ -288,6 +342,10 @@ it doesn't? · Design an eval for the guardrail. · Are you exposed to prompt
 injection? · How do you control cost? · Tell me about an architecture decision you
 made and why (→ structured output, Q8). · How do you get reliable structured data
 out of a non-deterministic model while still streaming?
+
+**Working with agents:** How do you work effectively with coding agents? · Tell me
+about a time you constrained or debugged an agent's behavior. · How do you keep
+knowledge from being lost across sessions?
 
 **Depth probes:** Why `chrome.storage.local` and not `sync`? · What breaks if the
 service worker sleeps mid-request? · How do you keep chat history per problem? ·
