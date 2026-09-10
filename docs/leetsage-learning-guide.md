@@ -19,7 +19,7 @@ This document is maintained alongside implementation. Each section explains *wha
 12. [Hint System](#12-hint-system)
 13. [Example Generator & Breakdown Engine](#13-example-generator--breakdown-engine)
 14. [React Side Panel](#14-react-side-panel)
-15. [Action Panel Component](#15-action-panel-component)
+15. [Quick Actions Component](#15-quick-actions-component)
 16. [Content Display Component](#16-content-display-component)
 17. [Settings Modal](#17-settings-modal)
 18. [Chat Mode](#18-chat-mode)
@@ -39,7 +39,7 @@ LeetSage is a Chrome extension that acts as an AI-powered learning companion for
 - Tailwind CSS 4 (styling)
 - Vite 7 (build tool)
 - Chrome Extension Manifest V3
-- OpenAI API / Anthropic API (LLM)
+- Google Gemini via its OpenAI-compatible endpoint (LLM) — bring-your-own-key, no backend. Base URL `https://generativelanguage.googleapis.com/v1beta/openai`; models `gemini-3.5-flash-lite` (default) / `gemini-3.5-flash`.
 
 ---
 
@@ -55,10 +55,12 @@ A Chrome extension has three separate JavaScript execution contexts. They cannot
 │  │  - Runs inside the webpage                   │   │
 │  │  - Can read/modify LeetCode's DOM            │   │
 │  │  - Extracts problem title, difficulty, etc.  │   │
-│  │  - Sends PROBLEM_DATA message                │   │
+│  │  - Caches the latest extraction and answers  │   │
+│  │    REQUEST_PROBLEM_DATA pulls from the panel │   │
+│  │  - Also best-effort pushes a PROBLEM_DATA msg│   │
 │  └──────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────┘
-         │ chrome.runtime.sendMessage
+         │ chrome.runtime.sendMessage (best-effort push)
          ▼
 ┌─────────────────────────────────────────────────────┐
 │  Background Service Worker (src/background/)         │
@@ -73,9 +75,13 @@ A Chrome extension has three separate JavaScript execution contexts. They cannot
 ┌─────────────────────────────────────────────────────┐
 │  Side Panel UI (src/sidepanel/)                      │
 │  - React app running in Chrome's side panel         │
-│  - Reads problem data from Chrome Storage           │
-│  - Calls LLM API directly                           │
-│  - Displays action buttons and learning content     │
+│  - PULLS problem data on demand from the content    │
+│    script (REQUEST_PROBLEM_DATA + retry/backoff),   │
+│    with a chrome.scripting inject fallback          │
+│  - Reads a cached copy from Chrome Storage as a     │
+│    fast first paint                                 │
+│  - Calls the Gemini API directly (OpenAI-compatible)│
+│  - Displays action chips and learning content       │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -89,29 +95,44 @@ A Chrome extension has three separate JavaScript execution contexts. They cannot
 
 ## 3. Data Flow
 
-### Problem Detection Flow
+### Problem Detection Flow (pull-based)
+
+The shipped model is **pull-based**, not push-only. The side panel actively
+requests problem data from the content script when it's ready, which sidesteps
+the Manifest V3 race where the background service worker is asleep at page-load
+time (so a fire-and-forget push can be dropped).
+
 ```
 User navigates to leetcode.com/problems/two-sum/
-  → Content script runs
-  → Waits for DOM elements to load (LeetCode is a React SPA)
+  → Content script runs, waits for DOM (LeetCode is a React SPA)
   → Extracts: title, difficulty, description, examples, constraints
-  → Sends PROBLEM_DATA message to background worker
-  → Background worker saves to Chrome Storage
-  → Side panel reads from Chrome Storage on mount
+  → Caches that extraction in-memory; ALSO best-effort pushes a
+    PROBLEM_DATA message (may be dropped if the worker is asleep)
+  → Side panel PULLS on demand: sends REQUEST_PROBLEM_DATA to the tab,
+    with retry/backoff (up to 6 attempts, ~700ms apart)
+  → Content script answers with its cached problem (or extracts on the spot)
+  → If the tab has no content script ("Receiving end does not exist" —
+    common on tabs open before the extension loaded), the panel injects
+    content.js via chrome.scripting.executeScript, then retries
+  → A cached copy in chrome.storage.local ('problemData') is also read on
+    mount for a fast first paint, and storage-change events are still honored
 ```
 
-### Action Button Flow
+### Action / Chip Flow
 ```
-User clicks "Get Hint"
-  → ActionPanel calls handleActionClick('GET_HINT')
-  → App retrieves problem context from state
-  → LLM Service builds request with system prompt + problem context
-  → Calls OpenAI API
-  → Response streams back
-  → Solution Filter checks for complete solutions
+User clicks a quick-action chip (e.g. "Hint")
+  → QuickActions calls handleActionClick('GET_HINT')
+  → App checks rate-limit guardrails (kill switch, daily/minute caps, cooldown)
+  → For code-aware actions (CHECK_APPROACH / UNDERSTAND_SOLUTION /
+    GENERATE_REPORT) it first reads the editor code via code-extractor
+  → LLM Service builds the request with the action's system prompt + context
+  → Calls the Gemini API (OpenAI-compatible endpoint), streaming
+  → Response streams back chunk by chunk into the card
+  → Solution Filter checks the finished response (skipped for the
+    solution-exempt actions)
   → Filtered content rendered in ContentDisplay
-  → Progress Tracker records 'GET_HINT' was used
-  → Chrome Storage updated with new progress
+  → Progress Tracker records the action was used (and bumps hint level)
+  → chrome.storage.local updated with new progress + content history
 ```
 
 ---
@@ -138,11 +159,18 @@ Types are the backbone of the app. Defining them first means every service and c
 }
 ```
 
-**`ActionType`** — The 7 action buttons:
+**`ActionType`** — The 9 actions (see `src/types/models.ts`):
 ```typescript
 'GET_HINT' | 'GENERATE_EXAMPLES' | 'BREAK_DOWN_PROBLEM' |
-'EXPLAIN_CONCEPT' | 'CHECK_APPROACH' | 'TIME_COMPLEXITY_HINT' | 'PATTERN_RECOGNITION'
+'EXPLAIN_CONCEPT' | 'CHECK_APPROACH' | 'TIME_COMPLEXITY_HINT' |
+'PATTERN_RECOGNITION' | 'UNDERSTAND_SOLUTION' | 'GENERATE_REPORT'
 ```
+The two newest ones are code-aware learning modes:
+- `UNDERSTAND_SOLUTION` — explains the *optimal* solution (analogy, key insight,
+  why it works, complexity), treating the user's editor code only as untrusted
+  light context (never asserting it's correct).
+- `GENERATE_REPORT` — produces a compact study-note / progress report for the
+  problem, meant to be copied into personal notes.
 
 **`LearningContent`** — AI-generated content displayed to user:
 ```typescript
@@ -351,10 +379,13 @@ The tracker automatically manages hint progression — the UI just calls `trackA
 
 **File:** `src/services/llm-service.ts`
 
-Handles all communication with the OpenAI API (or Anthropic).
+Handles all communication with Google Gemini via its OpenAI-compatible endpoint
+(`https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`),
+which keeps the standard chat-completions request/response shape. Default model
+is `gemini-3.5-flash-lite`.
 
 ### Why call the API from the side panel directly?
-No backend server is needed — the user provides their own API key, stored in Chrome Storage. The side panel calls the API directly over HTTPS.
+No backend server is needed — the user provides their own Gemini API key, stored in Chrome Storage. The side panel calls the API directly over HTTPS.
 
 ### Streaming vs non-streaming
 ```typescript
@@ -380,9 +411,9 @@ data: [DONE]
 Network errors get 2 retries with exponential backoff (1s, 2s). Client errors (401, 429) are thrown immediately — retrying won't help.
 
 ### Error types
-- `401` → Invalid API key → show settings prompt
-- `429` → Rate limited → show wait message
-- `AbortError` → Request timed out after 30s
+- `401` / `403` → Invalid or unauthorized Gemini API key → show settings prompt
+- `429` → Rate limit / free-tier quota reached → show wait message
+- `AbortError` → Request timed out (default 20s, from `DEFAULT_TIMEOUT_MS` / `requestTimeoutMs`)
 
 ---
 
@@ -390,13 +421,22 @@ Network errors get 2 retries with exponential backoff (1s, 2s). Client errors (4
 
 **File:** `src/services/prompts.ts`
 
-Each of the 7 action types has a specialized system prompt. This is what makes LeetSage's responses focused and educational rather than generic.
+Each of the 9 action types has a specialized system prompt. This is what makes LeetSage's responses focused and educational rather than generic.
 
 ### Why separate prompts per action?
 - `GET_HINT` needs to know about hint levels (1, 2, 3)
 - `GENERATE_EXAMPLES` needs to produce structured output with complexity labels
-- `CHECK_APPROACH` needs to review user input, not generate from scratch
+- `CHECK_APPROACH` reviews the user's *current editor code* (read via
+  `code-extractor`) before submission, and coaches without rewriting it
+- `UNDERSTAND_SOLUTION` explains the optimal solution and treats the user's
+  code as untrusted context (never claims it's correct)
+- `GENERATE_REPORT` records the solution as a study note (solution included by
+  design)
 - Generic prompts produce generic responses
+
+There's also a shared `OUTPUT_RULES` block injected into every prompt (output
+only the final answer, no LaTeX/dollar signs, always give both time AND space
+complexity), plus the `SOLUTION_PREVENTION_RULES` and `TONE_GUIDELINES` blocks.
 
 ### Solution prevention rules (in every prompt)
 ```
@@ -423,14 +463,21 @@ A post-processing layer that checks LLM responses for complete solutions.
 2. Solution filter catches cases where the AI ignores the instruction
 
 ### What gets filtered?
-- Code blocks over 20 lines
-- Responses containing "here's the complete solution", "full implementation", etc.
-- Complete function implementations (detected via regex patterns)
+- Solution-revealing phrases ("here's the complete solution", "full implementation", etc.)
+- Code blocks longer than `MAX_CODE_BLOCK_LINES` (14 non-blank lines)
+- Complete function implementations (detected via regex for Python/JS/Java-style
+  bodies over `MAX_SNIPPET_LINES` = 8 lines)
+- Full step-by-step pseudocode of the algorithm — a block (fenced *or* plain
+  prose) that combines a loop, a branch, and a return/result across enough lines
+  to constitute the whole procedure (`looksLikeFullPseudocode`)
 
 ### What's allowed?
-- Short snippets under 10 lines
-- Pseudocode
-- `CHECK_APPROACH` responses (reviewing user code is always allowed)
+- Short snippets
+- Pseudocode that illustrates one idea rather than the whole algorithm
+- The **solution-exempt actions** — `CHECK_APPROACH`, `UNDERSTAND_SOLUTION`, and
+  `GENERATE_REPORT` — bypass the filter entirely, because analyzing/explaining
+  the user's own code, teaching the optimal solution, or recording it as a study
+  note all legitimately involve solution content
 
 ### Filter result
 ```typescript
@@ -488,24 +535,37 @@ learningContent  // Array of AI-generated cards to display
 isLoading        // Is an API call in progress?
 settings         // API key, preferences
 stuckSuggestion  // Proactive suggestion from stuck timer
-showChat         // Is chat mode open?
 streamingId      // Which content card is currently streaming?
+chatInput        // Free-form question text in the bottom input
+hasCode          // Does the editor currently have code? (surfaces code-aware chips)
+usageCount       // AI requests used today (shown in the header)
 ```
 
-### How problem context loads
+### How problem context loads (pull-based, with fallbacks)
 ```typescript
 useEffect(() => {
-  // 1. Load from Chrome Storage on mount
+  // 1. Fast path: paint whatever is cached in storage immediately.
   chrome.storage.local.get('problemData', (result) => {
-    setProblemContext(result.problemData);
+    if (result.problemData) applyProblem(result.problemData);
   });
 
-  // 2. Listen for updates when user navigates to a new problem
-  chrome.storage.onChanged.addListener((changes) => {
-    if (changes.problemData) setProblemContext(changes.problemData.newValue);
-  });
-}, []);
+  // 2. Reliable path: actively PULL from the active tab's content script
+  //    (REQUEST_PROBLEM_DATA) with retry/backoff, and inject content.js via
+  //    chrome.scripting if the tab has no content script yet.
+  pullFromActiveTab();
+  refreshHasCode();
+
+  // 3. Re-pull on tab switch / navigation completion.
+  chrome.tabs.onActivated.addListener(onActivated);
+  chrome.tabs.onUpdated.addListener(onUpdated);
+
+  // 4. Still honor storage-change pushes as a bonus.
+  chrome.storage.onChanged.addListener(storageListener);
+}, [...]);
 ```
+`applyProblem` compares the normalized `/problems/{slug}/` URL so re-extraction
+after a submission doesn't wipe the live session; a genuinely different problem
+resets the transient content and loads that problem's saved progress.
 
 ### The action flow (handleActionClick)
 ```
@@ -532,23 +592,36 @@ for await (const chunk of streamLLMRequest(request)) {
 
 ---
 
-## 15. Action Panel Component
+## 15. Quick Actions Component
 
-**File:** `src/components/ActionPanel.tsx`
+**File:** `src/components/QuickActions.tsx`
 
-The primary UI — 7 action buttons in a 2-column grid.
+> Note: the old two-column `ActionPanel.tsx` grid was replaced by `QuickActions`
+> — a compact chip row in the bottom bar. See §24 (Chat-Hybrid UI) for the
+> layout it lives in.
 
-### Button states
-- Normal: colored background, clickable
-- Used: shows ✓ checkmark in top-right corner
-- Disabled: 40% opacity, not clickable (no API key, loading, or hints exhausted)
-- Loading: subtle pulse animation
+The actions render as compact chips split into a **primary** row (always
+visible) and a **secondary** set hidden behind a "More ▾" toggle:
+- Primary: `GET_HINT`, `BREAK_DOWN_PROBLEM`, `CHECK_APPROACH` ("Analyze my
+  code"), `UNDERSTAND_SOLUTION` ("Understand solution").
+- Secondary: `GENERATE_EXAMPLES`, `EXPLAIN_CONCEPT`, `TIME_COMPLEXITY_HINT`,
+  `PATTERN_RECOGNITION`, `GENERATE_REPORT` ("Generate report").
 
-### Check Approach special case
-This button toggles a textarea input instead of immediately calling the LLM. The user types their approach, then submits it. This is the only action that requires user input before calling the API.
+### Chip states
+- Normal: outline/filled chip, clickable
+- Used: shows a ✓ next to the label (from `progress.usedActions`)
+- Disabled: 40% opacity (no API key, loading, or — for Get Hint — hints exhausted at level 3)
 
-### Hint level indicator
-Shows 3 circles (●●●) that fill in as hints are used. When all 3 are used, the GET_HINT button is disabled and shows "All hints used".
+### Context-aware ordering
+When the editor has code (`hasCode`), the code-aware chips (`CHECK_APPROACH`,
+`UNDERSTAND_SOLUTION`) are sorted to the front of the primary row and get a
+highlighted accent, so the most relevant actions surface first.
+
+### Check Approach — no textarea
+`CHECK_APPROACH` no longer opens a textarea. It reads the user's *current Monaco
+editor code* directly via `code-extractor` (see §28) and sends that for
+analysis. `UNDERSTAND_SOLUTION` and `GENERATE_REPORT` read the editor the same
+way.
 
 ---
 
@@ -577,11 +650,23 @@ While a card is streaming, a blinking cursor `|` appears after the last characte
 )}
 ```
 
+### Copy button
+Each finished card shows a small copy button (⧉ → ✓ for ~1.5s) that writes the
+card's raw markdown to the clipboard via `navigator.clipboard.writeText`. This
+pairs with `GENERATE_REPORT`: generate a study note, then copy it straight into
+your own notes. The click stops propagation so it doesn't also toggle the card's
+expand/collapse.
+
+### Complexity + math rendering
+The renderer also styles Big-O notation (`O(N^2)` → `O(N²)` badge) and defensively
+converts stray inline LaTeX (`$...$`, `\(...\)`) into inline code, since the model
+occasionally emits it despite the prompt asking for plain text.
+
 ### Auto-scroll
 ```typescript
 useEffect(() => {
   bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-}, [content.length]); // Triggers when a new card is added
+}, [content.length, streamingId]); // New card added, or streaming progresses
 ```
 
 ---
@@ -590,33 +675,37 @@ useEffect(() => {
 
 **File:** `src/components/SettingsModal.tsx`
 
-Handles API key configuration.
+Handles Gemini API key + model selection and the free-tier guardrails.
 
-### API key validation
-```typescript
-if (provider === 'openai' && !key.startsWith('sk-')) return 'OpenAI keys start with "sk-"';
-if (provider === 'anthropic' && !key.startsWith('sk-ant-')) return 'Anthropic keys start with "sk-ant-"';
-```
+### What it configures
+- **Gemini model** dropdown: `gemini-3.5-flash-lite` (default) or `gemini-3.5-flash`.
+- **Gemini API key** (password field). Validation is minimal — it just requires
+  a non-empty key (Google's `AQ.`/`AIza` formats both work), so there's no
+  provider-prefix check.
+- **Kill switch** (pause all AI requests), proactive-suggestions toggle, and a
+  collapsible "usage limits" panel that edits the guardrails (max tokens,
+  requests/minute, requests/day, cooldown, timeout, reset-to-defaults).
 
 ### Security note
-The API key is stored in `chrome.storage.local` — it never leaves the user's browser. It's not sent to any LeetSage server (there isn't one). It's only sent directly to OpenAI/Anthropic when making API calls.
+The API key is stored in `chrome.storage.local` — it never leaves the user's browser. It's not sent to any LeetSage server (there isn't one). It's only sent directly to Google when making Gemini API calls.
 
 ---
 
-## 18. Chat Mode
+## 18. Chat Mode (free-form question input)
 
-**File:** `src/components/ChatMode.tsx`
+> Note: the separate `ChatMode.tsx` component is gone. Free-form questions are
+> now a persistent input in the bottom bar of `App.tsx` (see §24), not a mode
+> that replaces the content display.
 
-An optional free-form chat interface, visually secondary to the action buttons.
-
-### How it differs from action buttons
-- User types a custom question instead of clicking a preset button
-- Messages appear as chat bubbles (user = blue right, assistant = gray left)
+### How it differs from the quick-action chips
+- User types a custom question in the always-present "Ask a question…" input
+  instead of clicking a preset chip
+- The question renders as a blue right-aligned user bubble; the answer streams
+  into a card below it
 - Same solution filter applies
-- Uses `EXPLAIN_CONCEPT` action type for the system prompt (general learning focus)
-
-### Activation
-A subtle "💬 Open free-form chat" link at the bottom of the side panel. Clicking it replaces the content display with the chat interface.
+- Implemented via `LLMRequest.userQuery`, which `llm-service` substitutes for
+  the templated message (still grounded by prepending the problem context), with
+  `EXPLAIN_CONCEPT` as the system-prompt action
 
 ---
 
@@ -765,8 +854,8 @@ layout:
 └─────────────────────────────────┘
 ```
 
-- **QuickActions** = the 7 actions as compact chips (checkmark when used;
-  Get Hint disables at 3 hints).
+- **QuickActions** = the 9 actions as compact chips, split into a primary row
+  plus a "More ▾" set (checkmark when used; Get Hint disables at 3 hints).
 - **Free-form input** streams a coaching answer; the question shows as a blue
   user bubble. Implemented via `LLMRequest.userQuery`, which `llm-service`
   substitutes for the templated message (still grounded with problem context).
@@ -801,6 +890,49 @@ icon-click AND the push data flow. Cause: the bundled `background.js` uses ES
 block. Without it, the worker never registers. This single line was the root of
 multiple symptoms we chased. Lesson: if an MV3 service worker won't start, check
 whether it uses `import` and whether the manifest declares it as a module.
+
+## 28. Pre-Submission Code Analysis (code-extractor)
+
+**File:** `src/services/code-extractor.ts`
+
+The code-aware actions (`CHECK_APPROACH`, `UNDERSTAND_SOLUTION`,
+`GENERATE_REPORT`) read the user's *current* code straight from LeetCode's Monaco
+editor, before they submit.
+
+### Why MAIN-world injection
+Monaco's full document (including lines scrolled off-screen) is only reliably
+available via `window.monaco.editor.getModels()[0].getValue()`. But
+`window.monaco` lives in the *page's* JS world, which content scripts (isolated
+world) can't touch. So `extractCurrentCode(tabId)` uses
+`chrome.scripting.executeScript` with `world: 'MAIN'` to run a self-contained
+reader in the page and return `{ code, language }`.
+
+Fallbacks inside the injected function: if the Monaco global isn't reachable, it
+reconstructs the visible text from the rendered `.view-lines` DOM, and derives the
+language from the toolbar's language button if Monaco didn't provide it.
+
+### How it's wired
+`App.tsx` calls this before firing a code-aware action (to attach `userCode` /
+`codeLanguage` to the request) and also runs a cheap `refreshHasCode()` on
+load/tab-change so `QuickActions` can surface the code-aware chips first.
+
+### How each mode treats the code
+- `CHECK_APPROACH` — coaches on the (possibly incomplete) code without rewriting it.
+- `UNDERSTAND_SOLUTION` — explains the *optimal* solution and treats the editor
+  code as untrusted context; the prompt explicitly forbids claiming it's correct.
+- `GENERATE_REPORT` — records the code as part of a saveable study note.
+
+## 29. What's designed but NOT yet shipped
+
+To keep this guide honest: a couple of capabilities are **designed/planned**, not
+built. Don't describe them as implemented.
+- **Structured (schema-constrained) output.** Today every action returns markdown
+  that the custom renderer parses; the model is asked to follow a section shape
+  via the prompt, but responses are not schema-validated JSON.
+- **Persistent, cross-session progress analytics.** Per-problem progress
+  (`usedActions`, `hintLevel`, content history) *is* persisted, but the richer
+  learning-analytics and "struggle-first" gating live in the Phase 2/3 specs
+  below and are not in the shipped build.
 
 ## Roadmap (future specs)
 
