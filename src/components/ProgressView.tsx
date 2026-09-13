@@ -10,6 +10,18 @@ const difficultyColor: Record<string, string> = {
   Easy: 'text-green-500', Medium: 'text-yellow-500', Hard: 'text-red-500',
 };
 
+/**
+ * Returns a real language label, or '' for values we shouldn't show — Monaco's
+ * "plaintext"/"unknown"/empty are not the user's actual language and reading
+ * them as one is misleading.
+ */
+function displayLanguage(lang?: string): string {
+  if (!lang) return '';
+  const l = lang.trim().toLowerCase();
+  if (l === '' || l === 'plaintext' || l === 'unknown') return '';
+  return lang.trim();
+}
+
 function timeAgo(ms: number): string {
   const days = Math.floor((Date.now() - ms) / (24 * 60 * 60 * 1000));
   if (days <= 0) return 'today';
@@ -50,7 +62,7 @@ const InsightsPanel: React.FC<{ insights: ProgressInsights }> = ({ insights }) =
         </span>
       </div>
       <div className="text-[11px] text-neutral-600 dark:text-neutral-300 space-y-1">
-        <div>{insights.totalProblems} problems · {insights.totalAttempts} saved attempts</div>
+        <div>{insights.totalProblems} problems tracked</div>
         {w && (
           <div>
             <span className="font-medium">Weakest link:</span>{' '}
@@ -90,10 +102,10 @@ const RecordDetail: React.FC<{ record: ProblemRecord; onBack: () => void; onDele
       </div>
       <PatternChips patterns={record.patterns} />
       <div className="text-[10px] text-neutral-400 mt-1">
-        {record.attempts.length} attempt{record.attempts.length === 1 ? '' : 's'} · updated {timeAgo(record.lastUpdatedAt)}
+        Updated {timeAgo(record.lastUpdatedAt)}
       </div>
 
-      <div className="mt-3 text-[12px] font-semibold">Attempts</div>
+      <div className="mt-3 text-[12px] font-semibold">History</div>
       <ol className="mt-1 space-y-1.5">
         {record.attempts.map((a, i) => (
           <li key={i} className={`text-[11px] p-2 rounded border ${i === record.bestAttemptIndex ? 'border-green-500/50 bg-green-500/5' : 'border-neutral-200 dark:border-neutral-700'}`}>
@@ -103,7 +115,7 @@ const RecordDetail: React.FC<{ record: ProblemRecord; onBack: () => void; onDele
             </div>
             <div className="text-neutral-500 dark:text-neutral-400 break-words">{a.approachSummary}</div>
             <div className="text-neutral-400">
-              {a.complexity.time} time / {a.complexity.space} space · {a.hintsUsed} hint{a.hintsUsed === 1 ? '' : 's'}{a.language ? ` · ${a.language}` : ''}
+              {a.complexity.time} time / {a.complexity.space} space · {a.hintsUsed} hint{a.hintsUsed === 1 ? '' : 's'}{displayLanguage(a.language) ? ` · ${displayLanguage(a.language)}` : ''}
             </div>
           </li>
         ))}
@@ -231,7 +243,7 @@ const ProgressView: React.FC<ProgressViewProps> = ({ onClose }) => {
                   <div className="mt-1"><PatternChips patterns={e.patterns} /></div>
                   <div className="flex items-center justify-between mt-1">
                     <span className="text-[10px] text-neutral-400">
-                      {e.attemptCount} attempt{e.attemptCount === 1 ? '' : 's'} · {timeAgo(e.lastUpdatedAt)}
+                      Updated {timeAgo(e.lastUpdatedAt)}
                     </span>
                     <span className="text-[11px] text-neutral-300 dark:text-neutral-600 group-hover:text-blue-400 transition-colors">View →</span>
                   </div>

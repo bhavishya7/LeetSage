@@ -156,9 +156,19 @@ export interface RecordProjection {
  * structured data (if the model emitted it), the report markdown, and the
  * editor language.
  *
- * Precedence: report data > session facts. Patterns are the union of both so
- * nothing is lost. Complexity prefers the user's achieved complexity (from
- * analysis), then the report/understand optimal, then unknown.
+ * Precedence: the REPORT is authoritative. A GENERATE_REPORT looks at the
+ * user's current code + the whole session and summarizes the FINAL state, so
+ * its ReportData is the source of truth. Session facts (from CHECK_APPROACH /
+ * UNDERSTAND_SOLUTION) are only the fallback when no report data is present —
+ * they can be a STALE snapshot of an earlier attempt (e.g. an old brute-force
+ * analysis run before the user reached the optimal solution), which must NOT
+ * override the report.
+ *
+ * Complexity honesty: the record stores what the user ACHIEVED.
+ *  - If the report says solvedOptimally → achieved == the optimal complexity.
+ *  - If not → prefer the analysis' measured currentComplexity (their real,
+ *    non-optimal cost); fall back to the discussed optimal only if there's no
+ *    analysis. This avoids labeling a brute-force attempt with optimal Big-O.
  */
 export function buildRecordProjection(
   facts: SessionFacts,
@@ -168,19 +178,22 @@ export function buildRecordProjection(
 ): RecordProjection {
   const patterns = unionPatterns(reportData?.patterns ?? [], facts.patterns);
 
-  const complexity: Complexity =
-    facts.achievedComplexity ??
-    reportData?.optimalComplexity ??
-    facts.optimalComplexity ??
-    { time: 'O(?)', space: 'O(?)' };
-
   // "solved" is inferred (we can't verify a real submission — that's Phase D):
   // trust the report's own judgement first, else whether analysis put them on
   // the optimal path.
   const solved = reportData?.solvedOptimally ?? facts.onOptimalPath;
 
+  const optimal = reportData?.optimalComplexity ?? facts.optimalComplexity;
+  const complexity: Complexity =
+    (solved
+      ? optimal ?? facts.achievedComplexity
+      : facts.achievedComplexity ?? optimal)
+    ?? { time: 'O(?)', space: 'O(?)' };
+
+  // Approach: the report's summary (final state) wins; the possibly-stale
+  // analysis approach is only a fallback.
   const approachSummary =
-    facts.approachSummary || reportData?.approachSummary || 'Approach not captured.';
+    reportData?.approachSummary || facts.approachSummary || 'Approach not captured.';
 
   return {
     patterns,

@@ -121,9 +121,20 @@ export interface SaveAttemptInput {
 }
 
 /**
- * The save write-path (design §3.3): read the existing record, append the new
- * attempt, recompute bestAttemptIndex, union the patterns, bump timestamps,
- * write the record, then upsert the index entry.
+ * The save write-path (design §3.3): read the existing record, then decide
+ * whether this save is a NEW attempt or an in-place update of the latest one,
+ * recompute bestAttemptIndex, union the patterns, bump timestamps, write the
+ * record, then upsert the index entry.
+ *
+ * WHY the append/replace decision (see design §3.1): a save click is not a
+ * "solving attempt". Clicking Save (or re-generating and re-saving) the same
+ * solution on the same day should NOT inflate the attempt log. We append a
+ * genuinely new attempt only when this looks like a real re-solve — a different
+ * calendar day, OR a changed approach/complexity. Otherwise we replace the
+ * latest attempt in place (refresh its note + timestamp). This keeps
+ * attempts[] an honest event log until Phase D can capture verified
+ * submissions. (The attempt COUNT is deliberately hidden in the UI for now —
+ * see §3.1 — because even a de-duped attempt is inferred, not verified.)
  *
  * This is a classic read-modify-write. chrome.storage is async and the panel is
  * single-user/local, so the interleaving risk is low; we don't guard it with a
@@ -134,7 +145,11 @@ export async function saveAttempt(input: SaveAttemptInput): Promise<ProblemRecor
   const now = Date.now();
   const existing = await getRecord(input.slug);
 
-  const attempts = [...(existing?.attempts ?? []), input.attempt];
+  const prevAttempts = existing?.attempts ?? [];
+  const latest = prevAttempts[prevAttempts.length - 1];
+  const attempts = shouldReplaceLatest(latest, input.attempt)
+    ? [...prevAttempts.slice(0, -1), input.attempt]   // update the latest in place
+    : [...prevAttempts, input.attempt];               // genuinely new attempt
   const patterns = unionPatterns(existing?.patterns ?? [], input.patterns);
 
   const record: ProblemRecord = {
@@ -162,6 +177,31 @@ export async function deleteRecord(slug: string): Promise<void> {
 }
 
 // ---- pure helpers (unit-test targets) -------------------------------------
+
+/** True if two epoch-ms timestamps fall on the same local calendar day. */
+export function sameCalendarDay(a: number, b: number): boolean {
+  const da = new Date(a), db = new Date(b);
+  return da.getFullYear() === db.getFullYear()
+    && da.getMonth() === db.getMonth()
+    && da.getDate() === db.getDate();
+}
+
+/**
+ * Whether an incoming save should REPLACE the latest attempt rather than append
+ * a new one. Replace when it's the same calendar day AND the approach and both
+ * complexity fields are unchanged — i.e. a re-save of the same solution, not a
+ * real re-solve. Any change in approach or complexity, or a later day, is a new
+ * attempt. (Pure — unit-test target. See design §3.1.)
+ */
+export function shouldReplaceLatest(latest: Attempt | undefined, incoming: Attempt): boolean {
+  if (!latest) return false;
+  if (!sameCalendarDay(latest.date, incoming.date)) return false;
+  return (
+    latest.approachSummary === incoming.approachSummary &&
+    latest.complexity.time === incoming.complexity.time &&
+    latest.complexity.space === incoming.complexity.space
+  );
+}
 
 /** Union two pattern lists, preserving order and dropping duplicates. */
 export function unionPatterns(a: ProblemPattern[], b: ProblemPattern[]): ProblemPattern[] {
