@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import QuickActions from '../components/QuickActions';
 import ContentDisplay from '../components/ContentDisplay';
 import SettingsModal from '../components/SettingsModal';
+import ProgressView from '../components/ProgressView';
 import { StuckTimer } from '../services/stuck-timer';
 import type { ProblemContext, ProgressState, LearningContent, ActionType, UserSettings, StuckSuggestion } from '../types';
 import { loadProgress, trackAction, appendContent, clearProgress } from '../services/progress-tracker';
@@ -11,7 +12,8 @@ import { filterResponse } from '../services/solution-filter';
 import { checkRateLimit, recordRequest, getUsageToday } from '../services/rate-limiter';
 import { extractCurrentCode } from '../services/code-extractor';
 import { parseStructuredResponse, stripDataBlockForDisplay } from '../services/structured-parser';
-import { buildSessionDigest } from '../services/session-digest';
+import { buildSessionDigest, extractSessionFacts, buildRecordProjection } from '../services/session-digest';
+import { saveAttempt, slugFromUrl } from '../services/progress-records';
 
 function generateId(): string { return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`; }
 
@@ -42,11 +44,13 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showProgress, setShowProgress] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [stuckSuggestion, setStuckSuggestion] = useState<StuckSuggestion | null>(null);
   const [usageCount, setUsageCount] = useState(0);
   const [chatInput, setChatInput] = useState('');
   const [hasCode, setHasCode] = useState(false);
+  const [savedReportIds, setSavedReportIds] = useState<Set<string>>(new Set());
   const stuckTimerRef = React.useRef<StuckTimer | null>(null);
 
   // Always-fresh mirror of learningContent. handleActionClick is a useCallback
@@ -325,6 +329,43 @@ const App: React.FC = () => {
     setProgress(null); setLearningContent([]);
   }, [problemContext]);
 
+  // Persist a generated report to "My Progress" as a ProblemRecord attempt.
+  // The record's facts (patterns, complexity, approach) are projected from the
+  // session's structured data — the same data the report itself was built from.
+  const handleSaveToProgress = useCallback(async (item: LearningContent) => {
+    if (!problemContext) return;
+    try {
+      const facts = extractSessionFacts(learningContentRef.current, progress);
+      // The report card's own structured data (ReportData) is the primary,
+      // always-available source of patterns/complexity — even when the user
+      // never ran Understand Solution. It has approachSummary + solvedOptimally
+      // (not keyInsight/approachDetected), which is how we tell it apart.
+      const s = item.metadata?.structured;
+      const reportData =
+        s && 'solvedOptimally' in s ? s : null;
+      // Re-read the editor language so the attempt records it (best-effort).
+      let language: string | undefined;
+      const tabId = await getActiveLeetCodeTabId();
+      if (tabId != null) {
+        const extracted = await extractCurrentCode(tabId);
+        language = extracted?.language;
+      }
+      const projection = buildRecordProjection(facts, reportData, item.content, language);
+      await saveAttempt({
+        slug: slugFromUrl(problemContext.url),
+        url: problemContext.url,
+        title: problemContext.title,
+        difficulty: problemContext.difficulty,
+        patterns: projection.patterns,
+        attempt: projection.attempt,
+        notes: item.content,
+      });
+      setSavedReportIds(prev => new Set(prev).add(item.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save to My Progress');
+    }
+  }, [problemContext, progress]);
+
   const handleSettingsSave = useCallback((newSettings: UserSettings) => { setSettings(newSettings); setShowSettings(false); }, []);
   const apiKeyConfigured = Boolean(settings?.apiConfig.apiKey);
 
@@ -373,6 +414,7 @@ const App: React.FC = () => {
               {usageCount}/{settings.guardrails.maxRequestsPerDay}
             </span>
           )}
+          <button onClick={() => setShowProgress(v => !v)} className={`transition-colors ${showProgress ? 'text-blue-500' : 'text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200'}`} aria-label="My Progress" aria-pressed={showProgress} title="My Progress">📈</button>
           <button onClick={toggleTheme} className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 transition-colors" aria-label="Toggle theme" title={isDark ? 'Switch to light' : 'Switch to dark'}>
             {isDark ? '☀️' : '🌙'}
           </button>
@@ -380,6 +422,13 @@ const App: React.FC = () => {
         </div>
       </div>
 
+      {/* My Progress is a full-panel screen that replaces the coaching UI
+          (below the shared header) rather than a modal — reads better in a
+          narrow side panel. Toggle it from the 📈 header button. */}
+      {showProgress ? (
+        <ProgressView onClose={() => setShowProgress(false)} />
+      ) : (
+      <>
       {/* API key prompt */}
       {!apiKeyConfigured && (
         <button onClick={() => setShowSettings(true)}
@@ -389,7 +438,7 @@ const App: React.FC = () => {
       )}
 
       {/* Conversation / content stream */}
-      <ContentDisplay content={learningContent} isLoading={isLoading} streamingId={streamingId} />
+      <ContentDisplay content={learningContent} isLoading={isLoading} streamingId={streamingId} onSaveToProgress={handleSaveToProgress} savedReportIds={savedReportIds} />
 
       {/* Errors + stuck suggestion */}
       {error && (
@@ -435,6 +484,8 @@ const App: React.FC = () => {
           </button>
         )}
       </div>
+      </>
+      )}
 
       {showSettings && <SettingsModal currentSettings={settings} onSave={handleSettingsSave} onClose={() => setShowSettings(false)} />}
     </div>

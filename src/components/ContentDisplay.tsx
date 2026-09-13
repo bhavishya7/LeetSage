@@ -1,7 +1,15 @@
 import React, { useEffect, useRef } from 'react';
 import type { LearningContent } from '../types';
 
-interface ContentDisplayProps { content: LearningContent[]; isLoading: boolean; streamingId: string | null; }
+interface ContentDisplayProps {
+  content: LearningContent[];
+  isLoading: boolean;
+  streamingId: string | null;
+  /** Save a finished report card to persistent progress. Absent = not offered. */
+  onSaveToProgress?: (item: LearningContent) => void;
+  /** ids of report cards already saved this session (to show a saved state). */
+  savedReportIds?: Set<string>;
+}
 
 const TYPE_META: Record<LearningContent['type'], { accent: string; icon: string }> = {
   HINT:         { accent: 'border-l-yellow-400', icon: '💡' },
@@ -140,7 +148,12 @@ const UserBubble: React.FC<{ text: string }> = ({ text }) => (
   </div>
 );
 
-const ContentCard: React.FC<{ item: LearningContent; isStreaming: boolean }> = ({ item, isStreaming }) => {
+const ContentCard: React.FC<{
+  item: LearningContent;
+  isStreaming: boolean;
+  onSaveToProgress?: (item: LearningContent) => void;
+  isSaved?: boolean;
+}> = ({ item, isStreaming, onSaveToProgress, isSaved }) => {
   const [expanded, setExpanded] = React.useState(true);
   const [copied, setCopied] = React.useState(false);
   const meta = TYPE_META[item.type];
@@ -177,7 +190,21 @@ const ContentCard: React.FC<{ item: LearningContent; isStreaming: boolean }> = (
           {item.content ? renderContent(item.content) : <div className="h-4 bg-neutral-200 dark:bg-neutral-700 rounded animate-pulse" />}
           {isStreaming && item.content && <span className="inline-block w-1 h-3 bg-neutral-400 animate-pulse ml-0.5" />}
           {item.content && !isStreaming && (
-            <div className="flex justify-end mt-1.5">
+            <div className="flex justify-end items-center gap-2 mt-1.5">
+              {/* Save-to-progress: only offered on a finished Study Report card. */}
+              {item.actionType === 'GENERATE_REPORT' && onSaveToProgress && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); if (!isSaved) onSaveToProgress(item); }}
+                  disabled={isSaved}
+                  title={isSaved ? 'Saved to My Progress' : 'Save this report to My Progress'}
+                  className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium border transition-colors
+                    ${isSaved
+                      ? 'text-green-600 dark:text-green-400 border-green-500/40 cursor-default'
+                      : 'text-blue-600 dark:text-blue-300 border-blue-500/50 hover:bg-blue-500/10 cursor-pointer'}`}
+                >
+                  {isSaved ? '✓ Saved' : '💾 Save to My Progress'}
+                </button>
+              )}
               <button
                 onClick={handleCopy}
                 title={copied ? 'Copied!' : 'Copy to clipboard'}
@@ -197,7 +224,7 @@ const ContentCard: React.FC<{ item: LearningContent; isStreaming: boolean }> = (
   );
 };
 
-const ContentDisplay: React.FC<ContentDisplayProps> = ({ content, isLoading, streamingId }) => {
+const ContentDisplay: React.FC<ContentDisplayProps> = ({ content, isLoading, streamingId, onSaveToProgress, savedReportIds }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [content.length, streamingId]);
 
@@ -217,7 +244,7 @@ const ContentDisplay: React.FC<ContentDisplayProps> = ({ content, isLoading, str
       {content.map(item =>
         item.type === 'CHAT_MESSAGE' && item.actionType === 'CHECK_APPROACH' && item.metadata?.isUserQuery
           ? <UserBubble key={item.id} text={item.content} />
-          : <ContentCard key={item.id} item={item} isStreaming={item.id === streamingId} />
+          : <ContentCard key={item.id} item={item} isStreaming={item.id === streamingId} onSaveToProgress={onSaveToProgress} isSaved={savedReportIds?.has(item.id)} />
       )}
       <div ref={bottomRef} />
     </div>
