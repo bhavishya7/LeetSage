@@ -25,6 +25,7 @@ This document is maintained alongside implementation. Each section explains *wha
 18. [Chat Mode](#18-chat-mode)
 19. [Stuck Timer](#19-stuck-timer)
 20. [Build & Development Workflow](#20-build--development-workflow)
+30. [Structured Output Pipeline](#30-structured-output-pipeline)
 
 ---
 
@@ -926,9 +927,12 @@ load/tab-change so `QuickActions` can surface the code-aware chips first.
 
 To keep this guide honest: a couple of capabilities are **designed/planned**, not
 built. Don't describe them as implemented.
-- **Structured (schema-constrained) output.** Today every action returns markdown
-  that the custom renderer parses; the model is asked to follow a section shape
-  via the prompt, but responses are not schema-validated JSON.
+- **Structured output — now partially shipped (2026-09-03).** Two actions
+  (`CHECK_APPROACH`, `UNDERSTAND_SOLUTION`) *do* emit a validated JSON `data` block
+  now — see [§30](#30-structured-output-pipeline). The remaining actions
+  (hints/examples/breakdown/concept/chat) are still prose-only markdown by design,
+  and prose↔data consistency is a prompt instruction, not a render-from-data
+  guarantee.
 - **Persistent, cross-session progress analytics.** Per-problem progress
   (`usedActions`, `hintLevel`, content history) *is* persisted, but the richer
   learning-analytics and "struggle-first" gating live in the Phase 2/3 specs
@@ -942,3 +946,165 @@ built. Don't describe them as implemented.
   hints used, solution-revealed, time, submissions, and "problems to revisit".
 - Cross-platform (HackerRank, etc.) and a managed-key backend remain
   someday-maybe, demand-dependent.
+
+---
+
+## 30. Structured Output Pipeline
+
+**Files:** `src/types/models.ts` · `src/types/api.ts` · `src/services/structured-parser.ts` · `src/services/prompts.ts` · `src/services/session-digest.ts` · `src/services/llm-service.ts` · `src/sidepanel/App.tsx`
+**Spec:** `.kiro/specs/leetsage-structured-output/` · **Shipped:** 2026-09-03
+
+### Why this exists
+
+The "Generate report" action (§28, §8) originally produced **generic, textbook
+writeups** — it ignored what the developer actually did this session. The root
+cause wasn't the report prompt; it was architectural: **every action returned
+freeform prose with no machine-readable data.** The report had nothing
+session-specific to read, so it fell back to generic content.
+
+The fix is a **hybrid response**: the two report-feeding actions return the human
+prose *plus* a small, schema-conforming JSON `data` block. That `data` becomes a
+**single source of truth** every downstream consumer reads — today the report,
+later the progress records, analytics, and evals — instead of re-parsing prose.
+Only 2 actions are structured (`CHECK_APPROACH`, `UNDERSTAND_SOLUTION`); the rest
+stay prose-only by design (incremental migration driven by consumers).
+
+### The end-to-end flow
+
+```
+prompt (asks for prose + trailing ```leetsage-data JSON block)
+   │
+   ▼
+LLM stream  ──► App.tsx streams chunks
+   │                │
+   │                ├─ stripDataBlockForDisplay()  ← hides the JSON fence
+   │                │     while streaming so raw JSON never flashes
+   │                ▼
+   │           user sees prose updating live
+   ▼
+stream ends ──► parseStructuredResponse(raw, actionType)
+                     │  split prose | JSON  →  JSON.parse  →  validate/normalize
+                     │  (never throws; bad block ⇒ prose-only)
+                     ▼
+              store { prose, data } → card.content = prose
+                                      card.metadata.structured = data
+                                      persist to chrome.storage.local
+                     │
+                     ▼
+GENERATE_REPORT ──► buildSessionDigest(history, progress)  ← reads metadata.structured
+                     │  deterministic, no extra LLM call
+                     ▼
+                report prompt gets a "SESSION ACTIVITY" block → session-aware report
+```
+
+### 1. The contract (`src/types/models.ts`)
+
+- `StructuredResponse<T>` — the conceptual shape: `{ prose, data? }`.
+- `Complexity` — `{ time, space }` strings.
+- `ProblemPattern` — a **closed vocabulary** (`'Hash Map' | 'Two Pointers' | … | 'Other'`).
+  Closed on purpose: analytics and "weakest link" grouping need a stable set, not
+  free text.
+- `AnalyzeData` (for `CHECK_APPROACH`) — `approachDetected`, `currentComplexity`,
+  `optimalComplexity`, `issues[]`, `onOptimalPath`.
+- `UnderstandData` (for `UNDERSTAND_SOLUTION`) — `patterns[]`, `keyInsight`,
+  `optimalComplexity`.
+- `StructuredData = AnalyzeData | UnderstandData`, carried on
+  `ContentMetadata.structured?`. **Downstream reads this, never the prose.**
+
+`LLMRequest.sessionDigest?` (`src/types/api.ts`) threads the report's digest text
+through to the message builder.
+
+### 2. The prompt side (`src/services/prompts.ts`)
+
+- `structuredDataRules(schemaTs, example)` appends a `STRUCTURED DATA BLOCK
+  (required, comes LAST)` section to the two structured actions — it gives the model
+  the TypeScript schema, a filled example, and the rule that **the JSON is the
+  source of truth and the prose must match it.** The block is tagged
+  ` ```leetsage-data ` (a custom fence tag, so it's unambiguous to find and strip).
+- `GENERATE_REPORT` was reworked to inject the session digest and **foreground it**:
+  "treat SESSION ACTIVITY as the primary source; reflect the actual journey, not a
+  textbook writeup." When no digest is present it falls back to the plain
+  code-only report prompt.
+
+### 3. Tolerant parsing (`src/services/structured-parser.ts`)
+
+The core rule: **never trust an external boundary; validate and degrade.** The
+model can omit the block, emit malformed JSON, or emit the wrong shape.
+
+- `stripDataBlockForDisplay(raw, actionType)` — used **mid-stream**. Cuts from the
+  ` ```leetsage-data ` fence onward, and also suppresses a *partially arrived*
+  opening fence (e.g. a dangling ` ``` ` or ` ```leetsag ` at the very end) so the
+  user never sees raw JSON flash by. Prose above the fence is untouched.
+- `parseStructuredResponse(raw, actionType)` — the authoritative split, run **once
+  at stream end**. It:
+  1. returns `{ prose: raw }` unchanged for non-structured actions;
+  2. locates the last `leetsage-data` fence (with a looser ` ```json ` fallback if
+     the block contains one of our known keys, since models drift);
+  3. `JSON.parse`s it — on failure, **degrades to prose-only** (still strips the
+     bad block so the user never sees the failed dump);
+  4. **validates/normalizes** against the action's schema.
+- **It never throws.** A missing/malformed/invalid block just means
+  `data: undefined` and the card renders as prose-only.
+
+Normalization worth knowing:
+- `canonicalizePattern()` maps free-text pattern names onto the closed vocabulary
+  (exact match → alias table like `"dp"→"Dynamic Programming"`, `"hashmap"→"Hash
+  Map"` → else `"Other"`), so consumers get predictable values.
+- `toComplexity()` tolerates a partial object, defaulting missing fields to `O(?)`.
+- `validateAnalyze` / `validateUnderstand` require the minimum viable fields (a
+  usable complexity) or return `null` (→ prose-only).
+
+### 4. Wiring in the UI (`src/sidepanel/App.tsx`)
+
+- While streaming: display `stripDataBlockForDisplay(accumulated, actionType)`.
+- At stream end: `parseStructuredResponse(...)` → set `card.content = prose`,
+  `card.metadata.structured = data`, then persist.
+- **The stale-closure gotcha (a real bug fixed here).** `handleActionClick` is a
+  `useCallback` that *intentionally* omits `learningContent` from its deps (so it
+  isn't re-created on every streamed chunk). That meant
+  `buildSessionDigest(learningContent, …)` read a **stale, empty closure snapshot**
+  → the digest came out empty → the report silently fell back to generic. Fix: a
+  `learningContentRef` that a `useEffect` keeps mirrored to the latest history; the
+  digest reads `learningContentRef.current` (lines ~56–58 and ~213–214). Lesson
+  captured in the dev journal: for these features, "compiles" ≠ "works" — the bug
+  was only visible by inspecting persisted state.
+
+### 5. The deterministic session digest (`src/services/session-digest.ts`)
+
+`buildSessionDigest(history, progress)` assembles a compact factual summary **at
+read time from the stored structured fields** — no second LLM call. Why
+deterministic: the facts (approach tried, complexity found, patterns, hints used)
+already exist as `data`; re-summarizing the prose with the model would be
+token-heavy and lossy. It reports hints used (from `progress.hintLevel` + counted
+`GET_HINT` cards), each `CHECK_APPROACH` analysis (single vs. iterated, with
+first/latest approach + complexity), issues raised, `UNDERSTAND_SOLUTION` patterns
++ key insight + optimal cost, and free-form question count. **Returns an empty
+string when there's no structured data** — the report then falls back to the
+code-only prompt. The output is a `SESSION ACTIVITY (…)` block the report prompt
+foregrounds.
+
+### 6. Key decisions (see the spec §6 for the full rationale)
+
+- **Why not the provider's native `response_format: json_schema`?** It's exposed on
+  Gemini's OpenAI-compatible endpoint, but (a) it conflicts with token streaming
+  and (b) its JSON-Schema support is partial. The prompt-a-fenced-block + tolerant
+  client parse keeps the streaming UX and doesn't depend on partial schema support.
+  The prose-only fallback stays the safety net regardless. *(Verified against
+  current provider docs before deciding — the same discipline as the model-name
+  404 lesson.)*
+- **Streaming vs. structured:** stream the prose for responsive UX; finalize the
+  small data block once the stream completes.
+- **Consistency:** the data is the source of truth; the prompt tells the model to
+  make prose match it — a *soft* guarantee for now, not render-from-data.
+
+### 7. What's NOT done (don't overclaim)
+
+- Only 2 actions are structured.
+- Prose↔data consistency is a prompt instruction, not enforced by rendering from
+  the data.
+- The degradation path (malformed/absent block → prose-only) is verified by code
+  reading, not yet observed against a real bad model response.
+- No unit tests yet — `structured-parser.ts` and `session-digest.ts` are pure
+  functions and are prime test targets (pairs with the eval-suite roadmap item).
+- Progress-tracking Phase B (populating `ProblemRecord.attempts[]` from this same
+  structured data) is **enabled** by this work, not built.

@@ -94,6 +94,10 @@ Pick 2–4 depending on space. Swap in real numbers as soon as you have them
 - Made and documented core **AI system-design tradeoffs** (bring-your-own-key vs.
   managed backend; client-only vs. server) with a written decision log and an
   articulated scaling path.
+- Designed a **single-source-of-truth structured-output contract** (hybrid prose +
+  schema'd JSON) for a non-deterministic model, with **tolerant parsing that
+  degrades to prose-only** and streaming preserved — turning freeform responses
+  into a machine-readable contract the report and future analytics/evals consume.
 
 > Tip: keep one bullet that signals *rigor* (guardrails/validation) and one that
 > signals *judgment* (tradeoffs) — those two separate you from "called an API"
@@ -106,12 +110,12 @@ Pick 2–4 depending on space. Swap in real numbers as soon as you have them
 Only list what you can defend. Currently truthful for LeetSage:
 
 `LLM integration` · `Google Gemini` · `prompt engineering` · `streaming responses`
-· `AI output guardrails` · `Chrome Extension (Manifest V3)` · `React` ·
-`TypeScript` · `Tailwind CSS` · `Vite` · `client-side architecture` ·
+· `structured output` · `AI output guardrails` · `Chrome Extension (Manifest V3)` ·
+`React` · `TypeScript` · `Tailwind CSS` · `Vite` · `client-side architecture` ·
 `cost optimization / rate limiting` · `AI-assisted development (custom agents)`
 
-Add once built: `LLM evals` · `LLM-as-judge` · `structured output / function
-calling` · `RAG` · `unit testing (Vitest)` · `prompt-injection mitigation`.
+Add once built: `LLM evals` · `LLM-as-judge` · `RAG` · `unit testing (Vitest)` ·
+`prompt-injection mitigation`.
 
 ---
 
@@ -126,7 +130,7 @@ ordered by resume-value-per-effort. Each maps to
 | **No evals** | "I wrote evals for my LLM feature" is a top 2026 signal; it also proves the guardrail works | Eval suite for the solution-filter (deterministic + LLM-as-judge) | Medium |
 | **No quantified impact** | Resumes reward numbers; you currently have none | Instrument basics: requests handled, filter catch-rate, p50/p95 latency, tokens/request | Low–Med |
 | **No automated tests** | Signals engineering rigor | Vitest on filter, rate-limiter, URL normalization | Low–Med |
-| **No structured output** *(designed, not built)* | Named modern-LLM-I/O skill | Hybrid prose + `data` response for report-feeding actions — **designed** (see structured-output spec) as the next build; strong architecture story either way | Medium |
+| ~~**No structured output**~~ ✅ **shipped (2026-09-03)** | Named modern-LLM-I/O skill | Hybrid prose + `data` response for the 2 report-feeding actions, tolerant parse w/ prose-only fallback, deterministic session digest → session-aware report. Strong architecture story. *(Caveats: 2 actions only; no unit tests yet.)* | ~~Medium~~ done |
 | **Broad permissions** | Reviewers/users notice; weakens "security-minded" claim | Scope `host_permissions` to leetcode.com (prototyped + reverted; deferred until progress export lands) | Low |
 | **RAG/agentic element** *(partial)* | Both are headline 2026 keywords | Progress-tracking MVP shipped + a custom Kiro **project-historian agent** built; fuller agentic records + RAG cheatsheet still ahead | Med–High |
 
@@ -136,9 +140,10 @@ It hardens the core product promise *and* unlocks the strongest resume bullet
 the quantified numbers every other bullet is missing.
 
 > **Recent progress (keep this honest as it ships):** progress-tracking MVP
-> shipped; "Understand solution" correctness bug fixed; structured-output
-> architecture designed and prioritized ahead of persistence; a custom Kiro
-> project-historian agent now maintains these docs. See
+> shipped; "Understand solution" correctness bug fixed; **structured output
+> shipped** (2026-09-03 — hybrid prose + `data` for the report-feeding actions,
+> making the report session-aware); a custom Kiro project-historian agent now
+> maintains these docs. See
 > [DEV_JOURNAL.md](./DEV_JOURNAL.md) for the full narrative. The gaps above stay
 > listed until the work is actually *built*, not just designed.
 

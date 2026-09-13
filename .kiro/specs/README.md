@@ -24,7 +24,7 @@
 |---|---|---|
 | [`leetsage-phase1-gemini`](./leetsage-phase1-gemini/) | ✅ **Shipped** | The authoritative built state: Gemini (BYOK, OpenAI-compatible endpoint, `gemini-3.5-*`), chat-hybrid UI, free-tier guardrails, dark/light theme, MV3 fixes. This is the spec that describes what actually runs. |
 | [`leetsage-progress-tracking`](./leetsage-progress-tracking/) | ✅ Phase A / 📐 Phase B–C | Study-notes & progress tracking. **Phase A shipped** (the "Generate report" action + copy button). **Phases B–C designed** (persistent per-problem records + "My Progress" view + cross-problem analytics / "weakest link") in its `design.md` — a system-design teaching doc. |
-| [`leetsage-structured-output`](./leetsage-structured-output/) | 📐 **Designed** | The next build: a hybrid prose + structured `data` response so the report, records, analytics, and evals all consume one machine-readable contract instead of re-parsing prose. Load-bearing; sequenced **before** progress-tracking Phase B. |
+| [`leetsage-structured-output`](./leetsage-structured-output/) | ✅ **Shipped** | A hybrid prose + structured `data` response so the report, records, analytics, and evals consume one machine-readable contract instead of re-parsing prose. **Shipped 2026-09-03** for the 2 report-feeding actions (`CHECK_APPROACH`, `UNDERSTAND_SOLUTION`); the report now consumes a deterministic session digest built from it. Caveats: only those 2 actions are structured; prose↔data consistency is a prompt instruction, not enforced; no unit tests yet. Unblocks progress-tracking Phase B. |
 | [`leetsage-cheatsheet`](./leetsage-cheatsheet/) | 📝 **Planned** | Static, zero-token language cheatsheets (Python/Java/C++) + Big-O chart, stored in the extension. Candidate for a lightweight local RAG later. |
 | [`leetsage-pseudocode-mode`](./leetsage-pseudocode-mode/) | 📝 **Planned** | A lightweight "plan your approach" playground with limited, token-conscious feedback. |
 | [`leetsage-phase2-struggle-first`](./leetsage-phase2-struggle-first/) | 📝 **Planned** | Deeper hints unlock only after the user explains their reasoning — the coaching-identity gate. |
@@ -33,8 +33,9 @@
 
 ## Quick "what's true right now"
 
-- **Shipped & authoritative:** `leetsage-phase1-gemini` + progress-tracking Phase A.
-- **Next to build:** `leetsage-structured-output`, then progress-tracking Phase B.
+- **Shipped & authoritative:** `leetsage-phase1-gemini` + progress-tracking Phase A
+  + `leetsage-structured-output`.
+- **Next to build:** progress-tracking Phase B (now unblocked), then evals/tests.
 - **Don't trust for current state:** `ai-learning-assistant` (historical).
 
 *Keep this index current when a spec changes status — it's the fastest way for a
