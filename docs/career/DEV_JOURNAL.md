@@ -232,16 +232,85 @@ right" cleanup and building a repeatable guardrail against the specific failure
 **Commits.** `ca7337c` (steering + spec index), `e3554e9` (learning/chrome-ext
 guide reconciliation), `449d82b` (model-drift resolution + historian hardening).
 
+## 2026-09-03 — Structured output shipped: hybrid prose + `data`, session-aware report
+
+**What.** Built the structured-output backbone that was designed on 2026-09-02.
+The two report-feeding actions (`CHECK_APPROACH`, `UNDERSTAND_SOLUTION`) now
+return a **hybrid response** — the human prose *plus* a small machine-readable
+JSON block — and the "Generate report" action consumes that data via a
+deterministic session digest, so the report reflects the developer's *actual*
+session instead of a generic textbook writeup. Only those 2 actions are
+structured; hints/examples/breakdown/concept/chat stay prose-only by design.
+**Why.** The report MVP produced generic writeups because every response was
+freeform prose with no machine-readable data — the report had nothing
+session-specific to consume. The root cause was architectural: responses carried
+only a *rendering*, not the *data*. Structured output is the load-bearing fix that
+also de-risks progress records, analytics, and evals — one contract, many
+consumers.
+**What broke / the hard part.** Two things.
+(1) **A green build hid a real bug.** `tsc -b && vite build` passed and the happy
+path looked done, but the report was still generic. Manual testing plus dumping
+`chrome.storage.local` revealed structured data *was* being captured on each
+card's metadata — but the report ignored it. Root cause: `handleActionClick` is a
+`useCallback` that intentionally omits `learningContent` from its deps (to avoid
+re-creating on every streamed chunk), so `buildSessionDigest(learningContent, ...)`
+read a **stale/empty closure snapshot** → the digest came out empty and the report
+silently fell back to the generic (code-only) prompt.
+(2) **"Generic report" was ambiguous** — it could mean an empty digest (a *wiring*
+bug) or an ignored digest (a *prompt-strength* problem). Tuning the prompt blind
+would have been guessing.
+**How solved.** (1) Added a `learningContentRef` that a `useEffect` keeps mirrored
+to the latest history; the digest reads `learningContentRef.current` so it always
+sees the freshest cards (`src/sidepanel/App.tsx`, lines ~56–58 and ~213–214).
+(2) Added a **temporary diagnostic `console.log` of the exact prompt input** (the
+digest text). It showed a *populated* digest → so the wiring was fine and it was
+prompt strength → reworked the `GENERATE_REPORT` prompt to foreground the
+`SESSION ACTIVITY` block as the primary source ("reflect the actual journey, not a
+textbook writeup"). Removed the log before commit. Verified live on
+*largest-rectangle-in-histogram*: the console showed the digest populated ("3 of 6"
+cards carried structured data) and the report described the real O(N²)→O(N)
+journey, the specific bugs, and the hint used.
+On the parser side, `parseStructuredResponse` **never throws** — a missing,
+malformed, or schema-invalid block degrades to prose-only — and
+`stripDataBlockForDisplay` hides the block (and a partially-streamed fence) during
+live streaming so raw JSON never flashes. The digest is **deterministic** (built
+at read time from the stored structured fields), not a second LLM summarization
+call.
+**Interview angle.** ⭐ Two strong, distinct stories. **Architecture:** diagnosing
+a *root cause* (responses carried a rendering, not data) rather than patching the
+prompt symptom — separation of data from presentation, single source of truth,
+tolerant parse with a prose-only fallback over a non-deterministic boundary, and
+streaming the prose while finalizing the small data block at the end. **Workflow:**
+"compiles ≠ works" for event-driven, non-deterministic LLM features — the green
+build hid a stale-closure React bug that only surfaced by inspecting *persisted
+state*; and when an LLM output is wrong, **instrument the exact input first** (the
+diagnostic log turned "generic report" into a two-way diagnosis) instead of tuning
+the prompt blind. Also: verified Gemini's `response_format: json_schema` support
+against current docs before deciding *not* to use it — the same "verify against
+provider docs" discipline as the earlier model-name 404.
+**Caveats (not overclaimed).** Only 2 actions are structured; prose↔data
+consistency is a prompt instruction, not a render-from-data guarantee; the
+degradation path is verified by code reading, not yet observed against a real bad
+model response; no unit tests yet (`structured-parser.ts` and `session-digest.ts`
+are pure and are prime targets). Progress-tracking Phase B is *enabled* by this
+work, not built.
+**Commits.** `affc683` (feat: structured-output layer + report session digest) on
+branch `feature/structured-output` — `src/types/{models,api,index}.ts`,
+`src/services/{structured-parser,session-digest,prompts,llm-service}.ts`,
+`src/sidepanel/App.tsx` (plus minor `ContentDisplay.tsx` word-wrap/overflow UI
+polish that rode along in the same commit).
+
 ---
 
 ## Next up (see [LEARNING_ROADMAP.md](./LEARNING_ROADMAP.md))
 
-1. **Structured output** — the backbone; makes the report session-aware and
-   de-risks records, analytics, and evals.
+1. ~~**Structured output** — the backbone~~ — **DONE (2026-09-03)**; the report is
+   now session-aware and records/analytics/evals have a machine-readable contract
+   to consume.
 2. **Progress-tracking Phase B** — persistent records + "My Progress" view, built
-   on the structured fields.
-3. **Evals + tests + metrics** — the biggest resume/interview unlock; easier once
-   structured output exists.
+   on the structured fields (now unblocked).
+3. **Evals + tests + metrics** — the biggest resume/interview unlock; easier now
+   that structured output exists (assert on `data` fields, not prose).
 
 *When each lands, add an entry above (via the project-historian agent) and backfill
 any resulting numbers into [RESUME.md](./RESUME.md).*
@@ -297,11 +366,15 @@ any resulting numbers into [RESUME.md](./RESUME.md).*
   actions + hint level + history per normalized problem URL, in `chrome.storage`.
 - **Report action** (`GENERATE_REPORT`) producing a Markdown study note; Copy
   button on responses (Phase A MVP).
+- **Structured output** (added 2026-09-03, not in the original `7d4d71b` read):
+  `CHECK_APPROACH` and `UNDERSTAND_SOLUTION` emit a trailing `leetsage-data` JSON
+  block parsed onto `ContentMetadata.structured`; `GENERATE_REPORT` consumes a
+  deterministic `buildSessionDigest(...)` so the report is session-aware. Tolerant
+  parse degrades to prose-only. Caveats: only those 2 actions; prose↔data
+  consistency is a prompt instruction, not enforced; no unit tests yet.
 
 ### Designed but NOT yet shipped (say "planned", not "built")
 
-- **Structured `data` output** (`StructuredResponse<T>`) — designed as the next
-  backbone; responses today are prose only.
 - **Persistent per-problem records + "My Progress" view** (progress-tracking
   Phase B/C) — designed; today only the on-demand report exists.
 - **Cheatsheets, pseudocode playground, struggle-first hint gating, learning

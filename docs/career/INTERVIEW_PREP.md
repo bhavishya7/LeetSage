@@ -189,15 +189,18 @@ concrete mistake.
 ### Q8. "Tell me about an architecture decision you made." (structured output) ⭐ favorite
 
 > Lead with this when asked about design, refactoring, or a decision you're proud
-> of. It shows you diagnose root causes, not just patch symptoms.
+> of. It shows you diagnose root causes, not just patch symptoms. **This shipped
+> (2026-09-03)** — you can speak to it in the past tense, with the streaming
+> tradeoff and the tolerant-parse-with-fallback as real, built decisions.
 
 **Short answer.** I built a "generate report" feature that summarizes a practice
 session, and it produced generic, textbook writeups that ignored what the user
 actually did. The root cause wasn't the prompt — it was architectural: every
 action returned **freeform prose with no machine-readable data**, so the report
-had nothing structured to summarize and fell back to generic content. The fix was
-to introduce a **hybrid response** — the human-readable prose *plus* a small
-structured `data` block conforming to a schema.
+had nothing structured to summarize and fell back to generic content. The fix I
+shipped was a **hybrid response** — the human-readable prose *plus* a small
+structured `data` block conforming to a schema — and a deterministic session
+digest that the report consumes.
 
 **Deeper — why it's the right fix.** Once responses carry structured data, that
 data becomes a **single source of truth** that many features consume: the report
@@ -207,19 +210,34 @@ regex-scraping prose). Building the progress feature on prose first would've mea
 fragile extraction now and a rip-out later — so I resequenced to do structured
 output first, as the load-bearing wall the other features stand on.
 
-**The hard parts I had to reason about.**
-- **Non-deterministic boundary:** the model can emit malformed JSON, so I parse
-  defensively and degrade to prose-only rather than breaking the UI.
+**The hard parts I had to reason about (and how I resolved them).**
+- **Non-deterministic boundary:** the model can omit the block or emit malformed
+  or schema-invalid JSON, so the parser **never throws** — a bad block degrades to
+  prose-only and the card still renders. I also normalize what does parse (e.g.
+  coerce free-text pattern names onto a closed vocabulary) so consumers get a
+  predictable shape.
 - **Streaming vs. structured parsing:** streaming gives responsive UX but you can't
-  parse JSON until it's complete — so I stream the human prose and finalize the
-  small data block at the end.
+  parse JSON until it's complete — so I stream the human prose (hiding the data
+  fence, even a half-arrived one, so raw JSON never flashes) and finalize the small
+  data block once the stream ends.
 - **Consistency:** two representations of the same fact can diverge, so the data
-  block is the source of truth and the prose must match it (some prose can even be
-  rendered from the data).
+  block is the source of truth and the prose is instructed to match it. Honest
+  caveat: that's a *soft* prompt guarantee today, not render-from-data.
+- **Feeding it forward:** the report doesn't re-summarize the prose with another
+  LLM call — it builds a **deterministic digest** at read time from the stored
+  structured fields. Cheaper, reliable, and grounded in what actually happened.
+
+**Verify-before-assume detail.** I checked Gemini's OpenAI-compatible endpoint
+docs and confirmed it *does* expose `response_format: {type: "json_schema"}` — but
+it conflicts with token streaming and its JSON-Schema support is partial. So I
+chose the prompt-a-fenced-block + tolerant-client-parse approach instead, which
+keeps the streaming UX and doesn't depend on partial schema support. (Same
+"verify against provider docs" discipline as the model-name 404 in Q7.)
 
 **Signal.** Root-cause diagnosis over symptom-patching; separation of data from
 presentation / single source of truth; recognizing a load-bearing primitive and
-sequencing around it; defensive handling of an unreliable boundary. **This is your
+sequencing around it; defensive handling of an unreliable boundary; and choosing a
+technique against verified provider capabilities, not assumptions. **This is your
 strongest *architecture* story — pair it with the guardrail (Q3) as your strongest
 *safety* story.**
 
@@ -239,9 +257,12 @@ is to answer generally **and** ground it in LeetSage.
   solution and hints stay progressive.
 - **"Structured output / function calling?"** Constraining the model to emit JSON
   matching a schema, so downstream code can rely on it. *Tie-in:* see **Q8** — this
-  is a designed, load-bearing decision in LeetSage, not a hypothetical. Moving the
-  report-feeding actions to schema'd JSON would make
-  rendering robust. (On the roadmap.)
+  is a **shipped**, load-bearing decision in LeetSage. The report-feeding actions
+  emit a schema'd `data` block alongside the prose; a tolerant parser validates it
+  and degrades to prose-only on failure; the report consumes it as the single
+  source of truth. I chose a prompt-a-fenced-block approach over the provider's
+  native `response_format: json_schema` because the latter conflicts with token
+  streaming and only partially supports JSON-Schema.
 - **"RAG?"** Retrieval-augmented generation — fetch relevant context and put it in
   the prompt instead of relying on model memory. *Tie-in:* the planned language
   cheatsheet could be a small local retrieval layer (zero token cost).
@@ -310,6 +331,42 @@ likely to evaporate, and I closed it by making capture a repeatable ritual.
 **Signal.** Systems thinking about your own workflow; iterating on your tooling
 when you spot a gap.
 
+### "How do you verify AI-built features actually work — not just that they compile?"
+
+**Answer.** For event-driven, non-deterministic (LLM) features, "compiles" is not
+"works" — a green build can hide a real bug. When I shipped structured output, the
+build passed and the happy path looked done, but the generated report was still
+generic. What caught it was **hands-on testing plus inspecting persisted state**: I
+dumped `chrome.storage.local` and saw that the structured `data` *was* being
+captured on each card, but the report ignored it. That isolated a **stale-closure
+React bug** — `handleActionClick` is a `useCallback` that deliberately omits
+`learningContent` from its deps (so it doesn't re-create on every streamed chunk),
+so the digest function read an empty closure snapshot and the report silently fell
+back to generic. I fixed it with a ref that always mirrors the latest history. The
+lesson: for these features, verify the *invisible half* — the state you persist and
+the exact input you feed the model — because the visible half can look fine while
+the data path is broken.
+
+**Signal.** Testing discipline for non-deterministic systems; knowing that type-
+checking and the happy path don't cover data-flow/closure bugs; reaching for
+persisted-state inspection as a debugging tool.
+
+### "An LLM feature gives wrong output. How do you debug it?"
+
+**Answer.** Instrument the **exact input** first — don't tune the prompt blind. My
+"generic report" symptom had two very different causes: an *empty* digest (a wiring
+bug) or an *ignored* digest (a prompt-strength problem), and they need opposite
+fixes. I added a temporary `console.log` of the precise digest text being sent. It
+showed a populated digest → so the wiring was fine and it was prompt strength →
+I reworked the prompt to foreground the session-activity block. Removed the log
+before commit. The general principle: when a probabilistic component misbehaves,
+make its input observable so you can tell a *plumbing* failure from a *prompting*
+failure — otherwise you're guessing against a non-deterministic system.
+
+**Signal.** Systematic debugging of LLM features; turning an ambiguous symptom into
+a decisive two-way diagnosis by instrumenting the input; cleaning up diagnostics
+before committing.
+
 ---
 
 ## Behavioral / judgment questions
@@ -345,7 +402,9 @@ out of a non-deterministic model while still streaming?
 
 **Working with agents:** How do you work effectively with coding agents? · Tell me
 about a time you constrained or debugged an agent's behavior. · How do you keep
-knowledge from being lost across sessions?
+knowledge from being lost across sessions? · How do you verify an AI-built feature
+actually works, not just compiles? · An LLM feature gives wrong output — how do you
+debug it?
 
 **Depth probes:** Why `chrome.storage.local` and not `sync`? · What breaks if the
 service worker sleeps mid-request? · How do you keep chat history per problem? ·

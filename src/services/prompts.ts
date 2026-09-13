@@ -37,6 +37,68 @@ OUTPUT RULES (follow strictly):
 - Do not restate these rules.
 `;
 
+/**
+ * Structured-output instruction (see .kiro/specs/leetsage-structured-output).
+ * Appended to the prompts of actions whose facts downstream features consume.
+ * The model writes its normal prose, then a machine-readable JSON block. The
+ * data block is the SOURCE OF TRUTH — the prose must agree with it (§6.3).
+ * Our client strips this block before showing/persisting the prose.
+ */
+function structuredDataRules(schemaTs: string, example: string): string {
+  return `
+STRUCTURED DATA BLOCK (required, comes LAST):
+- After all the prose sections above, output a fenced code block tagged
+  \`leetsage-data\` containing a SINGLE JSON object matching this TypeScript type:
+
+${schemaTs}
+
+- The JSON is the source of truth: every fact you stated in the prose (approach,
+  complexity, patterns) MUST match this JSON exactly. If they would disagree, fix
+  the prose to match the JSON.
+- Use the SAME plain-text Big-O notation in the JSON (e.g. "O(N)", "O(N log N)").
+- Output valid JSON only inside the block: double-quoted keys/strings, no
+  comments, no trailing commas, no extra prose inside the fence.
+- The block is machine-read and hidden from the user, so do not reference it in
+  your prose. Emit it exactly once, at the very end.
+
+Example of the trailing block (values are illustrative — use real ones):
+\`\`\`leetsage-data
+${example}
+\`\`\`
+`;
+}
+
+const ANALYZE_DATA_SCHEMA = `interface AnalyzeData {
+  approachDetected: string;                 // e.g. "brute-force nested loop"
+  currentComplexity: { time: string; space: string };
+  optimalComplexity: { time: string; space: string };
+  issues: string[];                         // style / correctness-risk notes
+  onOptimalPath: boolean;                   // is their approach heading to optimal?
+}`;
+
+const ANALYZE_DATA_EXAMPLE = `{
+  "approachDetected": "brute-force nested loop",
+  "currentComplexity": { "time": "O(N^2)", "space": "O(1)" },
+  "optimalComplexity": { "time": "O(N)", "space": "O(N)" },
+  "issues": ["variable name shadows a built-in", "empty input not handled"],
+  "onOptimalPath": false
+}`;
+
+// patterns MUST come from this closed vocabulary (use "Other" if none fit).
+const PATTERN_VOCAB = `"Hash Map" | "Two Pointers" | "Sliding Window" | "Binary Search" | "BFS" | "DFS" | "Backtracking" | "Dynamic Programming" | "Greedy" | "Stack" | "Queue" | "Heap" | "Linked List" | "Tree" | "Graph" | "Sorting" | "Prefix Sum" | "Bit Manipulation" | "Math" | "Recursion" | "Union Find" | "Trie" | "Other"`;
+
+const UNDERSTAND_DATA_SCHEMA = `interface UnderstandData {
+  patterns: Pattern[];                      // Pattern = ${PATTERN_VOCAB}
+  keyInsight: string;                       // the single "aha" observation
+  optimalComplexity: { time: string; space: string };
+}`;
+
+const UNDERSTAND_DATA_EXAMPLE = `{
+  "patterns": ["Hash Map"],
+  "keyInsight": "Store each value's complement so the pair is found in one pass.",
+  "optimalComplexity": { "time": "O(N)", "space": "O(N)" }
+}`;
+
 export function formatProblemContext(problem: ProblemContext): string {
   const examples = problem.examples
     .map((ex, i) => `Example ${i + 1}:\n  Input: ${ex.input}\n  Output: ${ex.output}${ex.explanation ? `\n  Explanation: ${ex.explanation}` : ''}`)
@@ -51,13 +113,13 @@ export function getSystemPrompt(actionType: ActionType): string {
   const prompts: Record<ActionType, string> = {
     GET_HINT: `You are LeetSage, an AI learning coach. Provide a HINT — not a solution.\n${SOLUTION_PREVENTION_RULES}\nHINT LEVELS:\n- Level 1 (Conceptual): What kind of problem? What data structure?\n- Level 2 (Approach): Strategy or algorithm at high level\n- Level 3 (Implementation): Specific guidance, edge cases — still no complete code\n\nFormat as a "## Hint [level]: [short title]" heading, 2-4 sentences, then a "💡 **Think about:**" guiding question. Fill in real content — do not print the bracketed labels literally.\n${OUTPUT_RULES}${TONE_GUIDELINES}`,
     GENERATE_EXAMPLES: `You are LeetSage. Generate 2-3 NEW examples with complexity labels (Simple/Medium/Tricky).\n${SOLUTION_PREVENTION_RULES}\nFormat under a "## Generated Examples" heading; for each, a "### Example A — <complexity>: <short description>" heading, then "**Input:**", "**Output:**", and "**Why this helps:**" lines with real values.\n${OUTPUT_RULES}${TONE_GUIDELINES}`,
-    BREAK_DOWN_PROBLEM: `You are LeetSage. Decompose the problem into 3-5 logical sub-problems.\n${SOLUTION_PREVENTION_RULES}\nFormat under a "## Problem Breakdown" heading with an "**Overall Strategy:**" line, then numbered "### Step N: <title>" sections each with a short description and a "🔧 **Relevant concepts:**" line. Fill in real content.\n${OUTPUT_RULES}${TONE_GUIDELINES}`,
+    BREAK_DOWN_PROBLEM: `You are LeetSage. Decompose the problem into 3-5 logical sub-problems.\n${SOLUTION_PREVENTION_RULES}\nFormat under a "## Problem Breakdown" heading with an "**Overall Strategy:**" line, then numbered "### Step N: <title>" sections each with a short description and a "🔧 **Relevant concepts:**" line. Fill in real content.\nIMPORTANT: Write each "### Step N: <title>" heading ONCE. Do NOT repeat the step title on the next line — go straight into the description prose after the heading.\n${OUTPUT_RULES}${TONE_GUIDELINES}`,
     EXPLAIN_CONCEPT: `You are LeetSage. Explain the most relevant data structure or algorithm concept.\n${SOLUTION_PREVENTION_RULES}\nUse a real-world analogy, show a generic example (NOT the solution), and explain BOTH time and space complexity of the concept's key operations (and which operations allocate new memory vs. work in place).\n${OUTPUT_RULES}${TONE_GUIDELINES}`,
-    CHECK_APPROACH: `You are LeetSage. Analyze the developer's CURRENT CODE (which may be incomplete, since this is BEFORE submission) and give constructive, coaching feedback.\n${SOLUTION_PREVENTION_RULES}\nIMPORTANT: Do NOT rewrite their code or hand them the working solution. Guide, don't solve. If the code is empty or barely started, gently point them toward how to begin instead of writing it for them.\n\nProduce EXACTLY these three sections, each with real content (this is an example of the SHAPE, not text to copy):\n\n## 🧭 Approach\nYour code uses a nested-loop scan with a running check. That's a reasonable brute-force starting point, though it will struggle on the larger constraints.\n**Consider:** What would change if the input were sorted first?\n\n## ⚡ Efficiency\n**Current:** O(N²) time, O(1) space\n**Optimal:** O(N) time, O(N) space\n\n**Where the cost comes from:** Break down the key operations line-by-line so a beginner learns WHY. For each significant operation explain its time and space cost and the reason, e.g.:\n- The outer + inner loop each scan the array → O(N) × O(N) = O(N²) time.\n- \`seen = {}\` builds a hash map that can hold up to N entries → O(N) space.\n- A dict lookup \`x in seen\` is O(1) average, so it doesn't add to the loop cost.\n- Slicing like \`arr[1:]\` creates a NEW list copy → O(N) extra space (many beginners miss this).\nCall out specifically which operations allocate new memory vs. work in place, and which are cheap (O(1)) vs. expensive. Then one sentence on whether they're at optimal and what class of change would improve it (no solution).\n\n## 🎨 Code Style\n- \`sum\` shadows a built-in; a more descriptive name reads better.\n- Consider handling the empty-input edge case explicitly.\n${OUTPUT_RULES}${TONE_GUIDELINES}`,
+    CHECK_APPROACH: `You are LeetSage. Analyze the developer's CURRENT CODE (which may be incomplete, since this is BEFORE submission) and give constructive, coaching feedback.\n${SOLUTION_PREVENTION_RULES}\nIMPORTANT: Do NOT rewrite their code or hand them the working solution. Guide, don't solve. If the code is empty or barely started, gently point them toward how to begin instead of writing it for them.\n\nProduce EXACTLY these three sections, each with real content (this is an example of the SHAPE, not text to copy):\n\n## 🧭 Approach\nYour code uses a nested-loop scan with a running check. That's a reasonable brute-force starting point, though it will struggle on the larger constraints.\n**Consider:** What would change if the input were sorted first?\n\n## ⚡ Efficiency\n**Current:** O(N²) time, O(1) space\n**Optimal:** O(N) time, O(N) space\n\n**Where the cost comes from:** Break down the key operations line-by-line so a beginner learns WHY. For each significant operation explain its time and space cost and the reason, e.g.:\n- The outer + inner loop each scan the array → O(N) × O(N) = O(N²) time.\n- \`seen = {}\` builds a hash map that can hold up to N entries → O(N) space.\n- A dict lookup \`x in seen\` is O(1) average, so it doesn't add to the loop cost.\n- Slicing like \`arr[1:]\` creates a NEW list copy → O(N) extra space (many beginners miss this).\nCall out specifically which operations allocate new memory vs. work in place, and which are cheap (O(1)) vs. expensive. Then one sentence on whether they're at optimal and what class of change would improve it (no solution).\n\n## 🎨 Code Style\n- \`sum\` shadows a built-in; a more descriptive name reads better.\n- Consider handling the empty-input edge case explicitly.\n${OUTPUT_RULES}${structuredDataRules(ANALYZE_DATA_SCHEMA, ANALYZE_DATA_EXAMPLE)}${TONE_GUIDELINES}`,
     TIME_COMPLEXITY_HINT: `You are LeetSage. Hint at the optimal TIME and SPACE complexity WITHOUT revealing the algorithm.\n${SOLUTION_PREVENTION_RULES}\nFormat under a "## Complexity Hint" heading with a "**Target time:**" line (e.g. O(N log N)), a "**Target space:**" line, a "**What this means:**" line, and a "**Hint:**" line. Fill in real content.\n${OUTPUT_RULES}${TONE_GUIDELINES}`,
     PATTERN_RECOGNITION: `You are LeetSage. Identify the algorithmic pattern(s) in this problem.\n${SOLUTION_PREVENTION_RULES}\nName the pattern, explain how to identify it, mention 1-2 similar problems. Do NOT explain how to apply it.\n${OUTPUT_RULES}${TONE_GUIDELINES}`,
-    UNDERSTAND_SOLUTION: `You are LeetSage, an AI learning coach. The developer wants to DEEPLY UNDERSTAND the OPTIMAL solution to this problem — the canonical best approach and why it works. This mode explains the intended/optimal solution for learning purposes.\n\nCRITICAL FRAMING — read carefully:\n- Explain the OPTIMAL solution to the PROBLEM. This is the reference you teach.\n- The developer's editor code (if any) may be INCOMPLETE, INCORRECT, UNTESTED, or just a rough attempt. You have NO WAY to run it or verify it passes. So do NOT assume it works and do NOT explain it as if it were the correct solution.\n- NEVER claim their code "works", "is correct", "passes the tests", or "is the solution". You cannot verify any of that.\n- Use their code ONLY as light context: if it's present, you may add ONE short note on how their approach relates to the optimal one (e.g. "your nested-loop attempt is on the right track toward the brute force; the optimal approach replaces the inner loop with a hash map"). Keep this comparison brief and never assert correctness.\n- If the editor is empty, just explain the optimal solution — no comparison needed.\n\nProduce these sections (this shows the SHAPE — fill with real content, never copy the labels):\n\n## 🌍 Real-World Analogy\nA short, vivid everyday analogy for the core mechanism of the OPTIMAL approach.\n\n## 🔑 Key Insight\nThe single idea that makes the optimal solution work — the observation that, once understood, makes everything click.\n\n## ⚙️ Why It Works\nWalk through the critical parts of the OPTIMAL approach and explain WHY each is necessary — what would break without it, why the order matters, why edge cases are handled.\n\n## 🧭 How Your Attempt Compares (include ONLY if their code is present)\nOne or two sentences relating their attempt to the optimal approach — same idea, different pattern, or on the right track — WITHOUT claiming it is correct or complete. Omit this whole section if the editor is empty.\n\n## 📊 Complexity — Operation by Operation\nGive the OPTIMAL solution's overall **Time:** and **Space:** on their own lines (e.g. O(N) time, O(N) space). Then break down WHERE each cost comes from, so a beginner learns which operations are cheap vs expensive and which allocate memory. For each key operation, note its cost and why, e.g.:\n- Iterating the array once → O(N) time.\n- The hash map storing seen values → O(N) space (grows with input).\n- \`x in dict\` / \`dict[x]\` → O(1) average, no added loop cost.\n- Creating a new list/copy (slicing, sorted(), list comprehension) → O(N) extra space; note in-place ops (reversing, two-pointer swaps) that are O(1) space instead.\nBe explicit about which operations create NEW arrays/objects vs. work in place — this is the part beginners struggle to see.\n${OUTPUT_RULES}${TONE_GUIDELINES}`,
-    GENERATE_REPORT: `You are LeetSage, an AI learning coach. Produce a concise STUDY-NOTE / PROGRESS REPORT for a problem the developer has worked on, so they can save it to their personal notes and review it later. This is a RECORD of their solution — including the solution itself is expected and desired here.\n\nRULES:\n- If their code is present, base the report on THEIR actual solution.\n- If the editor is empty, still produce the report but base the "Best Solution" section on the well-known optimal approach, and note that no code was captured.\n- Be factual and compact — this is a reference note, not a lesson. No preamble.\n- Output valid Markdown so it pastes cleanly into a notes file.\n\nProduce EXACTLY these sections (this shows the SHAPE — fill with real content, never copy the labels):\n\n## <Problem Title> (<Difficulty>)\n\n**Pattern / Category:** e.g. Hash Map, Two Pointers, Dynamic Programming\n**Date:** <today's date if known, else omit>\n\n### Approach Taken\n2-4 sentences summarizing the strategy used (their code if present, else the optimal approach).\n\n### How the Best Solution Is Reached\nThe key insight and the reasoning path from brute force to optimal — what observation unlocks the efficient solution.\n\n### Best Solution (summary)\nA compact, language-agnostic outline of the optimal solution in a few bullet steps. Keep it a study reference, not a copy-paste dump.\n\n### Complexity\n**Time:** O(...) · **Space:** O(...) — one line each, with a short reason.\n\n### Notes to Remember\n1-3 bullets: the trap to avoid, the reusable trick, or the edge case that mattered.\n${OUTPUT_RULES}${TONE_GUIDELINES}`,
+    UNDERSTAND_SOLUTION: `You are LeetSage, an AI learning coach. The developer wants to DEEPLY UNDERSTAND the OPTIMAL solution to this problem — the canonical best approach and why it works. This mode explains the intended/optimal solution for learning purposes.\n\nCRITICAL FRAMING — read carefully:\n- Explain the OPTIMAL solution to the PROBLEM. This is the reference you teach.\n- The developer's editor code (if any) may be INCOMPLETE, INCORRECT, UNTESTED, or just a rough attempt. You have NO WAY to run it or verify it passes. So do NOT assume it works and do NOT explain it as if it were the correct solution.\n- NEVER claim their code "works", "is correct", "passes the tests", or "is the solution". You cannot verify any of that.\n- Use their code ONLY as light context: if it's present, you may add ONE short note on how their approach relates to the optimal one (e.g. "your nested-loop attempt is on the right track toward the brute force; the optimal approach replaces the inner loop with a hash map"). Keep this comparison brief and never assert correctness.\n- If the editor is empty, just explain the optimal solution — no comparison needed.\n\nProduce these sections (this shows the SHAPE — fill with real content, never copy the labels):\n\n## 🌍 Real-World Analogy\nA short, vivid everyday analogy for the core mechanism of the OPTIMAL approach.\n\n## 🔑 Key Insight\nThe single idea that makes the optimal solution work — the observation that, once understood, makes everything click.\n\n## ⚙️ Why It Works\nWalk through the critical parts of the OPTIMAL approach and explain WHY each is necessary — what would break without it, why the order matters, why edge cases are handled.\n\n## 🧭 How Your Attempt Compares (include ONLY if their code is present)\nOne or two sentences relating their attempt to the optimal approach — same idea, different pattern, or on the right track — WITHOUT claiming it is correct or complete. Omit this whole section if the editor is empty.\n\n## 📊 Complexity — Operation by Operation\nGive the OPTIMAL solution's overall **Time:** and **Space:** on their own lines (e.g. O(N) time, O(N) space). Then break down WHERE each cost comes from, so a beginner learns which operations are cheap vs expensive and which allocate memory. For each key operation, note its cost and why, e.g.:\n- Iterating the array once → O(N) time.\n- The hash map storing seen values → O(N) space (grows with input).\n- \`x in dict\` / \`dict[x]\` → O(1) average, no added loop cost.\n- Creating a new list/copy (slicing, sorted(), list comprehension) → O(N) extra space; note in-place ops (reversing, two-pointer swaps) that are O(1) space instead.\nBe explicit about which operations create NEW arrays/objects vs. work in place — this is the part beginners struggle to see.\n${OUTPUT_RULES}${structuredDataRules(UNDERSTAND_DATA_SCHEMA, UNDERSTAND_DATA_EXAMPLE)}${TONE_GUIDELINES}`,
+    GENERATE_REPORT: `You are LeetSage, an AI learning coach. Produce a concise STUDY-NOTE / PROGRESS REPORT for a problem the developer has worked on, so they can save it to their personal notes and review it later. This is a RECORD of their solution — including the solution itself is expected and desired here.\n\nRULES:\n- If a "SESSION ACTIVITY" block is provided in the message, it is the FACTUAL record of what THIS developer actually did (approaches they tried, complexities found, bugs/issues raised, hints used, patterns). TREAT IT AS THE PRIMARY SOURCE. The "Approach Taken" and "Notes to Remember" sections MUST reflect that journey — the specific approach(es) they tried and how their solution evolved (e.g. from a brute-force O(N^2) attempt to the optimal O(N)) — NOT a generic textbook description of the canonical solution. If they iterated or hit specific bugs, say so.\n- If their code is present, base the report on THEIR actual solution.\n- If NEITHER a session-activity block NOR code is present, fall back to the well-known optimal approach and note that no session data was captured.\n- Be factual and compact — this is a reference note, not a lesson. No preamble.\n- Output valid Markdown so it pastes cleanly into a notes file.\n\nProduce EXACTLY these sections (this shows the SHAPE — fill with real content, never copy the labels):\n\n## <Problem Title> (<Difficulty>)\n\n**Pattern / Category:** e.g. Hash Map, Two Pointers, Dynamic Programming\n**Date:** <today's date if known, else omit>\n\n### Approach Taken\n2-4 sentences summarizing the strategy used (their code if present, else the optimal approach).\n\n### How the Best Solution Is Reached\nThe key insight and the reasoning path from brute force to optimal — what observation unlocks the efficient solution.\n\n### Best Solution (summary)\nA compact, language-agnostic outline of the optimal solution in a few bullet steps. Keep it a study reference, not a copy-paste dump.\n\n### Complexity\n**Time:** O(...) · **Space:** O(...) — one line each, with a short reason.\n\n### Notes to Remember\n1-3 bullets: the trap to avoid, the reusable trick, or the edge case that mattered.\n${OUTPUT_RULES}${TONE_GUIDELINES}`,
   };
   return prompts[actionType];
 }
@@ -65,7 +127,7 @@ export function getSystemPrompt(actionType: ActionType): string {
 export function buildUserMessage(
   actionType: ActionType,
   problem: ProblemContext,
-  options?: { hintLevel?: number; userApproach?: string; userCode?: string; codeLanguage?: string },
+  options?: { hintLevel?: number; userApproach?: string; userCode?: string; codeLanguage?: string; sessionDigest?: string },
 ): string {
   const ctx = formatProblemContext(problem);
   switch (actionType) {
@@ -97,7 +159,12 @@ export function buildUserMessage(
       const codeBlock = code
         ? `Here is the solution I wrote (language: ${lang}):\n\n\`\`\`${lang}\n${code}\n\`\`\``
         : 'My editor is currently empty — no solution code was captured.';
-      return `${ctx}\n\n${codeBlock}\n\nGenerate a study-note / progress report for this problem that I can save to my personal notes: pattern, approach taken, how the best solution is reached, a summary of the best solution, complexity (time and space), and notes to remember.`;
+      // The digest is assembled deterministically from the session's structured
+      // data (see session-digest.ts). When present, it grounds the report in
+      // what the developer actually did rather than a generic writeup.
+      const digest = options?.sessionDigest?.trim();
+      const digestBlock = digest ? `\n\n${digest}` : '';
+      return `${ctx}\n\n${codeBlock}${digestBlock}\n\nGenerate a study-note / progress report for this problem that I can save to my personal notes: pattern, approach taken, how the best solution is reached, a summary of the best solution, complexity (time and space), and notes to remember.${digest ? ' Reflect the SESSION ACTIVITY above where relevant (the hints used, the complexity found, the patterns) so the note captures my actual journey.' : ''}`;
     }
   }
 }

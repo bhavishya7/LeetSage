@@ -88,7 +88,7 @@ function renderInline(raw: string): React.ReactNode {
   // Split on markdown inline formatting first.
   return text.split(/(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g).map((part, i) => {
     if (part.startsWith('**') && part.endsWith('**')) return <strong key={i} className="font-semibold text-neutral-900 dark:text-white">{part.slice(2, -2)}</strong>;
-    if (part.startsWith('`') && part.endsWith('`')) return <code key={i} className="bg-neutral-200 dark:bg-neutral-700 text-pink-600 dark:text-pink-300 px-1 rounded font-mono text-[12px]">{part.slice(1, -1)}</code>;
+    if (part.startsWith('`') && part.endsWith('`')) return <code key={i} className="bg-neutral-200 dark:bg-neutral-700 text-pink-600 dark:text-pink-300 px-1 rounded font-mono text-[12px] break-words">{part.slice(1, -1)}</code>;
     if (part.startsWith('*') && part.endsWith('*')) return <em key={i}>{part.slice(1, -1)}</em>;
     // For plain text, render complexity notation with nice formatting.
     return <React.Fragment key={i}>{renderComplexity(part, i)}</React.Fragment>;
@@ -136,7 +136,7 @@ function renderContent(text: string): React.ReactNode {
 
 const UserBubble: React.FC<{ text: string }> = ({ text }) => (
   <div className="flex justify-end mb-2">
-    <div className="max-w-[85%] rounded-2xl rounded-br-sm px-3 py-2 text-[13px] bg-blue-600 text-white">{text}</div>
+    <div className="max-w-[85%] rounded-2xl rounded-br-sm px-3 py-2 text-[13px] bg-blue-600 text-white break-words">{text}</div>
   </div>
 );
 
@@ -173,7 +173,7 @@ const ContentCard: React.FC<{ item: LearningContent; isStreaming: boolean }> = (
         </div>
       </button>
       {expanded && (
-        <div className="px-3 pb-2">
+        <div className="px-3 pb-2 min-w-0 break-words overflow-x-hidden">
           {item.content ? renderContent(item.content) : <div className="h-4 bg-neutral-200 dark:bg-neutral-700 rounded animate-pulse" />}
           {isStreaming && item.content && <span className="inline-block w-1 h-3 bg-neutral-400 animate-pulse ml-0.5" />}
           {item.content && !isStreaming && (
@@ -213,7 +213,7 @@ const ContentDisplay: React.FC<ContentDisplayProps> = ({ content, isLoading, str
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-3 py-3">
+    <div className="flex-1 min-w-0 overflow-x-hidden overflow-y-auto px-3 py-3">
       {content.map(item =>
         item.type === 'CHAT_MESSAGE' && item.actionType === 'CHECK_APPROACH' && item.metadata?.isUserQuery
           ? <UserBubble key={item.id} text={item.content} />

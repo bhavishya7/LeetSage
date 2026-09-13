@@ -83,24 +83,29 @@ avoid losing stored data during the required remove/re-add.
 
 ## Tier 2 — Strong features that teach headline skills
 
-### 5. Structured output — the backbone (do BEFORE progress-tracking Phase B)
+### 5. Structured output — the backbone  ✅ DONE (2026-09-03)
 **Spec:** `leetsage-structured-output`. **Skill:** modern LLM I/O,
 schema-constrained generation, separation of data from presentation.
-**What to build.** A **hybrid prose + `data` response**: each report-feeding action
-(`CHECK_APPROACH`, `UNDERSTAND_SOLUTION`) returns the human Markdown *plus* a small
-schema-conforming `data` block, stored on `ContentMetadata.structured`. Add
-tolerant JSON parsing with a prose-only fallback; resolve the streaming-vs-parsing
-tension.
-**Why it moved up.** Discovered while testing the report MVP: the report produced
+**What shipped.** A **hybrid prose + `data` response**: the two report-feeding
+actions (`CHECK_APPROACH`, `UNDERSTAND_SOLUTION`) return the human Markdown *plus*
+a trailing `leetsage-data` JSON block, parsed onto `ContentMetadata.structured`
+by a tolerant parser that degrades to prose-only on any failure. The block is
+streamed as prose then finalized at stream end (resolves the streaming-vs-parsing
+tension). `GENERATE_REPORT` consumes a **deterministic** `buildSessionDigest(...)`
+built from those stored fields, so the report reflects the actual session.
+**Caveats (keep honest):** only those 2 actions are structured; prose↔data
+consistency is a prompt instruction, not a render-from-data guarantee; no unit
+tests on the parser/digest yet (prime targets — pairs with #1).
+**Why it mattered.** Discovered while testing the report MVP: the report produced
 generic textbook writeups because responses were freeform prose with no
 machine-readable data. Structured output is the **load-bearing wall** that
 de-risks the report, progress records, analytics, AND evals — each becomes a clean
-consumer of one structured contract instead of re-parsing prose. Building
-progress-tracking on prose first would mean fragile extraction now and a rip-out
-later.
+consumer of one structured contract instead of re-parsing prose.
 **Interview payoff.** Strong architecture story: recognizing a root cause, single
 source of truth, incremental migration, defensive handling of a non-deterministic
-boundary. See [INTERVIEW_PREP.md](./INTERVIEW_PREP.md). **Effort:** Medium.
+boundary. See [INTERVIEW_PREP.md](./INTERVIEW_PREP.md) Q8 (now answerable as
+*shipped*). **Effort:** Medium. **Unblocks:** progress-tracking Phase B (#6) and
+makes evals (#1) easier (assert on `data` fields, not prose).
 
 ### 6. Progress tracking & study notes (built on #5)
 **Spec:** `leetsage-progress-tracking` (Phase A DONE; Phases B/C designed).
@@ -109,7 +114,7 @@ summarization.
 **Phase A — DONE.** "Generate report" action + copy button shipped. (Serves as the
 data-export that must precede the permission change #4.) Testing it surfaced the
 need for #5 above.
-**Phase B (next, needs #5).** Persistent per-problem `ProblemRecord`s in
+**Phase B (next — #5 is now done, so this is unblocked).** Persistent per-problem `ProblemRecord`s in
 `chrome.storage.local` (one key per record + a light index), a "My Progress" view,
 and re-solve-updates-record. Records populate from #5's structured `data` fields.
 **Phase C.** Cross-problem analytics ("weakest link", "revisit these") — a
@@ -184,9 +189,9 @@ is exactly the GenAI system-design interview. Rehearse it either way — it's in
 
 1. **Progress-tracking Phase A** (#6 MVP) — DONE. Testing it revealed the report
    was generic because responses were unstructured → motivated moving #5 up.
-2. **Structured output** (#5) — the backbone. Hybrid prose + `data` for the
-   report-feeding actions; makes the report session-aware and de-risks records,
-   analytics, and evals. Do this **before** progress-tracking Phase B.
+2. **Structured output** (#5) — DONE (2026-09-03). Hybrid prose + `data` for the
+   report-feeding actions; the report is now session-aware and records, analytics,
+   and evals have a machine-readable contract to consume.
 3. **Progress-tracking Phase B/C** (#6) — persistent records + "My Progress" +
    analytics, populated from #5's structured fields.
 4. **Eval suite + tests + metrics** (#1–3, built together) — the biggest

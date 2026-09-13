@@ -20,6 +20,7 @@ function buildMessages(request: LLMRequest) {
         userApproach: request.userApproach,
         userCode: request.userCode,
         codeLanguage: request.codeLanguage,
+        sessionDigest: request.sessionDigest,
       });
   return [
     { role: 'system', content: systemPrompt },
