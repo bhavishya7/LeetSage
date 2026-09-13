@@ -1,4 +1,4 @@
-import type { LearningContent, AnalyzeData, UnderstandData, ProgressState } from '../types';
+import type { LearningContent, AnalyzeData, UnderstandData, ReportData, ProblemPattern, ProgressState, Complexity, Attempt } from '../types';
 
 /**
  * Builds a compact, FACTUAL session digest from the structured data blocks that
@@ -81,4 +81,137 @@ export function buildSessionDigest(
 
 function fmt(c: { time: string; space: string }): string {
   return `${c.time} time / ${c.space} space`;
+}
+
+// ---------------------------------------------------------------------------
+// Projection into a progress-record Attempt (Progress-Tracking Phase B).
+//
+// Same principle as buildSessionDigest: read the structured `data` blocks off
+// the session history instead of re-parsing prose or making another LLM call.
+// This is what "records populate from structured output" (design §3.3 step 1)
+// actually means in code.
+// ---------------------------------------------------------------------------
+
+/** The structured facts distilled from a session, ready to fill a record. */
+export interface SessionFacts {
+  patterns: ProblemPattern[];
+  /** Best-known optimal complexity discussed (from UNDERSTAND_SOLUTION), else the latest analysis' optimal. */
+  optimalComplexity: Complexity | null;
+  /** The complexity the user's latest code actually achieved (from CHECK_APPROACH). */
+  achievedComplexity: Complexity | null;
+  /** Short description of the latest approach the user tried. */
+  approachSummary: string;
+  /** Whether the latest analysis put them on the optimal path. */
+  onOptimalPath: boolean;
+  hintsUsed: number;
+}
+
+function latest<T>(items: T[]): T | undefined {
+  return items.length ? items[items.length - 1] : undefined;
+}
+
+/** Pulls the structured facts out of the session history + progress. */
+export function extractSessionFacts(
+  history: LearningContent[],
+  progress: ProgressState | null,
+): SessionFacts {
+  const analyses = history
+    .map(c => c.metadata?.structured)
+    .filter((d): d is AnalyzeData => !!d && 'approachDetected' in d);
+  const understandings = history
+    .map(c => c.metadata?.structured)
+    .filter((d): d is UnderstandData => !!d && 'keyInsight' in d);
+
+  const lastAnalysis = latest(analyses);
+  const lastUnderstand = latest(understandings);
+
+  // Patterns are only emitted by UNDERSTAND_SOLUTION today; union across all of
+  // them so re-explanations that name different patterns are captured.
+  const patterns: ProblemPattern[] = [];
+  for (const u of understandings) for (const p of u.patterns) if (!patterns.includes(p)) patterns.push(p);
+
+  return {
+    patterns,
+    optimalComplexity: lastUnderstand?.optimalComplexity ?? lastAnalysis?.optimalComplexity ?? null,
+    achievedComplexity: lastAnalysis?.currentComplexity ?? null,
+    approachSummary: lastAnalysis?.approachDetected ?? '',
+    onOptimalPath: lastAnalysis?.onOptimalPath ?? false,
+    hintsUsed: progress?.hintLevel ?? 0,
+  };
+}
+
+/**
+ * What actually gets saved: the record's patterns + the Attempt. The report's
+ * OWN structured data (ReportData) is the primary source when present — it's the
+ * most authoritative and always available on a report, even when the user never
+ * ran UNDERSTAND_SOLUTION. The session facts fill any gaps.
+ */
+export interface RecordProjection {
+  patterns: ProblemPattern[];
+  attempt: Attempt;
+}
+
+/**
+ * Builds the record projection from the session facts, the report's own
+ * structured data (if the model emitted it), the report markdown, and the
+ * editor language.
+ *
+ * Precedence: the REPORT is authoritative. A GENERATE_REPORT looks at the
+ * user's current code + the whole session and summarizes the FINAL state, so
+ * its ReportData is the source of truth. Session facts (from CHECK_APPROACH /
+ * UNDERSTAND_SOLUTION) are only the fallback when no report data is present —
+ * they can be a STALE snapshot of an earlier attempt (e.g. an old brute-force
+ * analysis run before the user reached the optimal solution), which must NOT
+ * override the report.
+ *
+ * Complexity honesty: the record stores what the user ACHIEVED.
+ *  - If the report says solvedOptimally → achieved == the optimal complexity.
+ *  - If not → prefer the analysis' measured currentComplexity (their real,
+ *    non-optimal cost); fall back to the discussed optimal only if there's no
+ *    analysis. This avoids labeling a brute-force attempt with optimal Big-O.
+ */
+export function buildRecordProjection(
+  facts: SessionFacts,
+  reportData: ReportData | null,
+  reportMarkdown: string,
+  language?: string,
+): RecordProjection {
+  const patterns = unionPatterns(reportData?.patterns ?? [], facts.patterns);
+
+  // "solved" is inferred (we can't verify a real submission — that's Phase D):
+  // trust the report's own judgement first, else whether analysis put them on
+  // the optimal path.
+  const solved = reportData?.solvedOptimally ?? facts.onOptimalPath;
+
+  const optimal = reportData?.optimalComplexity ?? facts.optimalComplexity;
+  const complexity: Complexity =
+    (solved
+      ? optimal ?? facts.achievedComplexity
+      : facts.achievedComplexity ?? optimal)
+    ?? { time: 'O(?)', space: 'O(?)' };
+
+  // Approach: the report's summary (final state) wins; the possibly-stale
+  // analysis approach is only a fallback.
+  const approachSummary =
+    reportData?.approachSummary || facts.approachSummary || 'Approach not captured.';
+
+  return {
+    patterns,
+    attempt: {
+      date: Date.now(),
+      outcome: solved ? 'solved' : 'attempted',
+      approachSummary,
+      solutionSummary: reportMarkdown,
+      complexity,
+      hintsUsed: facts.hintsUsed,
+      language,
+    },
+  };
+}
+
+/** Union two pattern lists, preserving order, dropping duplicates. */
+function unionPatterns(a: ProblemPattern[], b: ProblemPattern[]): ProblemPattern[] {
+  const out: ProblemPattern[] = [...a];
+  for (const p of b) if (!out.includes(p)) out.push(p);
+  return out;
 }

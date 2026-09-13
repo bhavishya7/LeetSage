@@ -34,9 +34,12 @@ function readEditorFromPage(): { code: string; language: string } {
       // The editor model is usually the largest / first; pick the longest value.
       const values: string[] = models.map((m: any) => (typeof m.getValue === 'function' ? m.getValue() : ''));
       code = values.sort((a, b) => b.length - a.length)[0] ?? '';
-      // Language id from the model.
+      // Language id from the model. NOTE: LeetCode often leaves the Monaco
+      // model's language as "plaintext" (highlighting/execution are handled
+      // separately), so treat plaintext/empty as "not identified" and let the
+      // toolbar-button fallback below read the real language ("Python3", etc.).
       const langId = models[0]?.getLanguageId?.();
-      if (langId) language = String(langId);
+      if (langId && String(langId).toLowerCase() !== 'plaintext') language = String(langId);
     }
   } catch {
     /* fall through to DOM fallback */
@@ -55,11 +58,16 @@ function readEditorFromPage(): { code: string; language: string } {
     }
   }
 
-  // Language from the toolbar button if Monaco didn't give one.
+  // Language from the toolbar's language selector if Monaco didn't give a real
+  // one. LeetCode renders this control differently across layouts (a <button>
+  // or a clickable element), so scan buttons + elements with a button role and
+  // exact-match the visible text against known languages.
   if (language === 'unknown') {
-    const btns = Array.from(document.querySelectorAll('button')) as HTMLButtonElement[];
-    const langRe = /^(C\+\+|Python3?|Java|JavaScript|TypeScript|C#|Go|Rust|Kotlin|Swift|Ruby|C|Scala|PHP|Dart|Elixir|Erlang|Racket)$/;
-    const match = btns.map((b) => b.textContent?.trim() ?? '').find((t) => langRe.test(t));
+    const candidates = Array.from(
+      document.querySelectorAll('button, [role="button"], [class*="lang"]')
+    ) as HTMLElement[];
+    const langRe = /^(C\+\+|Python3?|Java|JavaScript|TypeScript|C#|Go|Rust|Kotlin|Swift|Ruby|C|Scala|PHP|Dart|Elixir|Erlang|Racket|MySQL|Pandas)$/;
+    const match = candidates.map((b) => (b.textContent ?? '').trim()).find((t) => langRe.test(t));
     if (match) language = match;
   }
 

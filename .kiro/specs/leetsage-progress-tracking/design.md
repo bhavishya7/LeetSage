@@ -122,8 +122,24 @@ type ProblemPattern =
 - `patterns` is a **fixed enum array** — the field the whole "weakest link"
   feature aggregates on. Fixed vocabulary = trustworthy grouping.
 - `attempts[]` is an **array, not a single value** — this is the decision that
-  enables "you solved it faster this time." Each save appends; nothing is
-  overwritten, so you keep a timeline.
+  enables "you solved it faster this time." It keeps a timeline of genuine
+  re-solves.
+  - **What counts as a new attempt (as SHIPPED — refines the original "each
+    save appends"):** a save is NOT automatically an attempt. Clicking Save
+    (or re-generating and re-saving) the same solution on the same day updates
+    the **latest** attempt in place; a new attempt is appended only on a real
+    re-solve — a **different calendar day OR a changed approach/complexity**.
+    See `shouldReplaceLatest()` in `progress-records.ts`. Rationale: a
+    save-button press is not a solving attempt, and counting presses inflated
+    the log (we saw "3 attempts" from three saves of one solution).
+  - **The attempt COUNT is intentionally hidden in the UI for now.** Even a
+    de-duped attempt is *inferred*, not verified — we can't confirm a solve
+    without submission detection. So the list/detail/insights show recency
+    ("Updated …") and the attempts **timeline** (which is meaningful once
+    de-duped), but not a bare count. The count returns when **Phase D**
+    (auto-detect on Accepted submission, §8) supplies verified attempt events.
+    This mirrors the honesty already applied to the low-confidence insights
+    label and the inferred `outcome`.
 - `bestAttemptIndex` avoids recomputing "best so far" every read; it's a
   denormalized pointer maintained on write.
 - `schemaVersion` is cheap insurance for §6 migrations.
@@ -174,11 +190,18 @@ On "Save to my progress":
   1. Generate the report (LLM) → also returns structured fields
      (patterns[], complexity, summaries) via structured output.
   2. Load existing record_{slug} (if any).
-  3. Append a new Attempt; recompute bestAttemptIndex.
+  3. Decide append vs. replace (see §3.1): if the latest attempt is the SAME
+     calendar day AND same approach + complexity, REPLACE it in place;
+     otherwise APPEND a new Attempt. Then recompute bestAttemptIndex.
   4. Merge patterns (union); update lastUpdatedAt.
   5. Write record_{slug}.
   6. Upsert the progress_index entry.
 ```
+
+> **SHIPPED refinement:** step 3 originally read "append a new Attempt". It was
+> changed to the append-vs-replace rule above so re-saving the same solution
+> doesn't inflate the attempt log. `shouldReplaceLatest()` /
+> `sameCalendarDay()` in `progress-records.ts` are the pure, testable helpers.
 
 > 📚 **SYSTEM-DESIGN LESSON — "read-modify-write & idempotency."** Steps 2–5 are a
 > classic read-modify-write. Because `chrome.storage` is async and the panel can
