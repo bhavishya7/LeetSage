@@ -10,6 +10,8 @@ import { streamLLMRequest } from '../services/llm-service';
 import { filterResponse } from '../services/solution-filter';
 import { checkRateLimit, recordRequest, getUsageToday } from '../services/rate-limiter';
 import { extractCurrentCode } from '../services/code-extractor';
+import { parseStructuredResponse, stripDataBlockForDisplay } from '../services/structured-parser';
+import { buildSessionDigest } from '../services/session-digest';
 
 function generateId(): string { return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`; }
 
@@ -46,6 +48,14 @@ const App: React.FC = () => {
   const [chatInput, setChatInput] = useState('');
   const [hasCode, setHasCode] = useState(false);
   const stuckTimerRef = React.useRef<StuckTimer | null>(null);
+
+  // Always-fresh mirror of learningContent. handleActionClick is a useCallback
+  // that does NOT list learningContent as a dependency (to avoid recreating it
+  // on every streamed chunk), so the closure's learningContent goes stale.
+  // buildSessionDigest for the report must read the CURRENT history, so we read
+  // it through this ref instead of the captured variable.
+  const learningContentRef = React.useRef<LearningContent[]>([]);
+  useEffect(() => { learningContentRef.current = learningContent; }, [learningContent]);
 
   // Applies a freshly obtained problem context to state + loads its progress.
   const applyProblem = useCallback((ctx: ProblemContext) => {
@@ -173,6 +183,9 @@ const App: React.FC = () => {
   const handleActionClick = useCallback(async (actionType: ActionType, userApproach?: string) => {
     if (!problemContext || !settings?.apiConfig.apiKey) return;
 
+    // The user is interacting — dismiss any stale "are you stuck?" suggestion.
+    setStuckSuggestion(null);
+
     // Guardrail pre-check: kill switch, daily/per-minute caps, cooldown.
     const check = await checkRateLimit(settings.guardrails);
     if (!check.allowed) {
@@ -194,6 +207,13 @@ const App: React.FC = () => {
       }
     }
 
+    // For the report, assemble a deterministic digest of the session's
+    // structured activity so the report reflects what the user actually did
+    // rather than a generic writeup (see session-digest.ts).
+    const sessionDigest = actionType === 'GENERATE_REPORT'
+      ? buildSessionDigest(learningContentRef.current, progress)
+      : undefined;
+
     setIsLoading(true); setError(null);
     const contentId = generateId();
     setStreamingId(contentId);
@@ -212,13 +232,27 @@ const App: React.FC = () => {
         problemContext, actionType, systemPrompt: '', userMessage: '',
         apiKey: settings.apiConfig.apiKey, model: settings.apiConfig.model,
         maxTokens: settings.guardrails.maxTokens, timeoutMs: settings.guardrails.requestTimeoutMs,
-        previousHintLevel: progress?.hintLevel ?? 0, userApproach, userCode, codeLanguage,
+        previousHintLevel: progress?.hintLevel ?? 0, userApproach, userCode, codeLanguage, sessionDigest,
       })) {
         fullContent += chunk;
-        setLearningContent(prev => prev.map(c => c.id === contentId ? { ...c, content: fullContent } : c));
+        // For structured actions, hide the trailing data block while streaming
+        // so the raw JSON never flashes in the card (§6.2: stream the prose,
+        // finalize the data block once complete).
+        const display = stripDataBlockForDisplay(fullContent, actionType);
+        setLearningContent(prev => prev.map(c => c.id === contentId ? { ...c, content: display } : c));
       }
-      const { filteredContent } = filterResponse(fullContent, actionType);
-      const finalContent: LearningContent = { ...newContent, content: filteredContent };
+      // Split prose from the machine-readable data block, then filter the prose.
+      // structured?.data (if any) is stored on metadata for the report/records/
+      // analytics to consume — the prose is never re-parsed for facts (§2, §4).
+      const { prose, data } = parseStructuredResponse(fullContent, actionType);
+      const { filteredContent } = filterResponse(prose, actionType);
+      const finalContent: LearningContent = {
+        ...newContent,
+        content: filteredContent,
+        metadata: data
+          ? { ...(newContent.metadata ?? {}), structured: data }
+          : newContent.metadata,
+      };
       setLearningContent(prev => prev.map(c => c.id === contentId ? finalContent : c));
       const updatedProgress = await trackAction(problemContext.url, actionType);
       setProgress(updatedProgress);
@@ -234,6 +268,9 @@ const App: React.FC = () => {
   const handleChatSubmit = useCallback(async (query: string) => {
     const q = query.trim();
     if (!q || !problemContext || !settings?.apiConfig.apiKey) return;
+
+    // The user is interacting — dismiss any stale "are you stuck?" suggestion.
+    setStuckSuggestion(null);
 
     const check = await checkRateLimit(settings.guardrails);
     if (!check.allowed) {

@@ -23,6 +23,12 @@ export interface LLMRequest {
   userCode?: string;
   /** The editor language for the code above (e.g. "python", "cpp"). */
   codeLanguage?: string;
+  /**
+   * A deterministic digest of the session's structured activity, injected into
+   * the GENERATE_REPORT message so the report reflects what the user actually
+   * did (see session-digest.ts). Ignored by other actions.
+   */
+  sessionDigest?: string;
 }
 
 export interface LLMResponse {
