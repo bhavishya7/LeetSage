@@ -1,4 +1,4 @@
-import type { ActionType, StructuredData, AnalyzeData, UnderstandData, Complexity, ProblemPattern } from '../types';
+import type { ActionType, StructuredData, AnalyzeData, UnderstandData, ReportData, Complexity, ProblemPattern } from '../types';
 
 /**
  * Splits a structured action's raw response into the human-readable prose and
@@ -29,7 +29,7 @@ import type { ActionType, StructuredData, AnalyzeData, UnderstandData, Complexit
 const DATA_FENCE_TAG = 'leetsage-data';
 
 /** Which actions carry a structured `data` block. Others are prose-only. */
-const STRUCTURED_ACTIONS: ReadonlySet<ActionType> = new Set(['CHECK_APPROACH', 'UNDERSTAND_SOLUTION']);
+const STRUCTURED_ACTIONS: ReadonlySet<ActionType> = new Set(['CHECK_APPROACH', 'UNDERSTAND_SOLUTION', 'GENERATE_REPORT']);
 
 export function isStructuredAction(actionType: ActionType): boolean {
   return STRUCTURED_ACTIONS.has(actionType);
@@ -126,7 +126,7 @@ function extractDataBlock(raw: string): { jsonText: string; prose: string } | nu
 }
 
 function looksLikeOurData(text: string): boolean {
-  return /"(approachDetected|currentComplexity|optimalComplexity|keyInsight|patterns|onOptimalPath)"/.test(text);
+  return /"(approachDetected|approachSummary|currentComplexity|optimalComplexity|keyInsight|patterns|onOptimalPath|solvedOptimally)"/.test(text);
 }
 
 // ---- validation / normalization -------------------------------------------
@@ -137,8 +137,20 @@ function validate(parsed: unknown, actionType: ActionType): StructuredData | nul
   switch (actionType) {
     case 'CHECK_APPROACH': return validateAnalyze(obj);
     case 'UNDERSTAND_SOLUTION': return validateUnderstand(obj);
+    case 'GENERATE_REPORT': return validateReport(obj);
     default: return null;
   }
+}
+
+function validateReport(obj: Record<string, unknown>): ReportData | null {
+  const optimal = toComplexity(obj.optimalComplexity);
+  if (!optimal) return null;
+  return {
+    patterns: toPatterns(obj.patterns),
+    approachSummary: toStr(obj.approachSummary),
+    optimalComplexity: optimal,
+    solvedOptimally: obj.solvedOptimally === true,
+  };
 }
 
 function validateAnalyze(obj: Record<string, unknown>): AnalyzeData | null {
