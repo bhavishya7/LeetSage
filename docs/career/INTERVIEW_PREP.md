@@ -243,6 +243,61 @@ strongest *architecture* story — pair it with the guardrail (Q3) as your stron
 
 ---
 
+### Q9. "Walk me through a data model you designed." (progress tracking) ⭐ system-design
+
+> Lead with this for data-modeling / storage / system-design prompts. It's a real
+> schema you built under a hard constraint (no backend), with honest tradeoffs.
+> **Shipped 2026-09-04** — speak to it in the past tense.
+
+**Short answer.** I added persistent per-problem progress to LeetSage — track
+which problems you've worked, the approaches you tried, and surface your weakest
+pattern across problems. With no backend, everything lives in
+`chrome.storage.local`, so the model had to be designed around the storage's read
+and write patterns. I used **one key per record (`record_{slug}`) plus a small
+`progress_index` projection**: the "My Progress" list and the analytics render off
+the light index, and only the detail view loads a full record.
+
+**Deeper — the shape and why.**
+- A `ProblemRecord` holds an **append-only `attempts[]` event log** rather than
+  mutable "current state" — so history is preserved and I can compute "best attempt
+  so far" (denormalized as `bestAttemptIndex`) instead of overwriting it.
+- The index is a **summary projection** of each record (title, difficulty,
+  patterns, timestamps) — classic read-optimization: the common path (render the
+  list, run analytics) never deserializes every full record. The cost is
+  **write-amplification / keeping the index in sync** on save, which I accept
+  because reads dominate.
+- **Schema versioning:** records carry `schemaVersion` and `migrate()` runs on
+  every read — ordered, idempotent steps, cheap to add now and painful to retrofit
+  later.
+- **Analytics is a deterministic pipeline**, not an LLM call: group attempts by
+  pattern → a struggle score → weakest link + a revisit list. Grouping relies on
+  the **closed `ProblemPattern` vocabulary** from the structured-output layer — a
+  stable set, not free text — which is exactly why that vocabulary is closed.
+
+**The honesty constraints (this is the interesting part).** The data is *inferred*,
+not verified — I can't see LeetCode's judge — so the design refuses to overclaim:
+insights stay hidden until there are ≥3 problems and carry a Low/Medium/High
+**confidence badge**; the **attempt count is deliberately withheld from the UI**
+because a save click isn't a verified re-solve; and complexity is reported as
+"optimal" only when the model flagged `solvedOptimally`, else the measured
+complexity. I also drew a clean line — **the model owns judgments (patterns,
+complexity, narrative); the app owns facts (date, title, difficulty, language)** —
+which is why I removed the model-written date and let the app timestamp the attempt.
+
+**A subtle bug worth telling.** A "save" is not a "solve". Logging every save
+inflated the attempt log, so I added an **append-vs-replace** rule: same calendar
+day + unchanged approach/complexity replaces the latest attempt in place; a
+different day or a changed approach/complexity appends a new one. Verified
+submissions (Phase D) are the deferred piece that would let me trust — and show —
+the count.
+
+**Signal.** Data modeling around access patterns; event-log vs. mutable state;
+index/summary projections and the read-vs-write tradeoff; schema migration;
+deterministic aggregation over an LLM; and — the differentiator — designing for
+*honest presentation of uncertain data* rather than a confident-but-wrong UI.
+
+---
+
 ## General 2026 AI-engineering questions (use LeetSage as your example)
 
 These come up in AI/LLM interviews regardless of the project. For each, the goal
@@ -268,8 +323,10 @@ is to answer generally **and** ground it in LeetSage.
   cheatsheet could be a small local retrieval layer (zero token cost).
 - **"Agents / agentic failure modes?"** Multi-step LLM systems that plan and act;
   failure modes include loops, tool misuse, and cascading errors. *Tie-in:* the
-  planned progress-tracking feature (summarize a solved problem, categorize the
-  pattern, update notes) is a small agentic flow.
+  shipped progress-tracking flow (summarize a solved problem, categorize the
+  pattern, persist it as a record) is a small structured pipeline; and I built a
+  custom Kiro **project-historian agent** whose failure I had to constrain (it
+  corrupted a file via shell text-manipulation — see the agents section).
 - **"How do you handle non-determinism?"** Don't rely on exact outputs; validate
   structurally, add deterministic guardrails, use evals to measure behavior over
   many runs. *Tie-in:* the deterministic filter over a probabilistic model is
@@ -347,9 +404,56 @@ lesson: for these features, verify the *invisible half* — the state you persis
 the exact input you feed the model — because the visible half can look fine while
 the data path is broken.
 
+**Reinforced by the progress-tracking work (2026-09-04).** Same lesson, three more
+bugs the compiler couldn't see, all caught only by dumping `chrome.storage.local`
+and reading actual saved records: an **inflated attempt count** (a save click was
+logged as a re-solve), a **stale-analysis projection** (the record took its
+approach/complexity from the latest analysis instead of the report the user
+saved), and a **"plaintext" language** (LeetCode leaves Monaco's model language as
+`plaintext`, so the language field stored garbage until I made the toolbar fallback
+run). None of these was a type error; a green build looked done. For any LLM-fed
+data path, my rule is now: inspect the persisted state, not just compilation.
+
 **Signal.** Testing discipline for non-deterministic systems; knowing that type-
 checking and the happy path don't cover data-flow/closure bugs; reaching for
 persisted-state inspection as a debugging tool.
+
+### "How do you avoid building on stale assumptions when working with an agent?"
+
+**Answer.** "Verify, don't assume" — reconcile design docs against shipped code
+before building on them. When I started progress tracking, the design doc described
+patterns and complexity with an illustrative kebab-case schema, but the
+structured-output layer I'd already shipped used a Title-Case `ProblemPattern`
+vocabulary and a `{time, space}` complexity object. The doc had **drifted** from
+the code. If I'd coded to the doc, I'd have built a needless translation layer and
+a second, conflicting pattern vocabulary. Instead I aligned the new records to the
+*shipped* types and updated the design doc to match. The general discipline — the
+same one that caught the `gemini-2.5-*` model-name 404 — is that a plausible-looking
+spec (or an agent's confident summary of one) is not ground truth; the running code
+is, so I check it before I build.
+
+**Signal.** Treating specs and agent output as fallible; reconciling documentation
+drift toward the source of truth; avoiding accidental duplication/translation
+layers.
+
+### "How do you decide what an LLM should produce versus what your code should own?"
+
+**Answer.** A rule I keep coming back to: **the model owns judgments; the system
+owns facts.** In the progress tracker, the model produces the judgments it's
+actually good at — the algorithmic patterns, the complexity assessment, the
+narrative summary — and those get captured as structured data. But facts the app
+already holds — the date, the problem title, difficulty, the editor language — the
+app injects or stamps itself; I never ask the model to reproduce them. Concretely,
+the report used to print a model-written date, which is a guessed, unreliable fact;
+I removed it and let the app timestamp the saved attempt. This also keeps the model
+honest about uncertainty: because the app can't verify a submission passed, I don't
+show an authoritative "attempts" count or claim a solution is optimal unless the
+model explicitly flagged it — inferred data is presented *as* inferred (a
+confidence badge, a withheld count), never as verified.
+
+**Signal.** Clear division of responsibility between a probabilistic component and
+deterministic code; not asking the model to do something the system can do reliably;
+honest UX for uncertain data.
 
 ### "An LLM feature gives wrong output. How do you debug it?"
 
@@ -392,7 +496,8 @@ the user?
 
 **Architecture:** Draw the components and how they communicate. · Why no backend? ·
 Walk me through what happens from clicking "Hint" to seeing text. · Where does
-state live?
+state live? · Walk me through the progress-tracking data model and its tradeoffs
+(→ Q9).
 
 **AI-specific:** How do you stop it revealing solutions? · How would you test that
 it doesn't? · Design an eval for the guardrail. · Are you exposed to prompt
@@ -403,8 +508,9 @@ out of a non-deterministic model while still streaming?
 **Working with agents:** How do you work effectively with coding agents? · Tell me
 about a time you constrained or debugged an agent's behavior. · How do you keep
 knowledge from being lost across sessions? · How do you verify an AI-built feature
-actually works, not just compiles? · An LLM feature gives wrong output — how do you
-debug it?
+actually works, not just compiles? · How do you avoid building on stale assumptions
+(spec vs. code drift)? · How do you decide what an LLM should produce vs. what your
+code owns? · An LLM feature gives wrong output — how do you debug it?
 
 **Depth probes:** Why `chrome.storage.local` and not `sync`? · What breaks if the
 service worker sleeps mid-request? · How do you keep chat history per problem? ·

@@ -26,6 +26,7 @@ This document is maintained alongside implementation. Each section explains *wha
 19. [Stuck Timer](#19-stuck-timer)
 20. [Build & Development Workflow](#20-build--development-workflow)
 30. [Structured Output Pipeline](#30-structured-output-pipeline)
+31. [Progress Tracking: Records, My Progress, Analytics](#31-progress-tracking-records-my-progress-analytics)
 
 ---
 
@@ -933,10 +934,13 @@ built. Don't describe them as implemented.
   (hints/examples/breakdown/concept/chat) are still prose-only markdown by design,
   and prose↔data consistency is a prompt instruction, not a render-from-data
   guarantee.
-- **Persistent, cross-session progress analytics.** Per-problem progress
-  (`usedActions`, `hintLevel`, content history) *is* persisted, but the richer
-  learning-analytics and "struggle-first" gating live in the Phase 2/3 specs
-  below and are not in the shipped build.
+- **Persistent, cross-session progress records + analytics — now shipped
+  (2026-09-04).** Per-problem `ProblemRecord`s, a "My Progress" view, and a
+  deterministic "weakest link" analytics pass are built — see
+  [§31](#31-progress-tracking-records-my-progress-analytics). What's still *not*
+  built: **Phase D** verified-submission auto-save (so attempt outcomes are
+  inferred, not verified — which is why the attempt count is withheld from the UI),
+  export-to-file, and the "struggle-first" hint gating in the Phase 2 spec.
 
 ## Roadmap (future specs)
 
@@ -1108,3 +1112,156 @@ foregrounds.
   functions and are prime test targets (pairs with the eval-suite roadmap item).
 - Progress-tracking Phase B (populating `ProblemRecord.attempts[]` from this same
   structured data) is **enabled** by this work, not built.
+
+---
+
+## 31. Progress Tracking: Records, My Progress, Analytics
+
+**Files:** `src/types/models.ts` · `src/services/progress-records.ts` · `src/services/session-digest.ts` · `src/services/progress-analytics.ts` · `src/components/ProgressView.tsx` · `src/components/ContentDisplay.tsx` · `src/sidepanel/App.tsx`
+**Spec:** `.kiro/specs/leetsage-progress-tracking/` (Phases A–C) · **Shipped:** 2026-09-04
+
+### Why this exists
+
+Phase A shipped only an on-demand "Generate report". The real value — "track my
+problems and tell me my weakest pattern" — needs **persistence + a structured data
+model + aggregation**, which is a genuine system-design exercise under the
+no-backend constraint. It's built directly on the structured-output layer
+([§30](#30-structured-output-pipeline)): records populate from the same
+machine-readable `data`.
+
+### 1. The data model (`src/types/models.ts`)
+
+- **`ProblemRecord`** — the full per-problem record, carrying `schemaVersion`
+  (versioned for migration), `slug`, `url`, `title`, `difficulty`, `patterns[]`
+  (the closed `ProblemPattern` vocabulary reused from §30), an append-only
+  **`attempts[]`** log, a denormalized `bestAttemptIndex`, timestamps, and `notes`
+  (the saved report markdown).
+- **`Attempt`** — one entry in the event log: `date`, `approachSummary`,
+  `complexity {time, space}`, `hintsUsed`, and an `AttemptOutcome`
+  (`'solved' | …`). Append-only so history is preserved, not overwritten.
+- **`ProblemIndexEntry`** — a **light projection** of a record (slug, title,
+  difficulty, patterns, `attemptCount`, `lastUpdatedAt`) for the list + analytics,
+  so the common path never deserializes every full record.
+- **Key design call:** these reuse the **shipped Title-Case `ProblemPattern` +
+  `Complexity {time, space}`** types, *not* the design doc's illustrative
+  kebab-case schema. The doc had drifted; aligning to shipped code avoids a
+  translation layer and a second pattern vocabulary. (The spec was updated to match.)
+
+### 2. Storage layout & the write path (`src/services/progress-records.ts`)
+
+```
+progress_index        → ProblemIndexEntry[]   (small; list + analytics read this)
+record_{slug}         → ProblemRecord         (full record; detail view reads this)
+```
+
+- **`slugFromUrl`** derives the stable key from the normalized
+  `/problems/{slug}/` URL (mirrors the content script's normalizer, but lives here
+  so the panel doesn't import across the content-script boundary).
+- **`migrate()` runs on every read** — ordered, idempotent steps bring an older
+  record to the current shape; a no-op on a current record. Cheap now, painful to
+  retrofit later. (v1 is the first shape, so it only backfills a missing
+  `schemaVersion`.)
+- **`saveAttempt()` is a read-modify-write:** read the existing record, decide
+  append-vs-replace (below), recompute `bestAttemptIndex`, **union** the patterns,
+  bump timestamps, write the record key, then **upsert the index entry**. The cost
+  of the read-optimized layout is this write-amplification / index-sync on save.
+  No write-lock (single-user local store; the correct mental model — "serialize
+  writes to the same key" — is noted in code, not implemented).
+
+### 3. Append-vs-replace: a save is not a solve (the honesty rule)
+
+Clicking "Save" (or re-generating and re-saving the same solution) must **not**
+inflate the attempt log. `shouldReplaceLatest(latest, incoming)`:
+
+- **Same calendar day** (`sameCalendarDay`) **and** unchanged `approachSummary` +
+  both complexity fields → **replace** the latest attempt in place (refresh note +
+  timestamp).
+- Different day **or** a changed approach/complexity → **append** a genuinely new
+  attempt.
+
+Both helpers are **pure** (unit-test targets). And the attempt **count is
+deliberately hidden from the UI** — even a de-duped attempt is *inferred*, not
+verified, until Phase D captures real submission events. The timeline is kept
+(renamed "History"); the UI shows recency + "N problems tracked".
+
+### 4. Other pure helpers (unit-test targets)
+
+- **`unionPatterns`** — merge pattern lists, order-preserving, de-duped.
+- **`computeBestAttemptIndex`** — "best so far" = a `solved` attempt with the
+  lowest complexity cost, tie-broken by fewest hints; else the most recent.
+  Denormalized onto the record so reads don't recompute it.
+- **`complexityRank`** — coarse Big-O ordering (`O(1)` < `O(log n)` < `O(n)` < …);
+  unknown notations sort to the middle so they never falsely win "best".
+
+### 5. The record projection (`src/services/session-digest.ts`)
+
+Two functions turn a session into a record:
+
+- **`extractSessionFacts(history, progress)`** — pulls the structured facts out of
+  the session (approaches tried, complexity, patterns, hints).
+- **`buildRecordProjection(facts, reportData, …)`** — assembles the attempt +
+  patterns for the record. Two honesty rules here:
+  - It **prefers the report's own `ReportData`** over the (possibly stale) session
+    facts for approach/complexity — the latest analysis can lag what the user
+    actually saved.
+  - **Complexity honesty:** report the optimal complexity **only if
+    `solvedOptimally`**, else the analysis' *measured* complexity — so a
+    brute-force attempt isn't mislabeled with the optimal Big-O.
+
+### 6. GENERATE_REPORT as a structured producer
+
+Patterns previously came *only* from `UNDERSTAND_SOLUTION`, so a report-only save
+had no patterns and silently dropped out of analytics (observed as "patterns: none"
+on *Car Fleet*). Fix: `GENERATE_REPORT` now emits and parses its **own**
+`ReportData` block — `patterns`, `approachSummary`, `optimalComplexity`,
+`solvedOptimally` — via `prompts.ts` + `structured-parser.ts` (it's now in
+`STRUCTURED_ACTIONS`). Also, the model-written `**Date:**` line was **removed** from
+the report prompt — the app timestamps the saved attempt itself
+(**model owns judgments, system owns facts**).
+
+### 7. Analytics (`src/services/progress-analytics.ts`) — deterministic, no LLM
+
+`computeInsights(records)` is a **pure aggregation pipeline**, not a model call:
+
+- Group attempts by pattern (a problem with N patterns fans out into all N buckets)
+  → `PatternStat[]`.
+- `computeStruggleScore(...)` — more hints, more attempts, harder problems, and
+  give-ups all raise the score.
+- Derive the **weakest link** (highest struggle) and a **revisit list**
+  (`RevisitItem[]`).
+- **Confidence gating:** with `<3` problems the result is flagged low-confidence;
+  the UI hides insights until ≥3 problems and shows a **Low/Medium/High confidence
+  badge** — honest analytics on thin data.
+
+### 8. The UI (`ProgressView.tsx`, `ContentDisplay.tsx`, `App.tsx`)
+
+- **`ProgressView.tsx`** — a **full-panel** "My Progress" screen (chosen over a
+  modal: a near-full-width dialog reads poorly in a narrow side panel). List →
+  record detail with the attempts timeline, per-record copy/delete, and "Copy all".
+  Insights render only at ≥3 problems, with the confidence badge.
+  `displayLanguage()` omits `plaintext`/`unknown`/empty.
+- **`ContentDisplay.tsx`** — a "Save to My Progress" button on report cards.
+- **`App.tsx`** — the save handler + a full-panel toggle (My Progress *replaces*
+  the coaching UI rather than overlaying it).
+
+### 9. The language-detection gotcha (`src/services/code-extractor.ts`)
+
+LeetCode leaves **Monaco's model language as `"plaintext"`** (highlighting /
+execution are handled separately), so `getLanguageId()` returned `"plaintext"` and
+the reliable toolbar-selector fallback **never ran** — records stored a useless
+language. Fix: treat `plaintext`/empty as "not identified" so the toolbar language
+(e.g. `"Python3"`) is read instead. A green build never showed this — it surfaced
+only by inspecting saved records.
+
+### 10. What's NOT done (don't overclaim)
+
+- **Phase D** auto-save on an Accepted submission — so an attempt's `outcome` is
+  *inferred*, not verified; the attempt count is deferred from the UI until then.
+- **Export-to-file** — only clipboard "Copy all" exists; the file export is the
+  roadmap item that must precede scoping extension permissions.
+- **No unit tests yet** — the pure helpers (`complexityRank`,
+  `computeBestAttemptIndex`, `computeInsights`, `computeStruggleScore`,
+  `shouldReplaceLatest`, `sameCalendarDay`, `slugFromUrl`, the parser) are the
+  intended targets.
+- **No write-lock** on the read-modify-write (single-user local store; noted in
+  code).

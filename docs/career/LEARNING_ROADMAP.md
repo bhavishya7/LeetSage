@@ -107,22 +107,39 @@ boundary. See [INTERVIEW_PREP.md](./INTERVIEW_PREP.md) Q8 (now answerable as
 *shipped*). **Effort:** Medium. **Unblocks:** progress-tracking Phase B (#6) and
 makes evals (#1) easier (assert on `data` fields, not prose).
 
-### 6. Progress tracking & study notes (built on #5)
-**Spec:** `leetsage-progress-tracking` (Phase A DONE; Phases B/C designed).
+### 6. Progress tracking & study notes (built on #5)  ✅ Phase A–C DONE (2026-09-04)
+**Spec:** `leetsage-progress-tracking` (Phases A–C DONE; Phase D designed).
 **Skill:** data modeling, storage access patterns, schema versioning, agentic
 summarization.
-**Phase A — DONE.** "Generate report" action + copy button shipped. (Serves as the
-data-export that must precede the permission change #4.) Testing it surfaced the
-need for #5 above.
-**Phase B (next — #5 is now done, so this is unblocked).** Persistent per-problem `ProblemRecord`s in
-`chrome.storage.local` (one key per record + a light index), a "My Progress" view,
-and re-solve-updates-record. Records populate from #5's structured `data` fields.
-**Phase C.** Cross-problem analytics ("weakest link", "revisit these") — a
-deterministic aggregation pipeline over the records, optionally with an LLM
-narrative on top.
+**Phase A — DONE.** "Generate report" action + copy button shipped. Testing it
+surfaced the need for #5 above.
+**Phase B/C — DONE (2026-09-04, on the unpushed `feature/progress-tracking-phase-b`
+branch).** Persistent per-problem `ProblemRecord`s in `chrome.storage.local`
+(one `record_{slug}` key + a light `progress_index`, schema-migrated on every
+read), an append-only `attempts[]` history with an append-vs-replace save rule, a
+full-panel "My Progress" view (list → detail with attempts timeline, copy/delete,
+"Copy all"), and a deterministic cross-problem analytics pass ("weakest link" /
+revisit list) with insights gated behind ≥3 problems + a Low/Medium/High confidence
+badge. Records populate from #5's structured `data` — and `GENERATE_REPORT` was
+upgraded to a structured producer (its own `ReportData` block) so a report-only
+save still carries patterns/complexity.
+**Honesty stance baked in.** Attempt = a real re-solve, not a save click (dedup by
+day + approach/complexity); the attempt *count* is deliberately hidden from the UI
+because it's inferred, not verified; complexity is reported as optimal only if
+`solvedOptimally`; the model owns judgments (patterns/complexity/narrative) while
+the app owns facts (date/title/difficulty/language — e.g. the model-written date
+was removed and the app timestamps the attempt).
+**Phase D — designed, NOT built.** Auto-save on an Accepted LeetCode submission, so
+an attempt's `outcome` is *verified* rather than inferred (unblocks showing a
+trustworthy attempt count). Also still ahead: **export-to-file** (only clipboard
+"Copy all" exists today) — and that export is the item that must precede the
+permission-scoping change (#4). No unit tests on the new pure helpers yet (pairs
+with #1/#2). No write-lock on the read-modify-write (single-user local store).
 **Interview payoff.** Real system-design substance (schema, index/summary
-projection, event-log `attempts[]`, migration, the backend boundary). Also solves
-your real need. **Effort:** Medium (B) → Higher (C).
+projection, event-log `attempts[]`, migration, deterministic analytics pipeline,
+the backend boundary) — plus a strong "honest presentation of inferred data" design
+story. See [DEV_JOURNAL.md](./DEV_JOURNAL.md) (2026-09-04) and
+[INTERVIEW_PREP.md](./INTERVIEW_PREP.md) Q9. **Effort:** Medium (B) → Higher (C).
 
 ### 7. Prompt-injection hardening
 **Skill:** LLM security (OWASP #1 risk), structural prompt separation.
@@ -192,13 +209,19 @@ is exactly the GenAI system-design interview. Rehearse it either way — it's in
 2. **Structured output** (#5) — DONE (2026-09-03). Hybrid prose + `data` for the
    report-feeding actions; the report is now session-aware and records, analytics,
    and evals have a machine-readable contract to consume.
-3. **Progress-tracking Phase B/C** (#6) — persistent records + "My Progress" +
-   analytics, populated from #5's structured fields.
-4. **Eval suite + tests + metrics** (#1–3, built together) — the biggest
-   resume/interview unlock; produces your numbers. (Evals get much easier once #5
-   exists — assert on structured fields, not prose.)
-5. **Scope permissions** (#4) — quick security win, safe once progress data is
-   exportable.
+3. **Progress-tracking Phase B/C** (#6) — DONE (2026-09-04). Persistent records +
+   "My Progress" + analytics, populated from #5's structured fields; on the
+   unpushed `feature/progress-tracking-phase-b` branch. Phase D (verified
+   submissions) + export-to-file are the deferred remainder.
+4. **Eval suite + tests + metrics** (#1–3, built together) — **now next**; the
+   biggest resume/interview unlock and it produces your numbers. Evals are easier
+   with #5 (assert on structured fields, not prose), and Phase B/C added a fresh
+   batch of pure helpers to unit-test (`complexityRank`, `computeBestAttemptIndex`,
+   `computeInsights`, `computeStruggleScore`, `shouldReplaceLatest`,
+   `sameCalendarDay`, `slugFromUrl`).
+5. **Scope permissions** (#4) — quick security win, but **do progress
+   export-to-file first** (only clipboard "Copy all" exists today) so the required
+   remove/re-add doesn't wipe accumulated records.
 6. **Prompt-injection hardening** (#7), then **cheatsheet / RAG** (#8), then Tier 3
    stretch items.
 

@@ -23,7 +23,7 @@
 | Spec | Status | What it is |
 |---|---|---|
 | [`leetsage-phase1-gemini`](./leetsage-phase1-gemini/) | ✅ **Shipped** | The authoritative built state: Gemini (BYOK, OpenAI-compatible endpoint, `gemini-3.5-*`), chat-hybrid UI, free-tier guardrails, dark/light theme, MV3 fixes. This is the spec that describes what actually runs. |
-| [`leetsage-progress-tracking`](./leetsage-progress-tracking/) | ✅ Phase A / 📐 Phase B–C | Study-notes & progress tracking. **Phase A shipped** (the "Generate report" action + copy button). **Phases B–C designed** (persistent per-problem records + "My Progress" view + cross-problem analytics / "weakest link") in its `design.md` — a system-design teaching doc. |
+| [`leetsage-progress-tracking`](./leetsage-progress-tracking/) | ✅ Phase A–C / 📐 Phase D | Study-notes & progress tracking. **Phases A–C shipped** — Phase A (the "Generate report" action + copy button), then **Phase B/C built 2026-09-04** on the unpushed `feature/progress-tracking-phase-b` branch: persistent per-problem `ProblemRecord`s (`record_{slug}` + a light `progress_index`, schema-migrated on read), a full-panel "My Progress" view (list → detail with attempts timeline, copy/delete, "Copy all"), and a deterministic cross-problem analytics pass ("weakest link" / revisit list, insights gated behind ≥3 problems + a confidence badge). `GENERATE_REPORT` became a structured producer so records populate reliably. **Phase D designed, not built** — auto-save on an Accepted submission (so an attempt's `outcome: 'solved'` is *verified*, not inferred; the attempt count is deferred from the UI until then). |
 | [`leetsage-structured-output`](./leetsage-structured-output/) | ✅ **Shipped** | A hybrid prose + structured `data` response so the report, records, analytics, and evals consume one machine-readable contract instead of re-parsing prose. **Shipped 2026-09-03** for the 2 report-feeding actions (`CHECK_APPROACH`, `UNDERSTAND_SOLUTION`); the report now consumes a deterministic session digest built from it. Caveats: only those 2 actions are structured; prose↔data consistency is a prompt instruction, not enforced; no unit tests yet. Unblocks progress-tracking Phase B. |
 | [`leetsage-cheatsheet`](./leetsage-cheatsheet/) | 📝 **Planned** | Static, zero-token language cheatsheets (Python/Java/C++) + Big-O chart, stored in the extension. Candidate for a lightweight local RAG later. |
 | [`leetsage-pseudocode-mode`](./leetsage-pseudocode-mode/) | 📝 **Planned** | A lightweight "plan your approach" playground with limited, token-conscious feedback. |
@@ -33,9 +33,11 @@
 
 ## Quick "what's true right now"
 
-- **Shipped & authoritative:** `leetsage-phase1-gemini` + progress-tracking Phase A
-  + `leetsage-structured-output`.
-- **Next to build:** progress-tracking Phase B (now unblocked), then evals/tests.
+- **Shipped & authoritative:** `leetsage-phase1-gemini` + progress-tracking
+  Phase A–C + `leetsage-structured-output`. (Progress Phase B/C is on the unpushed
+  `feature/progress-tracking-phase-b` branch, three commits.)
+- **Next to build:** evals/tests (now with a fresh batch of pure helpers to test),
+  then progress-tracking Phase D (verified submissions) and export-to-file.
 - **Don't trust for current state:** `ai-learning-assistant` (historical).
 
 *Keep this index current when a spec changes status — it's the fastest way for a

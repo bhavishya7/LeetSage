@@ -98,6 +98,11 @@ Pick 2–4 depending on space. Swap in real numbers as soon as you have them
   schema'd JSON) for a non-deterministic model, with **tolerant parsing that
   degrades to prose-only** and streaming preserved — turning freeform responses
   into a machine-readable contract the report and future analytics/evals consume.
+- Built a **client-side progress-tracking data model** on that contract —
+  versioned per-problem records with an append-only attempt log and a light index
+  projection, schema-migrated on read, feeding a deterministic cross-problem
+  analytics pipeline ("weakest link") — with analytics and inferred fields honestly
+  gated (confidence badge on thin data; unverified counts withheld).
 
 > Tip: keep one bullet that signals *rigor* (guardrails/validation) and one that
 > signals *judgment* (tradeoffs) — those two separate you from "called an API"
@@ -132,7 +137,7 @@ ordered by resume-value-per-effort. Each maps to
 | **No automated tests** | Signals engineering rigor | Vitest on filter, rate-limiter, URL normalization | Low–Med |
 | ~~**No structured output**~~ ✅ **shipped (2026-09-03)** | Named modern-LLM-I/O skill | Hybrid prose + `data` response for the 2 report-feeding actions, tolerant parse w/ prose-only fallback, deterministic session digest → session-aware report. Strong architecture story. *(Caveats: 2 actions only; no unit tests yet.)* | ~~Medium~~ done |
 | **Broad permissions** | Reviewers/users notice; weakens "security-minded" claim | Scope `host_permissions` to leetcode.com (prototyped + reverted; deferred until progress export lands) | Low |
-| **RAG/agentic element** *(partial)* | Both are headline 2026 keywords | Progress-tracking MVP shipped + a custom Kiro **project-historian agent** built; fuller agentic records + RAG cheatsheet still ahead | Med–High |
+| **RAG/agentic element** *(partial)* | Both are headline 2026 keywords | Progress-tracking **Phase A–C shipped** (persistent records + "My Progress" + weakest-link analytics, built on the structured contract) + a custom Kiro **project-historian agent**; RAG cheatsheet + verified-submission (Phase D) records still ahead | Med–High |
 
 **The single highest-leverage move:** build the **eval suite for the guardrail.**
 It hardens the core product promise *and* unlocks the strongest resume bullet
@@ -142,10 +147,13 @@ the quantified numbers every other bullet is missing.
 > **Recent progress (keep this honest as it ships):** progress-tracking MVP
 > shipped; "Understand solution" correctness bug fixed; **structured output
 > shipped** (2026-09-03 — hybrid prose + `data` for the report-feeding actions,
-> making the report session-aware); a custom Kiro project-historian agent now
-> maintains these docs. See
+> making the report session-aware); **progress-tracking Phase B/C shipped**
+> (2026-09-04 — persistent per-problem records, a "My Progress" view, and
+> weakest-link analytics built on the structured contract; on an unpushed branch);
+> a custom Kiro project-historian agent now maintains these docs. See
 > [DEV_JOURNAL.md](./DEV_JOURNAL.md) for the full narrative. The gaps above stay
-> listed until the work is actually *built*, not just designed.
+> listed until the work is actually *built*, not just designed — evals, tests, and
+> metrics remain the top unmet gap.
 
 ---
 

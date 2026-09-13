@@ -300,6 +300,104 @@ branch `feature/structured-output` — `src/types/{models,api,index}.ts`,
 `src/sidepanel/App.tsx` (plus minor `ContentDisplay.tsx` word-wrap/overflow UI
 polish that rode along in the same commit).
 
+## 2026-09-04 — Progress-tracking Phase B + C: persistent records, "My Progress", analytics
+
+**What.** Built persistent per-problem progress on top of the structured-output
+backbone: a versioned `ProblemRecord` data model with an append-only
+`attempts[]` history and a light `ProblemIndexEntry` projection; a
+`record_{slug}` + `progress_index` storage layout with schema migration on every
+read; a deterministic cross-problem analytics pass ("weakest link", revisit list);
+and a full-panel **My Progress** UI (problem list → record detail with an attempts
+timeline, per-record copy/delete, "Copy all"; insights hidden until ≥3 problems,
+with a Low/Medium/High confidence badge). `GENERATE_REPORT` also became a
+**structured producer** so records populate reliably, and several honesty bugs
+were fixed (see below). On branch `feature/progress-tracking-phase-b`, not yet
+pushed.
+**Why.** Phase A shipped only an on-demand report; the value of "track my progress
+and tell me my weakest pattern across problems" needs persistence, a structured
+data model, and aggregation — a real system-design exercise under the no-backend
+constraint. The structured-output layer (2026-09-03) made it buildable: records
+populate from the same machine-readable `data` other consumers read. Key design
+calls: **reuse the shipped Title-Case `ProblemPattern` + `Complexity {time,space}`
+types** rather than the design doc's illustrative kebab schema (the spec had
+drifted; aligning to shipped code avoids a translation layer and a second pattern
+vocabulary); a **full-panel screen over a modal** (a near-full-width dialog reads
+poorly in a narrow side panel); and **insights hidden until ≥3 problems + a
+confidence badge** so analytics on thin data stay honest.
+**What broke / the hard part.** A green build hid three data-correctness bugs that
+the compiler could never catch — all only visible by inspecting actual saved
+records / `chrome.storage.local` dumps:
+(1) **"patterns: none" on Car Fleet.** Patterns previously came *only* from
+`UNDERSTAND_SOLUTION`, so saving a report without ever running that action
+produced a record with no patterns — which then dropped out of analytics.
+(2) **Inflated attempt count.** A save click (or re-generate + re-save of the same
+solution) was being logged as a new "attempt", so the count didn't reflect real
+re-solves.
+(3) **"plaintext" language.** LeetCode leaves Monaco's model language as
+`"plaintext"`, so `getLanguageId()` returned `"plaintext"` and the reliable
+toolbar-selector fallback never ran — records stored a useless language.
+Plus a projection subtlety: the record's approach/complexity was being taken from
+the (possibly stale) latest analysis instead of the report the user actually saved.
+**How solved.**
+(1) Made `GENERATE_REPORT` emit and parse its **own** `ReportData` block
+(`patterns`, `approachSummary`, `optimalComplexity`, `solvedOptimally`) via
+`prompts.ts` + `structured-parser.ts` (added to `STRUCTURED_ACTIONS`), so a
+report-only save still carries patterns (commit `538781c`).
+(2) Gave `saveAttempt` an **append-vs-replace** rule (`f0b7c58`): same calendar
+day + unchanged approach & complexity → replace the latest attempt in place;
+different day OR changed approach/complexity → append a genuinely new attempt (pure
+helpers `shouldReplaceLatest` / `sameCalendarDay`). And **deferred the attempt
+count from the UI** entirely — kept the timeline (renamed "History"), and
+list/detail/insights show recency + "N problems tracked" — because an attempt is
+still *inferred*, not verified, until Phase D captures real submission events.
+(3) In `code-extractor.ts`, treat `plaintext`/empty as "not identified" so the
+toolbar language ("Python3") is read; `ProgressView.displayLanguage()` omits
+plaintext/unknown/empty.
+For the projection, `buildRecordProjection` now prefers the report's own
+`ReportData` over stale session facts, and applies a **complexity-honesty rule**
+(report the optimal complexity only if `solvedOptimally`, else the analysis'
+measured complexity). Also removed the model-written `**Date:**` line from the
+report — the app timestamps the saved attempt itself. The spec was kept in sync
+(`design.md` §3.1/§3.3 now describe the append-vs-replace rule and the
+deferred-count decision). Build passed (`tsc -b && vite build`) throughout.
+**Interview angle.** Two distinct stories. **System design:** a client-side data
+model chosen around read patterns — one `record_{slug}` key plus a small index
+projection for the list/analytics (read optimization vs. write-amplification on
+save), an append-only event log (`attempts[]`) rather than mutable state, schema
+versioning with `migrate()` on every read, and a deterministic analytics pipeline
+(group-by-pattern → struggle score → weakest link) with an explicit low-confidence
+threshold — all under a deliberate no-backend boundary. **Honesty as a design
+stance:** the product repeatedly *refuses to overclaim on inferred data* — the
+low-confidence insights label, the deferred attempt count, the "optimal only if
+solved-optimally" complexity rule, and the "model owns judgments (patterns,
+complexity, narrative), the system owns facts (date, title, difficulty, language)"
+split that drove removing the model-written date. **Workflow:** the same
+"compiles ≠ correct data" lesson as the structured-output entry, now reinforced —
+three separate bugs (inflated count, stale-analysis projection, "plaintext"
+language) were invisible to `tsc` and only caught by inspecting persisted records;
+for LLM-fed data paths, inspect the persisted state, not just compilation. And a
+"verify don't assume" catch: reconciling the design-doc's illustrative schema
+against the *shipped* structured-output types before building, which surfaced real
+drift and avoided a needless translation layer.
+**Caveats (not overclaimed).** Phase D auto-save on an Accepted submission is
+**not** built — so `outcome: 'solved'` is inferred, not verified (why the attempt
+count is deferred). Only clipboard "Copy all" exists; export-to-file is not built
+(and it's the roadmap item that must precede the permission-scoping change). No
+unit tests yet — the pure helpers (`complexityRank`, `computeBestAttemptIndex`,
+`computeInsights`, `computeStruggleScore`, `shouldReplaceLatest`, `sameCalendarDay`,
+`slugFromUrl`, the parser) are the intended targets and pair with the evals/tests
+roadmap item. No write-lock on the read-modify-write (single-user local store;
+noted in code).
+**Commits.** `798228b` (feat: progress tracking Phase B + C — records, My Progress,
+analytics), `538781c` (feat: make `GENERATE_REPORT` a structured producer; stop
+model-written dates), `f0b7c58` (fix: honest attempt semantics + correct projection
+& language) — all on branch `feature/progress-tracking-phase-b` (off
+`main`@`336e34a`), **not yet pushed**. Files:
+`src/types/{models,index}.ts`, `src/services/{progress-records,progress-analytics,
+session-digest,prompts,structured-parser,code-extractor}.ts`,
+`src/components/{ProgressView,ContentDisplay}.tsx`, `src/sidepanel/App.tsx`, and
+`.kiro/specs/leetsage-progress-tracking/design.md`.
+
 ---
 
 ## Next up (see [LEARNING_ROADMAP.md](./LEARNING_ROADMAP.md))
@@ -307,10 +405,15 @@ polish that rode along in the same commit).
 1. ~~**Structured output** — the backbone~~ — **DONE (2026-09-03)**; the report is
    now session-aware and records/analytics/evals have a machine-readable contract
    to consume.
-2. **Progress-tracking Phase B** — persistent records + "My Progress" view, built
-   on the structured fields (now unblocked).
+2. ~~**Progress-tracking Phase B/C** — persistent records + "My Progress" view +
+   analytics~~ — **DONE (2026-09-04)**, on the unpushed
+   `feature/progress-tracking-phase-b` branch. Phase D (auto-save on an Accepted
+   submission → verified attempts) is the deferred remainder.
 3. **Evals + tests + metrics** — the biggest resume/interview unlock; easier now
-   that structured output exists (assert on `data` fields, not prose).
+   that structured output exists (assert on `data` fields, not prose), and there's
+   now a fresh batch of pure helpers to unit-test (`complexityRank`,
+   `computeBestAttemptIndex`, `computeInsights`, `computeStruggleScore`,
+   `shouldReplaceLatest`, `sameCalendarDay`, `slugFromUrl`).
 
 *When each lands, add an entry above (via the project-historian agent) and backfill
 any resulting numbers into [RESUME.md](./RESUME.md).*
