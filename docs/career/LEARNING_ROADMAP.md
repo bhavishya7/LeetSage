@@ -52,9 +52,10 @@ prose pseudocode cases — a built-in illustration of why a *real* semantic judg
 needed).
 **Interview payoff.** "I designed an eval that measures an AI safety constraint as a
 release gate, and it caught real bugs my intuition missed." See
-[INTERVIEW_PREP.md](./INTERVIEW_PREP.md) Q3a. **Still open (moved to Tier-1.5 below):**
-real captured-response cases + a *validated* (non-mock) judge, and wiring the eval
-into CI so it's an automatic gate. **Honesty caveat to keep stating:** the dataset is
+[INTERVIEW_PREP.md](./INTERVIEW_PREP.md) Q3a. **CI wiring — DONE (2026-09-15
+follow-up, #3b):** the eval now runs in GitHub Actions on every push/PR, so it's an
+automatic gate. **Still open (Tier-1.5):** real captured-response cases + a
+*validated* (non-mock) judge. **Honesty caveat to keep stating:** the dataset is
 author-generated — a strong regression gate, an optimistic estimate of real-world
 recall until real responses are added.
 
@@ -72,9 +73,9 @@ eval harness (#1). Notable techniques exercised: **fake timers**
 pure helpers from regressions.
 **Interview payoff.** Answers "how do you know it works?" and "what's your testing
 approach?" — see [INTERVIEW_PREP.md](./INTERVIEW_PREP.md) (Q3a + the "agent-written,
-after-the-fact tests" Q&A). **Still open:** component/integration/E2E tests of the
-React panel + message plumbing (only pure logic is covered today), and wiring tests
-into a hook/CI (see Tier 1.5).
+after-the-fact tests" Q&A). Now run automatically in CI on every push/PR (#3b, DONE
+2026-09-15 follow-up). **Still open:** component/integration/E2E tests of the React
+panel + message plumbing (only pure logic is covered today).
 
 ### 3. Instrument basic runtime metrics  ⬅ NOW THE TOP UNMET GAP
 **Skill:** production monitoring mindset, cost-awareness.
@@ -105,11 +106,34 @@ biases (position, verbosity, self-preference). **Why.** The current dataset is
 author-generated — a regression gate, not a true recall measurement; this closes
 the gap and lets you quote a *defensible* real-world catch rate. **Effort:** Medium.
 
-### 3b. Wire tests + eval into an automatic gate (pre-commit hook / CI)
-**Skill:** CI, release gating. **What to build.** A git pre-commit/pre-push hook or
-a GitHub Actions workflow that runs `npm run test` (incl. the eval) so a change that
-weakens the guardrail **fails the build**. Today the tests are **manual only** (run
-on `npm.cmd run test`) — this makes the eval a true release gate. **Effort:** Low.
+### 3b. Wire tests + eval into an automatic gate (pre-commit hook / CI)  ✅ DONE (2026-09-15 follow-up)
+**Skill:** CI, release gating, CI/CD tooling tradeoffs.
+**What shipped.** A **GitHub Actions** workflow (`.github/workflows/ci.yml`) that on
+every push and pull request runs `npm ci` → `npm run lint` → `npm run test` (incl.
+the guardrail eval) → `npm run build` on a clean Node 22 LTS runner — so a change
+that weakens the guardrail **fails the build automatically**. Plus a **Husky
+pre-commit hook** (`.husky/pre-commit`) running the same scripts locally as a fast
+early warning. On the unpushed `feature/evals-and-tests` branch (`b0b98e3`; a lint
+fix `ea82f9b` cleared 4 pre-existing `no-explicit-any` errors so the gate is green).
+**The tooling reasoning (the interview payoff).** GitHub Actions chosen — built into
+the repo, free, no server to maintain, runs the same npm scripts locally as in CI.
+**Docker rejected** — LeetSage has no backend; the artifact is a static `dist/`
+bundle, so there's nothing to containerize or deploy to a host. **Jenkins rejected**
+— a self-hosted CI server is pure overhead for a solo GitHub project. **The
+pre-commit-vs-CI distinction:** CI is the authority (`npm ci` on a clean machine from
+the lockfile catches dependency drift; not skippable), the hook is a skippable local
+subset. See [INTERVIEW_PREP.md](./INTERVIEW_PREP.md) Q10 and
+[DEV_JOURNAL.md](./DEV_JOURNAL.md) (2026-09-15 follow-up).
+
+### 3c. CD / auto-publish to the Chrome Web Store  🚫 Deliberate not-now
+**Skill:** knowing when *not* to automate.
+**Decision (2026-09-15).** Consciously **not** built. Auto-publishing on a tag would
+require storing API credentials as encrypted secrets **and** every version goes
+through Google's review (hours to days), so it's never truly instant; most solo
+extension projects stop at "CI + build a zip artifact" and upload manually.
+Deployment today: build `dist/`, load unpacked at `chrome://extensions` (no automated
+publish). Revisit only if release cadence makes manual upload a real bottleneck.
+**Effort (if ever):** Medium (secrets + the store's publish API + review handling).
 
 ### 4. Scope extension permissions (security hardening)
 **Skill:** least-privilege, extension security.
@@ -260,10 +284,12 @@ is exactly the GenAI system-design interview. Rehearse it either way — it's in
    `feature/evals-and-tests` branch. Vitest across the pure modules (134 tests / 10
    files) + a labeled guardrail eval scored as a release gate; the eval caught and
    fixed two real solution-leak paths (62.5% → 100% catch). Assert-on-structured-
-   `data` (from #5) made it cleaner. Deferred remainder: **runtime metrics** (#3),
-   **real captured cases + a validated judge** (#3a), and **CI wiring** (#3b).
+   `data` (from #5) made it cleaner. **CI wiring** (#3b) landed same day as a
+   follow-up — GitHub Actions + a Husky hook run the eval on every push/PR
+   (CD/auto-publish deliberately skipped, #3c). Deferred remainder: **runtime
+   metrics** (#3) and **real captured cases + a validated judge** (#3a).
 5. **Runtime metrics** (#3) — **now next**; the last "quantified impact" gap
-   (latency/tokens/cost). Then the Tier-1.5 eval follow-ups (#3a/#3b).
+   (latency/tokens/cost). Then the remaining Tier-1.5 eval follow-up (#3a).
 6. **Scope permissions** (#4) — quick security win, but **do progress
    export-to-file first** (only clipboard "Copy all" exists today) so the required
    remove/re-add doesn't wipe accumulated records.

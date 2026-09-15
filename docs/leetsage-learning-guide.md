@@ -1333,11 +1333,11 @@ npm.cmd run eval        # run ONLY the guardrail eval (vitest run src/evals)
 
 (As everywhere in this project on Windows, it's `npm.cmd`, not `npm` — see §20.)
 
-**Nothing triggers them automatically yet.** They become automatic only if wired
-into a **git pre-commit/pre-push hook** or **CI** (e.g. GitHub Actions) — neither
-exists in this repo (a deliberate deferral; it's roadmap item #3b). Until then, "the
-eval is a release gate" is true *by discipline* (run it before you ship), not *by
-automation*.
+**They now run automatically** — a **GitHub Actions** workflow and a **Husky
+pre-commit hook** run them on every push/PR and before every commit respectively, so
+"the eval is a release gate" is true *by automation*, not just by discipline. See the
+**CI/CD** subsection at the end of this section for how that works and why GitHub
+Actions (and not Docker/Jenkins) was chosen.
 
 ### The unit tests (Tier 1 — pure logic)
 
@@ -1466,6 +1466,101 @@ one.
   React panel or the message plumbing between contexts.
 - **The LLM-as-judge is a scaffold** — exercised only with a deterministic mock; no
   validated, live judge run has been done.
-- **No CI / pre-commit hook** — tests run manually today.
 - **No runtime metrics** (latency, tokens/request, cost) — those aren't tests; they
   need instrumentation (roadmap #3).
+
+---
+
+## 33. CI/CD — making the eval an automatic release gate
+
+**Files:** `.github/workflows/ci.yml` · `.husky/pre-commit` · `package.json`
+(`"prepare": "husky"`)
+
+The tests in §32 started out **manual** — they only ran when you typed
+`npm.cmd run test`. This section is what turned them into an **automatic gate**, so a
+change that weakens the guardrail can't quietly ship.
+
+### What the GitHub Actions workflow does
+
+On **every push and pull request** (all branches), a fresh `ubuntu-latest` runner:
+
+1. checks out the repo (`actions/checkout@v4`),
+2. installs **Node 22 LTS** (`actions/setup-node@v4`, `cache: npm`),
+3. runs `npm ci` — a clean install straight from `package-lock.json`,
+4. `npm run lint`,
+5. `npm run test` — **this includes the guardrail eval** (`src/evals/`), so a leak
+   the filter stops catching **fails the build**,
+6. `npm run build` (`tsc -b && vite build`) to prove it still compiles.
+
+A red check = don't merge. That step 5 is the whole point: the eval is now a real
+release gate, not a thing you remember to run.
+
+> **Node 22 vs. local Node 24.** CI pins the conservative **22 LTS** even though
+> local dev is on 24 — the code uses no Node-24-specific features, so 22 is the safer
+> "clean room" version. Documented so the choice isn't a mystery later.
+
+### Why GitHub Actions — and not Docker or Jenkins (the reasoning, briefly)
+
+- **GitHub Actions (chosen):** built into the repo, free for this use, no server to
+  maintain, one YAML file, and it runs the *same npm scripts* you run locally.
+- **Docker (rejected):** Docker shines when you deploy a **long-running service** as
+  a container. **LeetSage has no backend** — the artifact is a static `dist/` bundle
+  the browser loads, not a server process — so there's nothing to containerize and
+  nothing to deploy to a host. Actions already gives a clean Node env for CI, so
+  Docker buys nothing here.
+- **Jenkins (rejected):** a **self-hosted** CI server you maintain yourself
+  (machine, plugins, security, uptime) — sensible at enterprise scale, pure overhead
+  for a solo GitHub project.
+- **CD / auto-publish (deliberately skipped):** uploading to the Chrome Web Store on
+  a tag needs encrypted-secret credentials **and** goes through Google's review
+  (hours to days), so it's never instant. Deployment today is manual: build `dist/`,
+  load unpacked (see §20). CI is in; CD is a documented not-now.
+
+(The rationale is also inlined as comments at the top of `ci.yml` so it's legible to
+anyone reading the repo. The full decision story is in
+[career/DEV_JOURNAL.md](./career/DEV_JOURNAL.md) 2026-09-15 follow-up and
+[career/INTERVIEW_PREP.md](./career/INTERVIEW_PREP.md) Q10 — not duplicated here.)
+
+### The pre-commit hook vs. CI — same scripts, *not* the same authority
+
+The **Husky pre-commit hook** (`.husky/pre-commit`, wired via `npm run prepare`
+which sets git's `hooksPath` to `.husky/_`) runs the **same** three scripts
+(`lint` + `test` + `build`) locally before a commit. But the hook and CI are **not**
+guaranteed to agree, and that's the interesting bit:
+
+| | Pre-commit hook | CI (GitHub Actions) |
+|---|---|---|
+| Where | Your machine | A clean runner |
+| Install | Uses your existing `node_modules` (can have **drifted**) | `npm ci` — exact locked versions, fails if `package.json`↔lockfile disagree |
+| Authority | Fast, best-effort early warning | **The gate** |
+| Skippable? | Yes — `git commit --no-verify` | No |
+
+So a commit can **pass the hook and still fail CI** — the classic case is a
+dependency you installed locally but forgot to add to `package.json`: the hook (your
+`node_modules` has it) passes; CI (clean install) fails. That dependency-drift check
+is exactly what **only** CI's clean install catches. Right mental model: the hook is
+a **subset** of CI, a courtesy for fast feedback — not a replacement for the gate.
+
+> **Windows note:** the hook script calls `npm` (not `npm.cmd`). Git for Windows runs
+> hooks under its own bash, which resolves `npm` fine; the `npm.cmd` rule (§20) is
+> only about this repo's PowerShell command wrapper.
+
+### One wrinkle worth knowing
+
+The first local run of the full CI sequence **failed at lint** — on 4 pre-existing
+`@typescript-eslint/no-explicit-any` errors in `code-extractor.ts` and
+`llm-service.ts` that predated the test work. Rather than make lint non-blocking
+(weakening the gate on day one), those were **fixed in a separate commit** by typing
+the two external-boundary reads properly (a minimal Monaco interface for the
+MAIN-world reader; minimal response/error shapes for the two `response.json()`
+reads), every access still `?.`-guarded. Result: lint 0 errors (2 intentional
+`react-hooks/exhaustive-deps` *warnings* remain — warnings don't fail lint), build
+clean, 134 tests pass.
+
+### What's NOT automated (don't overclaim)
+
+- **CI hasn't run on GitHub's servers yet** — the branch is committed but **not
+  pushed**, so "green" is the verified *local* run of the same scripts.
+- **No CD / auto-publish** — deployment is manual (build `dist/`, load unpacked).
+- The hook is **skippable** (`--no-verify`) and best-effort against local
+  `node_modules`.

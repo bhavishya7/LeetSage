@@ -36,17 +36,24 @@
 - **Shipped & authoritative:** `leetsage-phase1-gemini` + progress-tracking
   Phase A–C + `leetsage-structured-output`. (Progress Phase B/C is on the unpushed
   `feature/progress-tracking-phase-b` branch, three commits.)
-- **Tests + a guardrail eval — shipped 2026-09-15** (not a spec, but part of the
-  authoritative built state): **Vitest** across the pure modules (134 tests / 10
-  files) plus a labeled **solution-filter eval** scored as a release gate. The eval
-  caught two real solution-leak paths, now fixed — so the shipped
+- **Tests + a guardrail eval — shipped 2026-09-15, now wired into CI** (not a spec,
+  but part of the authoritative built state): **Vitest** across the pure modules
+  (134 tests / 10 files) plus a labeled **solution-filter eval** scored as a release
+  gate. The eval caught two real solution-leak paths, now fixed — so the shipped
   `solution-filter.ts` is *hardened* vs. its earlier description (no line-count gate
   on complete functions; multi-brace-function detection; a looser pseudocode
-  heuristic). On the unpushed `feature/evals-and-tests` branch. See
-  [`../../docs/career/DEV_JOURNAL.md`](../../docs/career/DEV_JOURNAL.md) (2026-09-15).
+  heuristic). As of a **2026-09-15 follow-up**, the tests+eval run **automatically**:
+  a **GitHub Actions** workflow (`npm ci` → lint → test → build on every push/PR) and
+  a **Husky pre-commit hook** — so a change that weakens the guardrail fails the
+  build. (GitHub Actions chosen over Docker/Jenkins because there's no backend to
+  containerize or host; **CD / auto-publish to the Web Store was deliberately
+  skipped** — review latency + secret management → manual publish.) All on the
+  unpushed `feature/evals-and-tests` branch. See
+  [`../../docs/career/DEV_JOURNAL.md`](../../docs/career/DEV_JOURNAL.md) (2026-09-15
+  + its follow-up).
 - **Next to build:** runtime metrics (latency/tokens/cost — the last "quantified
-  impact" gap), then the deferred eval follow-ups (real captured responses + a
-  validated LLM-as-judge; wiring tests into CI), then progress-tracking Phase D
+  impact" gap), then the deferred eval follow-up (real captured responses + a
+  validated LLM-as-judge — CI wiring is now done), then progress-tracking Phase D
   (verified submissions) and export-to-file.
 - **Don't trust for current state:** `ai-learning-assistant` (historical).
 

@@ -344,6 +344,70 @@ deterministic aggregation over an LLM; and — the differentiator — designing 
 
 ---
 
+### Q10. "Walk me through your CI/CD — why GitHub Actions, and not Docker or Jenkins?"
+
+> Lead with this for CI/CD, DevOps, or "how do you gate releases" prompts. It pairs
+> with the eval (Q3a): CI is what turns that eval from a manual discipline into an
+> **automatic** release gate. **Shipped 2026-09-15 (follow-up)**, committed on the
+> unpushed `feature/evals-and-tests` branch.
+
+**Short answer.** I use **GitHub Actions**. On every push and pull request a clean
+Linux runner does `npm ci` → lint → test → build, and the test step includes my
+guardrail **eval** — so a change that weakens the "never hand over the solution"
+rule **fails the build automatically**. That's the point: the eval becomes a real
+release gate instead of something I remember to run. I chose Actions because it's
+built into the repo, free, needs no server to maintain, and runs the exact same npm
+scripts I run locally — the lowest-overhead way to automate the gate.
+
+**Why not Docker.** Docker packages an app *plus its whole environment* into an
+image that runs identically anywhere — it earns its keep when you deploy a
+**long-running service** (an API, a backend) as a container on a host. **LeetSage
+has no backend.** The build artifact is a static bundle (`dist/` — the JS the
+browser loads), not a server process, so there's nothing to containerize and nothing
+to deploy to a host. A Dockerfile would be an image to maintain for zero benefit,
+and Actions already gives me a clean Node environment for reproducible test runs.
+
+**Why not Jenkins.** Jenkins is a **self-hosted** CI server — I'd install and
+maintain the machine, plugins, security, and uptime myself. That's normal in a large
+enterprise; for a solo GitHub project it's pure overhead compared to Actions, which
+needs no server. I can talk about Jenkins, I just wouldn't run it here.
+
+**Why no CD / auto-publish (a deliberate non-choice).** CD would upload the
+extension to the Chrome Web Store automatically on a tag. I skipped it on purpose:
+publishing needs API credentials stored as encrypted secrets **and** every version
+goes through Google's review (hours to days), so it's never truly instant. Most solo
+extension projects stop at "CI + build a zip" and upload manually — so my deployment
+today is: build `dist/`, load unpacked. Knowing *when not* to automate is part of
+the answer.
+
+**The sharp follow-up — "can a commit pass your pre-commit hook but still fail CI?"**
+Yes, and understanding why is the real signal. I also added a **Husky pre-commit
+hook** that runs the *same* scripts (lint/test/build) locally — but the hook and CI
+are **not** guaranteed to agree. **CI is the authority** because it runs `npm ci` on
+a clean machine straight from the lockfile: exact locked versions, and it fails if
+`package.json` and the lockfile disagree. **The hook is a fast, local, best-effort
+check** against whatever is already in my `node_modules`, which can have drifted. So
+the classic failure is a dependency I installed locally but forgot to add to
+`package.json` — the hook passes (my `node_modules` has it), CI's clean install
+fails. The hook is also skippable (`--no-verify`); CI isn't. Mental model: the hook
+is a **subset** of CI, a courtesy for fast feedback, not a replacement for the gate.
+
+**One honest wrinkle.** The first time I ran the full CI sequence locally, **lint
+failed** — on 4 pre-existing `no-explicit-any` errors that predated the test work.
+Rather than make lint non-blocking (weakening the gate on day one), I fixed them in
+a separate commit by properly typing the two external-boundary reads (the Monaco
+MAIN-world reader and the two `response.json()` shapes), keeping every access
+`?.`-guarded. Green gate, honestly earned.
+
+**Signal.** Choosing CI/CD tooling from real constraints, not cargo-culting Docker/
+Jenkins; knowing what each tool actually *buys* you (and that "no backend" removes
+the reason for containers); the `npm ci`-on-a-clean-machine authority distinction
+between a hook and CI; and treating "don't automate publishing yet" as a defensible
+engineering decision. Pair with **Q3a** — this is what makes the eval an automatic
+gate.
+
+---
+
 ## General 2026 AI-engineering questions (use LeetSage as your example)
 
 These come up in AI/LLM interviews regardless of the project. For each, the goal
@@ -357,6 +421,8 @@ is to answer generally **and** ground it in LeetSage.
   that scores my solution-filter as a release gate (catch rate / false-positive rate
   / precision) and it caught two real leak bugs on its first run; I also built an
   offline, injectable LLM-as-judge scaffold for the semantic cases regex can't catch.
+  It's now an **automatic** gate — it runs in GitHub Actions CI on every push/PR, so
+  a change that weakens the guardrail fails the build (see **Q10**).
 - **"Structured output / function calling?"** Constraining the model to emit JSON
   matching a schema, so downstream code can rely on it. *Tie-in:* see **Q8** — this
   is a **shipped**, load-bearing decision in LeetSage. The report-feeding actions

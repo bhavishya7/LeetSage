@@ -553,9 +553,11 @@ regression gate, an optimistic estimate of real-world recall until real captured
 Gemini responses are added. The **LLM-as-judge is a scaffold** — offline, injectable,
 and exercised only with a deterministic mock; no validated, live judge run has been
 done. Tests are **not wired into any automatic trigger** (no pre-commit hook, no CI)
-— manual only, by choice, for now. And these are still **unit/eval tests of pure
-logic** — no component/integration/E2E tests of the React panel or the message
-plumbing.
+— manual only, by choice, for now. *[Superseded same day — see the 2026-09-15
+follow-up entry below: the tests+eval were wired into GitHub Actions CI + a Husky
+pre-commit hook, so they now run automatically.]* And these are still **unit/eval
+tests of pure logic** — no component/integration/E2E tests of the React panel or the
+message plumbing.
 
 **Commits.** None yet — uncommitted on `feature/evals-and-tests` (off
 `main`@`16710a1`). New: `vitest.config.ts`, `src/services/__tests__/` (8 files:
@@ -565,6 +567,128 @@ plumbing.
 `guardrail-eval.test.ts`). Modified: `src/services/solution-filter.ts` (the three
 fixes), `package.json` / `package-lock.json` (Vitest + scripts), and the career docs
 (`RESUME.md`, `INTERVIEW_PREP.md`, and this journal + roadmap/guide/specs index).
+
+## 2026-09-15 (follow-up) — CI/CD: the eval becomes an automatic release gate
+
+> A same-day follow-up to the tests+eval session above. The tests existed but were
+> **manual** — this wired them into an automatic gate. Written teaching-oriented on
+> purpose: the developer is newer to CI/CD, Docker, and Jenkins, so the *why we
+> chose X and rejected Y* reasoning is preserved as much as the change itself. On
+> branch `feature/evals-and-tests` (off `main`@`16710a1`), **committed, not pushed**.
+
+**What.** Two things that turn "run the tests when you remember to" into "the tests
+run themselves":
+- **A GitHub Actions CI workflow** (`.github/workflows/ci.yml`): on every push and
+  pull request (all branches), a fresh `ubuntu-latest` runner does
+  checkout (`actions/checkout@v4`) → Node 22 LTS (`actions/setup-node@v4`,
+  `cache: npm`) → `npm ci` → `npm run lint` → `npm run test` → `npm run build`. The
+  `test` step runs the labeled guardrail eval, so **a change that weakens the "never
+  hand over the solution" guardrail now fails CI automatically** — that's the whole
+  payoff: the eval becomes a real, automatic **release gate** instead of a thing you
+  remember to run.
+- **A Husky pre-commit hook** (`.husky/pre-commit` + a `"prepare": "husky"` script;
+  Husky 9 as a devDependency). The hook runs the **same** npm scripts CI runs
+  (`lint` + `test` + `build`) locally before a commit lands — fast, local early
+  warning. It uses `npm` (not `npm.cmd`) because Git for Windows runs hooks under
+  its own bash, which resolves `npm` fine; the `npm.cmd` rule was only ever about
+  this repo's PowerShell command wrapper.
+
+**Why (the decision reasoning — this is the point of the entry).**
+- **Why GitHub Actions (chosen).** It's built into the repo (already on GitHub),
+  free for this use, needs no server to maintain, is configured by one YAML file,
+  and runs the *exact same npm scripts* a developer runs locally. Lowest-overhead
+  way to make the eval an automatic gate.
+- **Why NOT Docker.** Docker packages an app *plus its whole environment* into an
+  image that runs identically anywhere — it solves "works on my machine" and earns
+  its keep when you deploy a **long-running service** (a Node API, a Python backend)
+  as a container on a host. **LeetSage has no backend.** Its build artifact is a
+  static bundle (`dist/` — side_panel.js, background.js, content.js, manifest.json),
+  i.e. files the browser loads, not a server process. There's nothing to
+  containerize and nothing to deploy to a host, so a Dockerfile would be an image to
+  maintain for zero benefit. (GitHub Actions already gives a clean Node environment
+  for the test run, so Docker isn't needed for CI reproducibility either.)
+- **Why NOT Jenkins.** Jenkins is a **self-hosted** CI/CD server — you install and
+  maintain the machine, plugins, security, and uptime yourself. Common in large
+  enterprises; for a solo GitHub project it's pure operational overhead versus
+  GitHub Actions, which needs no server. Worth *understanding* for interviews (you
+  will be asked), not worth *running* here.
+- **Why NOT CD / auto-publish (consciously skipped).** CD would package the
+  extension and upload it to the Chrome Web Store automatically on a release/tag.
+  Deliberately not built now because publishing requires storing API credentials as
+  encrypted secrets **and** every new version goes through Google's review (hours to
+  days), so it's never truly instant; most solo extension projects stop at "CI +
+  build a zip artifact" and upload to the store manually. So CI is in; CD/auto-
+  publish is a documented non-choice for now. (How the extension is deployed today:
+  build `dist/` and load unpacked at `chrome://extensions` — see the learning guide
+  §20; there is no automated publish.)
+
+**The pre-commit-hook vs CI distinction (the developer explicitly asked "can
+pre-commit pass but CI fail? are they the same checks?").** They run the *same* npm
+scripts here, but they are **not** guaranteed to agree, and understanding why is the
+point:
+- **CI is the authority** because it runs `npm ci` on a **clean** machine from the
+  lockfile — it installs *exactly* the locked versions and fails if `package.json`
+  and the lockfile disagree.
+- **The hook is a fast, local, best-effort early warning** — it runs against
+  whatever is already in your local `node_modules`, which can have **drifted** from
+  the lockfile.
+- So a commit can **pass the hook and still fail CI** — the classic case is a
+  dependency you installed locally but forgot to add to `package.json`: the hook
+  (local `node_modules` has it) passes; CI (clean install) fails. That
+  dependency-drift check is exactly what **only** CI's clean install can catch.
+- The hook is also **skippable** (`git commit --no-verify`); CI is not. So: hook =
+  courtesy/fast feedback, CI = the gate that can't be skipped. The right mental
+  model is the hook should be a **subset** of CI, not a duplicate or a replacement.
+
+**What broke / the hard part.** When the full CI sequence was first run locally,
+`npm run lint` **failed** with 4 pre-existing `@typescript-eslint/no-explicit-any`
+**errors** in `src/services/code-extractor.ts` and `src/services/llm-service.ts` —
+**not** caused by the tests/eval work; they predated it. Since both CI and the hook
+run `npm run lint`, CI would have been **red on day one** for reasons unrelated to
+the tests.
+
+**How solved.** The developer chose to **fix** the errors (rather than make lint
+non-blocking or drop it), in a **separate commit** (`ea82f9b`) so the CI plumbing
+commit stays clean. The fixes typed the two external-boundary reads instead of
+`any`: a minimal `MonacoModel`/`MonacoGlobal` interface in `code-extractor.ts`
+(Monaco's own types aren't imported in the MAIN-world reader), and minimal
+`ChatCompletionResponse`/`APIErrorBody` shapes for the two `response.json()` reads
+in `llm-service.ts` (with `finish_reason` typed as `LLMResponse['finishReason']` so
+the `?? 'stop'` fallback stays type-correct). Also removed 2 now-unnecessary
+`eslint-disable-next-line no-console` directives in `guardrail-eval.test.ts` (the
+config has no `no-console` rule). Behavior unchanged — every access stays
+`?.`-guarded (still treated as an untrusted boundary). Result: **lint 0 errors**
+(2 intentional `react-hooks/exhaustive-deps` **warnings** remain in `App.tsx` — the
+deliberately-omitted deps from the structured-output work; warnings don't fail
+lint), **build clean**, **134 tests still pass**. Verified the full CI sequence
+locally (`npm run lint` = 0 errors, `npm run build` = clean, `npm run test` = 134
+pass across 10 files), so CI will be green when pushed.
+
+**Interview angle.** A clean, teachable **CI/CD tooling-choice** story: *why GitHub
+Actions and not Docker or Jenkins* grounded in a real constraint (no backend → no
+service to containerize → nothing for Docker/Jenkins to earn), and *why not
+CD/auto-publish* (Web Store review latency + secret management → manual publish is
+the right call for a solo project). Plus the **pre-commit-vs-CI authority
+distinction** — same scripts, but only CI's clean `npm ci` catches dependency drift,
+and the hook is skippable while CI isn't — which is a sharp "do you actually
+understand your pipeline?" answer. And it completes the 2026 evals theme: the
+guardrail eval is now an **automatic** release gate, not a manual discipline. Minor
+supporting story: a green *build* still had a red *lint* (pre-existing `any` errors),
+fixed in its own commit rather than by weakening the gate.
+
+**Caveats (not overclaimed).** Committed, **not pushed** (push/PR is the developer's
+call), so CI hasn't run on GitHub's servers yet — "green" is the verified *local*
+run of the same scripts. **CD / auto-publish to the Web Store is not built** (a
+deliberate not-now); deployment stays manual (build `dist/`, load unpacked). The
+hook is skippable (`--no-verify`) and best-effort against local `node_modules`.
+
+**Commits.** `ea82f9b` (fix: resolve `no-explicit-any` lint errors so lint passes
+cleanly — `src/services/code-extractor.ts`, `src/services/llm-service.ts`,
+`src/evals/guardrail-eval.test.ts`), `b0b98e3` (ci: add GitHub Actions CI + a Husky
+pre-commit hook — `.github/workflows/ci.yml`, `.husky/pre-commit`, `package.json`,
+`package-lock.json`) — on branch `feature/evals-and-tests` (off `main`@`16710a1`),
+on top of `0031cb9` (test suite + eval) and `818c70d` (docs) from the prior session.
+**Not yet pushed.**
 
 ---
 
@@ -583,9 +707,13 @@ fixes), `package.json` / `package-lock.json` (Vitest + scripts), and the career 
    on the unpushed `feature/evals-and-tests` branch. The **metrics** slice is still
    open — runtime numbers (p50/p95 latency, tokens/request, requests handled) are now
    the top unmet "quantified impact" gap.
-4. **Real captured-Gemini eval cases + a validated (non-mock) LLM-as-judge**, and
-   **wiring the tests into a pre-commit hook / CI** so the eval becomes an automatic
-   release gate — both deliberately deferred this session.
+4. ~~**Wiring the tests into a pre-commit hook / CI** so the eval becomes an
+   automatic release gate~~ — **DONE (2026-09-15 follow-up)**: GitHub Actions CI
+   (`npm ci` → lint → test → build on every push/PR) + a Husky pre-commit hook, on
+   the unpushed `feature/evals-and-tests` branch. **CD / auto-publish to the Web
+   Store was deliberately skipped** (review latency + secret management → manual
+   publish). Still open: **real captured-Gemini eval cases + a validated (non-mock)
+   LLM-as-judge** — deferred.
 
 *When each lands, add an entry above (via the project-historian agent) and backfill
 any resulting numbers into [RESUME.md](./RESUME.md).*
@@ -658,12 +786,15 @@ any resulting numbers into [RESUME.md](./RESUME.md).*
   exists and the chat surface shipped as the hybrid input, but the original
   spec's standalone Chat Mode component and full stuck-timer UX are not the
   shipped shape; describe the hybrid input + tuned timer as what actually ships.
-- **Automated tests + a guardrail eval** — **shipped 2026-09-15** (Vitest, 134
-  tests / 10 files, plus a labeled solution-filter eval as a release gate; on the
-  unpushed `feature/evals-and-tests` branch). Still *not* done: **runtime metrics**
-  (latency/tokens/cost), **real captured-response eval cases + a validated LLM-as-
-  judge** (only an offline mock judge exists), and **wiring tests into CI / a
-  pre-commit hook** (they run manually today).
+- **Automated tests + a guardrail eval, wired into CI** — **shipped 2026-09-15**
+  (Vitest, 134 tests / 10 files, plus a labeled solution-filter eval as a release
+  gate) and, as of a **2026-09-15 follow-up**, run **automatically** by a GitHub
+  Actions workflow (`npm ci` → lint → test → build on every push/PR) and a Husky
+  pre-commit hook; all on the unpushed `feature/evals-and-tests` branch. Still *not*
+  done: **runtime metrics** (latency/tokens/cost), **real captured-response eval
+  cases + a validated LLM-as-judge** (only an offline mock judge exists), and **CD /
+  auto-publish to the Web Store** (deliberately skipped — review latency + secrets;
+  deployment stays manual: build `dist/`, load unpacked).
 
 ### ✅ Model version — resolved (safe to state in an interview)
 
