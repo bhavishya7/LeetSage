@@ -92,22 +92,68 @@ it looks like a full solution.
 
 **Deeper — how the filter works.** It's layered:
 - Phrase detection ("here's the complete solution", etc.).
-- Code-size + shape checks: reject fenced code blocks over 14 lines, or blocks
-  over 8 lines that match a complete-function regex.
-- A pseudocode heuristic that flags text combining ≥5 control-flow lines with a
-  loop, a branch, and a result — the signature of "the whole algorithm in words."
-  I added this after a real incident where the model returned pseudocode that was
-  a 1:1 of the solution.
+- Code-size + shape checks: reject fenced code blocks over 14 lines, or any block
+  that matches a complete-function pattern (a `def`/brace-function signature with a
+  real body + a `return`) — regardless of line count, since a compact 8-line
+  solution is still the whole answer.
+- A pseudocode heuristic that flags text combining ≥5 imperative control lines with
+  a loop and a result — the signature of "the whole algorithm in words." I added
+  this after a real incident where the model returned pseudocode that was a 1:1 of
+  the solution.
 - Actions that analyze the user's *own* code (`CHECK_APPROACH`,
-  `UNDERSTAND_SOLUTION`) are exempt, because discussing their solution is the point.
+  `UNDERSTAND_SOLUTION`, `GENERATE_REPORT`) are exempt, because discussing their
+  solution is the point.
 
-**Honesty about limits.** Heuristics have false positives and negatives. The right
-next step is an **eval suite** to measure the filter's precision/recall on a
-labeled set, plus an LLM-as-judge layer for the semantic cases regex can't catch.
+**Honesty about limits.** Heuristics have false positives and negatives — so I
+built an **eval suite** (see Q3a) that measures the filter's catch rate and
+false-positive rate on a labeled set and gates against regressions, plus an
+LLM-as-judge scaffold for the semantic cases regex can't catch.
 
 **Signal.** Defense-in-depth; not trusting model compliance; knowing the limits of
 your own solution and the path to improve it. **This is your strongest story —
 lead with it if they ask about AI safety or output control.**
+
+---
+
+### Q3a. "You said you evaluate the guardrail. How? What did the eval actually find?"
+
+**Short answer.** I built a **labeled eval** that treats the solution-filter as a
+binary classifier — positive class = "this response leaks the full solution" — and
+scores it as a release gate. A hand-labeled dataset of sample responses (leak vs.
+safe), run through the filter, reported as **catch rate** (recall on leaks),
+**false-positive rate** (legit coaching wrongly blocked), and **precision**. It's
+wired as a test so a regression that weakens the guardrail fails the build.
+
+**What it found (the important part).** The first run scored **62.5% catch rate** —
+it caught only 5 of 8 known leaks. That surfaced two real blind spots in a filter
+I *thought* was solid:
+1. A **compact complete function** (an 8-line Two Sum) slipped through, because the
+   complete-function check was gated behind a line-count threshold — a short-but-
+   whole solution dodged it.
+2. **Pseudocode that folds the conditional into a loop header** (a monotonic-stack
+   writeup with no standalone `if`) wasn't recognized, because the heuristic
+   required an explicit branch line.
+
+I fixed both — dropped the line-count gate on the complete-function check, added a
+brace-function detector for multi-brace languages the old regex missed, and
+loosened the pseudocode heuristic to "loop + result + enough imperative steps." The
+eval then hit **100% catch / 0% false-positive** on the set, with the existing
+negative cases confirming I hadn't started over-blocking.
+
+**The honesty I lead with.** The dataset is **author-generated** — I wrote both the
+filter and the examples, so the examples skew toward shapes the filter can catch.
+That makes it a strong **regression gate** but an **optimistic** estimate of real-
+world recall. So I designed the dataset to ingest **real captured Gemini responses**
+later, and built the **LLM-as-judge** layer offline/mockable (an injected judge
+function, no live key needed) to catch the semantic paraphrases regex can't. A
+judge I haven't validated against ground truth is just another opinion, so I score
+it with the same metrics.
+
+**Signal.** This is the headline. Evals as a release gate for an AI safety
+constraint; measuring the thing I claim ("teaches, never solves"); the eval finding
+real bugs my intuition missed; and being explicit about eval bias rather than
+quoting a flattering number. If they ask about evals, LLM testing, or "how do you
+know your AI feature works" — **lead here.**
 
 ---
 
@@ -307,9 +353,10 @@ is to answer generally **and** ground it in LeetSage.
   actually works, instead of a "vibe check" on a few outputs. LLM-as-judge uses one
   model to score another against a rubric; you validate the judge against a small
   labeled set (it can reach ~85% human agreement but has position/verbosity/
-  self-preference biases). *LeetSage tie-in:* my solution-filter is a deterministic
-  eval target — I plan an eval suite that asserts the model never leaks a full
-  solution and hints stay progressive.
+  self-preference biases). *LeetSage tie-in:* see **Q3a** — I **built** a labeled eval
+  that scores my solution-filter as a release gate (catch rate / false-positive rate
+  / precision) and it caught two real leak bugs on its first run; I also built an
+  offline, injectable LLM-as-judge scaffold for the semantic cases regex can't catch.
 - **"Structured output / function calling?"** Constraining the model to emit JSON
   matching a schema, so downstream code can rely on it. *Tie-in:* see **Q8** — this
   is a **shipped**, load-bearing decision in LeetSage. The report-feeding actions
@@ -418,6 +465,33 @@ data path, my rule is now: inspect the persisted state, not just compilation.
 checking and the happy path don't cover data-flow/closure bugs; reaching for
 persisted-state inspection as a debugging tool.
 
+### "You wrote the tests after the code — with an agent. How do you know they aren't just rubber-stamping the existing behavior?"
+
+**Answer.** This is the real risk of characterization tests (and doubly so when an
+agent writes them after reading the implementation): you can accidentally assert
+"whatever the code currently returns," which passes by construction and proves
+nothing. I guard against it three ways. **First, anchor assertions to the stated
+contract and boundary values, not the observed output** — e.g. "a code block over
+14 lines is blocked, 14 passes" comes from the design rule, so a test failing there
+means the *code* is wrong, not the test. **Second, include cases the author might
+not have thought about** — malformed JSON, day-boundary rollover, cooldown windows,
+loop-embedded conditionals — so the suite probes behavior rather than mirroring it.
+**Third, and most convincing: a separate eval on an independent labeled set.** My
+guardrail eval scored the filter at **62.5% catch rate on the first run and found
+two real leak bugs** — proof the tests weren't just photographs of working code,
+because the measurement disagreed with my assumptions and I had to fix the code.
+
+I'm also honest about the residual bias: an agent that just read the implementation
+carries *some* bias no matter how careful, and my eval dataset is author-generated,
+which flatters the recall number. The mitigations are exactly the ones above plus
+feeding in real captured responses and an independent judge — which is why I built
+the eval to ingest both.
+
+**Signal.** Understanding *why* after-the-fact and agent-written tests can be weak,
+and having concrete practices (contract-anchored assertions, adversarial cases, an
+independent eval) that turn them back into real evidence — plus honesty about the
+bias that remains.
+
 ### "How do you avoid building on stale assumptions when working with an agent?"
 
 **Answer.** "Verify, don't assume" — reconcile design docs against shipped code
@@ -478,14 +552,21 @@ before committing.
 - **"Why did you build this?"** Genuine: I use it for my own LeetCode practice, and
   I wanted a tool that teaches instead of spoiling. (Authentic motivation reads
   well.)
-- **"What would you do differently?"** Add evals and tests from the start; narrow
-  extension permissions earlier; instrument basic metrics so I could quote impact
-  numbers.
+- **"What would you do differently?"** Add evals and tests from the *start* rather
+  than after the fact — I added them later (2026-09-15) and, tellingly, the eval
+  immediately found two real leak bugs, which is exactly the regression net earlier
+  tests would have been. Also: narrow extension permissions earlier, and instrument
+  runtime metrics sooner so I could quote latency/cost numbers.
 - **"What are you most proud of?"** The guardrail — turning a fuzzy product promise
-  ("don't give the answer") into a concrete, layered, testable mechanism.
-- **"What's the biggest weakness right now?"** No automated tests/evals yet, and no
-  usage metrics — so I can describe behavior but not yet quantify it. I know exactly
-  what I'd measure and why.
+  ("don't give the answer") into a concrete, layered, testable mechanism — *and* the
+  eval that measured it and caught two real leaks my intuition had missed.
+- **"What's the biggest weakness right now?"** No **runtime** metrics yet
+  (latency, tokens/request, cost) — I have quality numbers from the guardrail eval
+  (catch rate / false-positive rate) but not production numbers, so I can quantify
+  *correctness* but not yet *cost/latency*. And my eval dataset is author-generated,
+  so its catch rate is an optimistic regression gate, not a validated real-world
+  recall — I know exactly how I'd close both (instrument metrics; feed in real
+  captured responses + a validated judge).
 
 ---
 
@@ -499,8 +580,8 @@ Walk me through what happens from clicking "Hint" to seeing text. · Where does
 state live? · Walk me through the progress-tracking data model and its tradeoffs
 (→ Q9).
 
-**AI-specific:** How do you stop it revealing solutions? · How would you test that
-it doesn't? · Design an eval for the guardrail. · Are you exposed to prompt
+**AI-specific:** How do you stop it revealing solutions? · How do you *evaluate*
+that guardrail, and what did the eval find? (→ Q3a). · Are you exposed to prompt
 injection? · How do you control cost? · Tell me about an architecture decision you
 made and why (→ structured output, Q8). · How do you get reliable structured data
 out of a non-deterministic model while still streaming?
@@ -508,9 +589,10 @@ out of a non-deterministic model while still streaming?
 **Working with agents:** How do you work effectively with coding agents? · Tell me
 about a time you constrained or debugged an agent's behavior. · How do you keep
 knowledge from being lost across sessions? · How do you verify an AI-built feature
-actually works, not just compiles? · How do you avoid building on stale assumptions
-(spec vs. code drift)? · How do you decide what an LLM should produce vs. what your
-code owns? · An LLM feature gives wrong output — how do you debug it?
+actually works, not just compiles? · How do you know agent-written, after-the-fact
+tests aren't just rubber-stamping the code? · How do you avoid building on stale
+assumptions (spec vs. code drift)? · How do you decide what an LLM should produce
+vs. what your code owns? · An LLM feature gives wrong output — how do you debug it?
 
 **Depth probes:** Why `chrome.storage.local` and not `sync`? · What breaks if the
 service worker sleeps mid-request? · How do you keep chat history per problem? ·

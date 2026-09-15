@@ -27,6 +27,7 @@ This document is maintained alongside implementation. Each section explains *wha
 20. [Build & Development Workflow](#20-build--development-workflow)
 30. [Structured Output Pipeline](#30-structured-output-pipeline)
 31. [Progress Tracking: Records, My Progress, Analytics](#31-progress-tracking-records-my-progress-analytics)
+32. [Testing & Evals (Vitest) — a beginner's walkthrough](#32-testing--evals-vitest--a-beginners-walkthrough)
 
 ---
 
@@ -1265,3 +1266,206 @@ only by inspecting saved records.
   intended targets.
 - **No write-lock** on the read-modify-write (single-user local store; noted in
   code).
+
+---
+
+## 32. Testing & Evals (Vitest) — a beginner's walkthrough
+
+**Files:** `vitest.config.ts` · `src/services/__tests__/*.test.ts` (unit tests) ·
+`src/evals/*` (the guardrail eval) · `package.json` (scripts)
+
+> Added 2026-09-15 — the project's **first** tests and its **first eval**. This
+> section is written for someone new to testing/Vitest: what a test runner is, how
+> a test actually works, the two techniques this repo uses that aren't obvious
+> (fake timers, mocking `chrome.*`), and how an *eval* differs from a unit test.
+> The build story is in [career/DEV_JOURNAL.md](./career/DEV_JOURNAL.md)
+> (2026-09-15); the interview framing is in
+> [career/INTERVIEW_PREP.md](./career/INTERVIEW_PREP.md) (Q3a + the agent Q&As).
+
+### What Vitest is (and how a test runs)
+
+**Vitest is a test runner** — it finds your test files, runs the assertions inside
+them, and reports pass/fail. It's the Jest-equivalent built for the Vite ecosystem:
+it reuses the Vite/TS config, so it runs `.ts` files directly with **no separate
+compile step**. That's why it's a natural fit here (the project is already Vite +
+TypeScript).
+
+A "test" isn't magic. It's just code that **calls a real function with a known
+input and checks the output with an assertion**:
+
+```typescript
+import { describe, it, expect } from 'vitest';
+import { normalizeProblemUrl } from '../normalize-url';
+
+describe('normalizeProblemUrl', () => {          // groups related cases
+  it('strips the /submissions/ suffix', () => {  // one case
+    const result = normalizeProblemUrl('https://leetcode.com/problems/two-sum/submissions/');
+    expect(result).toBe('https://leetcode.com/problems/two-sum/');  // the assertion
+  });
+});
+```
+
+If `result` doesn't equal the expected value, `expect(...).toBe(...)` **throws**,
+the case fails, and Vitest prints a diff of expected-vs-actual. Pass = the assertion
+didn't throw. The vocabulary:
+
+- `describe()` — groups cases (usually one per function/module).
+- `it()` / `test()` — a single case.
+- `expect(x).toBe(y)` — reference/primitive equality; `.toEqual(y)` — deep equality
+  for objects/arrays; `.toContain(...)`, `.toThrow()`, etc.
+- `vi.fn()` — a **fake function** that records how it was called (a "spy").
+- `vi.useFakeTimers()` — swaps in a controllable clock (see below).
+
+**This repo uses `globals: false`** (see `vitest.config.ts`), which means every test
+file **explicitly imports** `{ describe, it, expect, vi }` from `vitest` rather than
+relying on them being magically global. Slightly more typing, but the imports are
+honest and greppable.
+
+### When do tests run? (manual vs automatic — an important distinction)
+
+Right now they are **manual**. They run only when you run them:
+
+```powershell
+npm.cmd run test        # one pass (vitest run) — use this to verify a change
+npm.cmd run test:watch  # re-run automatically on every file save (dev loop)
+npm.cmd run eval        # run ONLY the guardrail eval (vitest run src/evals)
+```
+
+(As everywhere in this project on Windows, it's `npm.cmd`, not `npm` — see §20.)
+
+**Nothing triggers them automatically yet.** They become automatic only if wired
+into a **git pre-commit/pre-push hook** or **CI** (e.g. GitHub Actions) — neither
+exists in this repo (a deliberate deferral; it's roadmap item #3b). Until then, "the
+eval is a release gate" is true *by discipline* (run it before you ship), not *by
+automation*.
+
+### The unit tests (Tier 1 — pure logic)
+
+Eight files under `src/services/__tests__/`, ~118 cases, all testing **pure
+functions** (same input → same output, no side effects — the easiest, highest-value
+things to test):
+
+| File | What it pins down |
+|---|---|
+| `solution-filter.test.ts` | The guardrail: solution-phrase detection, over-long code blocks, complete-function detection, full pseudocode; that short snippets / single-idea pseudocode / conceptual hints **pass**; and that the exempt actions (`CHECK_APPROACH`, `UNDERSTAND_SOLUTION`, `GENERATE_REPORT`) bypass the filter. |
+| `structured-parser.test.ts` | Feeds valid / malformed / partial(truncated) / fenced / pure-prose / missing-field / non-object JSON and asserts it **degrades to prose-only without throwing**. This *observes* the fallback that was previously only code-read (see §30). |
+| `session-digest.test.ts` | `buildSessionDigest` + `extractSessionFacts` + `buildRecordProjection`: the report's own structured data is authoritative; solved ⇒ achieved complexity = optimal; not solved ⇒ achieved = measured; placeholders when empty. |
+| `progress-analytics.test.ts` | `computeStruggleScore` weighting, per-pattern fan-out, the `<3`-problems low-confidence gate, weakest-link selection, revisit-list precedence. |
+| `progress-records.test.ts` | `slugFromUrl`, `migrate` (schema versioning), `sameCalendarDay`, `shouldReplaceLatest` (append-vs-replace), `unionPatterns`, `complexityRank`, `computeBestAttemptIndex`. |
+| `normalize-url.test.ts`, `stuck-timer.test.ts`, `rate-limiter.test.ts` | URL normalization; the inactivity/cooldown timer; the free-tier usage limiter. |
+
+### Two techniques worth understanding
+
+**(1) Fake timers** (`stuck-timer.test.ts`). The stuck-timer fires after **8 minutes**
+of inactivity and then re-arms on a **20-minute cooldown**. You do **not** want a
+test that actually waits 8 real minutes. `vi.useFakeTimers()` replaces the real
+`setTimeout`/clock with a **controllable** one, and `vi.advanceTimersByTime(ms)`
+jumps the clock forward **instantly**:
+
+```typescript
+vi.useFakeTimers();
+startStuckTimer(onStuck);
+vi.advanceTimersByTime(8 * 60 * 1000);  // 8 minutes pass in ~0ms
+expect(onStuck).toHaveBeenCalledOnce();
+vi.useRealTimers();                      // restore afterwards
+```
+
+This makes time-dependent behavior fast **and deterministic** (no flaky "sometimes
+the machine was slow" failures).
+
+**(2) Mocking `chrome.*`** (`rate-limiter.test.ts`). The rate-limiter persists usage
+via `chrome.storage.local` — an API that **doesn't exist in Node**, where the tests
+run. A **mock** is a minimal in-memory stand-in you install so the code-under-test
+has something to call:
+
+```typescript
+const store: Record<string, unknown> = {};
+globalThis.chrome = {
+  storage: { local: {
+    get: (keys, cb) => cb({ ...store }),
+    set: (items, cb) => { Object.assign(store, items); cb?.(); },
+    remove: (key, cb) => { delete store[key as string]; cb?.(); },
+  } },
+  runtime: { lastError: undefined },
+} as unknown as typeof chrome;
+```
+
+You mock a dependency when the real one is unavailable (no Chrome in Node),
+expensive, or non-deterministic (the network, the clock).
+
+> **The gotcha this repo hit — "mock ALL the clocks."** `storage.ts` derives its
+> *daily usage key* from **`new Date()` (the real wall clock)**, not from
+> `Date.now()`. A test that mocked `Date.now()` alone left the storage key computed
+> from the *real* date — so the key the test wrote didn't match the key the code
+> read, and 4 tests failed. The fix: derive the test's storage key with the **same
+> formula** `storage.ts` uses. The lesson: when you fake time, fake *every* clock
+> the code reads, or align your fixtures to the ones you didn't fake.
+
+### The eval (Tier 2 — a release gate, not just a unit test)
+
+A **unit test** asks "does this function return the right value for this input?" An
+**eval** asks a fuzzier, product-level question — *"does the guardrail actually keep
+its promise across a representative set of cases, and by how much?"* — and answers
+it with **metrics**, not just pass/fail. It treats the solution-filter as a **binary
+classifier** (positive class = "this response leaks the full solution").
+
+Four files under `src/evals/`:
+
+- **`fixtures/guardrail-cases.ts`** — the labeled dataset: **16 hand-labeled cases
+  (8 leak / 8 safe)**, each tagged `leaksSolution: true/false`, a `leakType`, and
+  `source: 'authored'`. It opens with an explicit **HONESTY NOTE** and has a
+  documented slot for `source: 'captured'` (real Gemini responses added later).
+- **`metrics.ts`** — pure confusion-matrix math. In plain language, for the
+  positive class "leaks the solution":
+  - **TP** (true positive): a real leak the filter caught.
+  - **FN** (false negative): a real leak the filter **missed** — the dangerous error.
+  - **FP** (false positive): safe coaching the filter **wrongly blocked** — hurts UX.
+  - **TN** (true negative): safe coaching correctly allowed.
+  - **catch rate** (recall) = `TP / (TP + FN)` — *"of all real leaks, how many did we
+    catch?"*
+  - **false-positive rate** = `FP / (FP + TN)` — *"of all safe responses, how many did
+    we wrongly block?"*
+  - **precision** = `TP / (TP + FP)` — *"when we blocked, how often were we right?"*
+- **`metrics.test.ts`** — unit-tests the metric math itself. ("An eval you can't
+  trust the math of is worse than none.")
+- **`llm-judge.ts`** — an **offline, injectable LLM-as-judge** scaffold. It takes a
+  `JudgeFn` transport, so tests pass a **deterministic mock** and a real run *could*
+  pass a Gemini call — but the scaffold itself **never touches the network**. This is
+  for the semantic paraphrases regex can't catch.
+- **`guardrail-eval.test.ts`** — runs `filterResponse` over the whole dataset,
+  prints the metrics report, and **asserts release-gate thresholds** (100% catch /
+  0% FP) plus per-leak-type coverage. A regression that weakens the guardrail fails
+  this test.
+
+**What the eval found (why it earned its keep).** On its **first run it scored 62.5%
+catch rate** — caught only 5 of 8 known leaks — and surfaced two real blind spots in
+a filter believed solid: a **compact complete function** (an 8-line Two Sum) slipped
+past because the complete-function check was gated behind a line-count threshold, and
+**pseudocode that folds the conditional into a loop header** wasn't recognized
+because the heuristic required an explicit `if`. (A third — multi-brace Java/C++
+functions — turned up during the fix.) After hardening `solution-filter.ts` (see
+§11 and the journal), the eval reached **100% catch / 0% FP / 100% precision** on the
+16 cases; the offline mock judge scores 75% (it misses the 2 pure-prose pseudocode
+cases — a built-in reminder that the mock is a marker-matcher, not a validated
+judge).
+
+### The honesty caveat (state it, don't hide it)
+
+The dataset is **author-generated** — the same author wrote both the filter and the
+examples, so the examples skew toward shapes the filter can catch. That makes this a
+strong **regression gate** ("did a change break the guardrail?") but an **optimistic**
+estimate of real-world recall ("how often does it catch what *Gemini* actually
+leaks?"). The design closes the gap deliberately: the `source: 'captured'` slot to
+ingest real responses, and the injectable judge for semantic cases — both roadmap
+Tier-1.5 items. A number that looks better than it is would be worse than an honest
+one.
+
+### What's NOT covered (don't overclaim)
+
+- **Only pure logic + the filter eval.** No component/integration/E2E tests of the
+  React panel or the message plumbing between contexts.
+- **The LLM-as-judge is a scaffold** — exercised only with a deterministic mock; no
+  validated, live judge run has been done.
+- **No CI / pre-commit hook** — tests run manually today.
+- **No runtime metrics** (latency, tokens/request, cost) — those aren't tests; they
+  need instrumentation (roadmap #3).

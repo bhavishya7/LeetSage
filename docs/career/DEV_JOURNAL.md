@@ -398,6 +398,174 @@ session-digest,prompts,structured-parser,code-extractor}.ts`,
 `src/components/{ProgressView,ContentDisplay}.tsx`, `src/sidepanel/App.tsx`, and
 `.kiro/specs/leetsage-progress-tracking/design.md`.
 
+## 2026-09-15 — First tests + a labeled guardrail EVAL (which found real bugs)
+
+> This is the project's **first test framework** and its **first eval**. The
+> developer had never written extensive tests or used Vitest before, so this entry
+> is deliberately teaching-oriented — it captures not just *what* shipped but *how*
+> testing and evals work, and the Q&A that shaped the session. A companion
+> beginner's walkthrough lives in
+> [../leetsage-learning-guide.md](../leetsage-learning-guide.md) §32; the interview
+> framing is in [INTERVIEW_PREP.md](./INTERVIEW_PREP.md) (Q3a + the "working with
+> agents" Q&As). On branch `feature/evals-and-tests` (off `main`@`16710a1`), **not
+> yet committed**.
+
+**What.** Stood up **Vitest** (5.0.1) as the project's first test framework
+(`vitest.config.ts`: node environment, `src/**/*.{test,spec}.ts`, explicit imports
+— `globals: false`; `test` / `test:watch` / `eval` scripts in `package.json`) and
+wrote two tiers of coverage:
+- **Tier 1 — unit tests on the pure logic** (~118 tests across 6 files under
+  `src/services/__tests__/`): the solution-filter guardrail, the structured-output
+  parser, the session digest, the cross-problem analytics, the progress records,
+  plus URL normalization, the stuck timer, and the rate limiter.
+- **Tier 2 — a labeled guardrail EVAL** under `src/evals/`, framed as a **release
+  gate** rather than "just more unit tests": a hand-labeled dataset, pure
+  confusion-matrix metrics, an offline/injectable LLM-as-judge scaffold, and a test
+  that runs the filter over the dataset and asserts catch/false-positive thresholds.
+
+Final state, verified: **`npx vitest run` = 134 tests pass across 10 files**;
+**`npm.cmd run build` compiles clean** (`tsc -b && vite build`, ~800ms).
+
+**Why.** Evals + tests were the top roadmap item (biggest resume/interview unlock,
+and the source of the project's first defensible numbers), and structured output
+(2026-09-03) had made them easier — assert on `data` fields, not scraped prose.
+Two concrete gaps also demanded closing: the structured-parser's **prose-only
+fallback** had until now been "verified by code-reading only, not observed against
+a real bad response," and the newly-built pure helpers (analytics, records) had no
+regression net.
+
+**What broke / the hard part.** Three distinct stories.
+
+(1) ⭐ **The eval disagreed with me and found real bugs.** On its **first run the
+guardrail eval scored 62.5% catch rate** — it caught only **5 of 8** known leaks in
+a filter I believed was solid. It surfaced two genuine blind spots: a **compact
+complete function** (an 8-line Two Sum) slipped through because the complete-function
+check was gated behind a line-count threshold (`> MAX_SNIPPET_LINES`), and
+**pseudocode that folds the conditional into a loop header** (a monotonic-stack
+writeup with no standalone `if`) wasn't recognized because the heuristic required an
+explicit branch line. While fixing, I found a third: **multi-brace Java/C++
+functions** were missed because the old regex used `[^}]{200,}`, which can't span
+nested braces.
+
+(2) **A characterization-bias trap I actually hit.** A `session-digest` test I wrote
+asserted an *empty* digest for a lone `GET_HINT` with no data. It **failed** — the
+code intentionally emits a hint line whenever a hint was used. The wrong reaction
+would have been to change the test to expect whatever the code returned (rubber-
+stamping the implementation). The right one — what I did — was to go back to the
+source, confirm the behavior was *intended* per the design/comments, and rewrite the
+test to assert the **real contract**. Pure functions with a stated contract are what
+let you tell "intended" from "bug."
+
+(3) **The mock-time gotcha.** The rate-limiter persists usage via
+`chrome.storage.local`, which doesn't exist in Node — so the test installs a minimal
+in-memory `chrome` mock on `globalThis`. Four tests then failed anyway: `storage.ts`
+derives its **daily usage key from `new Date()` (the real wall clock)**, while the
+test mocked `Date.now()`. Mocking one clock but not the other made the storage key
+mismatch. Fix: derive the test's key with the **same formula** `storage.ts` uses.
+Lesson: when you mock time, mock *all* the clocks the code reads, or align your
+fixtures to the ones you didn't mock.
+
+**How solved.**
+- **The filter fixes** (`src/services/solution-filter.ts`): removed the
+  `block.lineCount > MAX_SNIPPET_LINES` gate on the complete-function check (a
+  compact-but-whole solution is still the whole answer) and dropped the now-unused
+  constant; added `looksLikeCompleteBraceFunction` (a brace-function header + a
+  `return`) to catch multi-brace languages; dropped the strict standalone-`if`
+  requirement in the pseudocode heuristic (kept loop + result + ≥5 control lines) and
+  broadened control-line detection to include imperative algorithm verbs
+  (pop/push/append/remove/insert/swap/update/increment/mark/compute/store/record/
+  compare/check). **Result after fixes: 100% catch / 0% false-positive / 100%
+  precision on the 16 cases**, with the existing negative cases confirming no new
+  over-blocking. (The offline mock judge scores 75% catch / 0% FP — it misses the 2
+  pure-prose pseudocode cases, which nicely *illustrates* why a real semantic judge
+  would be needed: the mock is a marker-matcher, not a validated judge.)
+- **The eval's honesty design (the important decision).** Before building, I laid
+  out three options — (A) synthetic-only, honestly labeled; (B) synthetic now + a
+  documented slot for real captured Gemini responses + an offline/mockable
+  LLM-as-judge; (C) pause the eval. The developer chose **B**. So every fixture case
+  carries `source: 'authored'` with a documented `'captured'` slot, the dataset file
+  opens with an explicit **HONESTY NOTE** (a self-authored set is a strong
+  *regression gate* but overstates real-world recall), the metrics report
+  catch/FP/precision in plain language, and the judge takes an injected `JudgeFn`
+  transport so it **never touches the network** (a deterministic mock in tests; a
+  real Gemini call in a future run). `metrics.test.ts` unit-tests the metric math
+  itself — "an eval you can't trust the math of is worse than none."
+- **Two build-time type errors** fixed during verification (an unused import; a
+  partial-object cast routed through `unknown`). Temp verification file cleaned up.
+- **Manual vs automatic (a thing the developer asked about, worth recording):** the
+  tests are **manual right now** — they run only on `npm.cmd run test` (one pass) or
+  `test:watch` (re-run on save). Nothing triggers them automatically. Wiring them
+  into a git pre-commit/pre-push hook or CI (so the eval becomes a true release gate)
+  was **deliberately deferred** this session.
+
+**The Q&A that shaped the session (preserved because the developer is learning
+testing/evals for the first time).**
+- *"What is Vitest, how do tests work, when are they run — manual or automatic?"* —
+  Vitest is a **test runner** (the Jest-equivalent for the Vite ecosystem): it finds
+  test files, runs the assertions inside, and reports pass/fail; it reuses the
+  Vite/TS config and runs `.ts` directly with no separate compile step. A "test" is
+  just code that calls a real function with a known input and checks the output with
+  an assertion (`expect(x).toBe(y)`); if the value differs the assertion throws and
+  Vitest prints a diff — no magic. `describe()` groups, `it()`/`test()` is one case,
+  `expect()` asserts, `vi.fn()` is a fake function that records calls,
+  `vi.useFakeTimers()` swaps in a controllable clock, and the chrome mock stands in
+  for `chrome.storage.local` since Node has no Chrome. And — see above — they're
+  **manual until wired into a hook or CI.**
+- *"What's the accuracy of these tests since they were written AFTER the code — is
+  there no bias?"* (the sharp question). There are **two** biases.
+  **(1) Characterization bias:** tests written against existing code risk just
+  photographing whatever the code does, bugs included — they pass by construction and
+  prove nothing. The antidote is to anchor assertions to the **stated contract and
+  boundary values** (not observed output), include cases the author might not think
+  of (malformed JSON, day-boundary rollover, cooldown windows), and ideally have a
+  different person/agent review them. The failing session-digest test above is the
+  proof I was doing this rather than rubber-stamping. Honest caveat: a test written
+  by the same agent that just read the implementation still carries *some* residual
+  bias. **(2) Eval-dataset bias (nastier):** if the same author writes both the
+  filter heuristics *and* the eval examples, the examples skew toward what the filter
+  already catches — the classic "evaluating on your training distribution" problem —
+  so the reported catch rate flatters the author's imagination, not real model
+  behavior. That's exactly why the honest version needs cases the author didn't
+  hand-craft (real Gemini outputs, adversarial phrasings) and a validated judge; a
+  purely synthetic set is a useful **regression gate** but a **weak measurement** of
+  true precision/recall, and that limitation is stated rather than hidden behind a
+  flattering number.
+- After the eval failed at 62.5%, I offered **Path 1** (fix the filter — stronger
+  guardrail, better story) vs **Path 2** (keep the filter, report the honest 62.5% as
+  a known limitation). Recommended Path 1; the developer said "let's proceed with
+  path 1 carefully." Fixed carefully, re-ran, reached 100%/0%.
+
+**Interview angle.** ⭐ This is the headline eval story and the strongest proof-of-
+rigor in the project. **The eval found bugs my intuition missed** (62.5% → 100%) —
+which is the single best answer to "how do you know agent-written, after-the-fact
+tests aren't just rubber-stamping the code": an independent measurement *disagreed*
+with me and forced a real fix. Pair it with two meta-lessons that read as senior:
+**eval honesty** (label a self-authored dataset as a regression gate, design it to
+ingest real responses + a validated judge, and *say* the number is optimistic — that
+framing is a stronger signal than any percentage) and **testing discipline for
+non-deterministic/stateful code** (contract-anchored assertions over characterization;
+"mock all the clocks"; "a judge you haven't validated is just another opinion — score
+it too"). Also a clean "how do tests actually run" fundamentals answer (runner,
+assertions, fake timers, mocks, manual-vs-CI).
+
+**Caveats (not overclaimed).** The dataset is **author-generated** — a strong
+regression gate, an optimistic estimate of real-world recall until real captured
+Gemini responses are added. The **LLM-as-judge is a scaffold** — offline, injectable,
+and exercised only with a deterministic mock; no validated, live judge run has been
+done. Tests are **not wired into any automatic trigger** (no pre-commit hook, no CI)
+— manual only, by choice, for now. And these are still **unit/eval tests of pure
+logic** — no component/integration/E2E tests of the React panel or the message
+plumbing.
+
+**Commits.** None yet — uncommitted on `feature/evals-and-tests` (off
+`main`@`16710a1`). New: `vitest.config.ts`, `src/services/__tests__/` (8 files:
+`solution-filter`, `structured-parser`, `session-digest`, `progress-analytics`,
+`progress-records`, `normalize-url`, `stuck-timer`, `rate-limiter`), `src/evals/`
+(`fixtures/guardrail-cases.ts`, `metrics.ts`, `metrics.test.ts`, `llm-judge.ts`,
+`guardrail-eval.test.ts`). Modified: `src/services/solution-filter.ts` (the three
+fixes), `package.json` / `package-lock.json` (Vitest + scripts), and the career docs
+(`RESUME.md`, `INTERVIEW_PREP.md`, and this journal + roadmap/guide/specs index).
+
 ---
 
 ## Next up (see [LEARNING_ROADMAP.md](./LEARNING_ROADMAP.md))
@@ -409,11 +577,15 @@ session-digest,prompts,structured-parser,code-extractor}.ts`,
    analytics~~ — **DONE (2026-09-04)**, on the unpushed
    `feature/progress-tracking-phase-b` branch. Phase D (auto-save on an Accepted
    submission → verified attempts) is the deferred remainder.
-3. **Evals + tests + metrics** — the biggest resume/interview unlock; easier now
-   that structured output exists (assert on `data` fields, not prose), and there's
-   now a fresh batch of pure helpers to unit-test (`complexityRank`,
-   `computeBestAttemptIndex`, `computeInsights`, `computeStruggleScore`,
-   `shouldReplaceLatest`, `sameCalendarDay`, `slugFromUrl`).
+3. ~~**Evals + tests + metrics**~~ — **tests + eval DONE (2026-09-15)**: Vitest
+   across the pure modules (134 tests / 10 files) + a labeled guardrail eval scored
+   as a release gate (100% catch / 0% FP after it caught & fixed 2 real leak paths),
+   on the unpushed `feature/evals-and-tests` branch. The **metrics** slice is still
+   open — runtime numbers (p50/p95 latency, tokens/request, requests handled) are now
+   the top unmet "quantified impact" gap.
+4. **Real captured-Gemini eval cases + a validated (non-mock) LLM-as-judge**, and
+   **wiring the tests into a pre-commit hook / CI** so the eval becomes an automatic
+   release gate — both deliberately deferred this session.
 
 *When each lands, add an entry above (via the project-historian agent) and backfill
 any resulting numbers into [RESUME.md](./RESUME.md).*
@@ -486,8 +658,12 @@ any resulting numbers into [RESUME.md](./RESUME.md).*
   exists and the chat surface shipped as the hybrid input, but the original
   spec's standalone Chat Mode component and full stuck-timer UX are not the
   shipped shape; describe the hybrid input + tuned timer as what actually ships.
-- **Evals / automated tests / metrics** — not yet; the optional property tests in
-  the task plans (`*`-marked) were not implemented.
+- **Automated tests + a guardrail eval** — **shipped 2026-09-15** (Vitest, 134
+  tests / 10 files, plus a labeled solution-filter eval as a release gate; on the
+  unpushed `feature/evals-and-tests` branch). Still *not* done: **runtime metrics**
+  (latency/tokens/cost), **real captured-response eval cases + a validated LLM-as-
+  judge** (only an offline mock judge exists), and **wiring tests into CI / a
+  pre-commit hook** (they run manually today).
 
 ### ✅ Model version — resolved (safe to state in an interview)
 
