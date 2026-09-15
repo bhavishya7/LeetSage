@@ -311,8 +311,8 @@ and a full-panel **My Progress** UI (problem list → record detail with an atte
 timeline, per-record copy/delete, "Copy all"; insights hidden until ≥3 problems,
 with a Low/Medium/High confidence badge). `GENERATE_REPORT` also became a
 **structured producer** so records populate reliably, and several honesty bugs
-were fixed (see below). On branch `feature/progress-tracking-phase-b`, not yet
-pushed.
+were fixed (see below). Built on branch `feature/progress-tracking-phase-b`
+(since merged to main via PR #11).
 **Why.** Phase A shipped only an on-demand report; the value of "track my progress
 and tell me my weakest pattern across problems" needs persistence, a structured
 data model, and aggregation — a real system-design exercise under the no-backend
@@ -391,12 +391,339 @@ noted in code).
 **Commits.** `798228b` (feat: progress tracking Phase B + C — records, My Progress,
 analytics), `538781c` (feat: make `GENERATE_REPORT` a structured producer; stop
 model-written dates), `f0b7c58` (fix: honest attempt semantics + correct projection
-& language) — all on branch `feature/progress-tracking-phase-b` (off
-`main`@`336e34a`), **not yet pushed**. Files:
+& language) — all built on branch `feature/progress-tracking-phase-b` (off
+`main`@`336e34a`), **since merged to main via PR #11**. Files:
 `src/types/{models,index}.ts`, `src/services/{progress-records,progress-analytics,
 session-digest,prompts,structured-parser,code-extractor}.ts`,
 `src/components/{ProgressView,ContentDisplay}.tsx`, `src/sidepanel/App.tsx`, and
 `.kiro/specs/leetsage-progress-tracking/design.md`.
+
+## 2026-09-15 — First tests + a labeled guardrail EVAL (which found real bugs)
+
+> This is the project's **first test framework** and its **first eval**. The
+> developer had never written extensive tests or used Vitest before, so this entry
+> is deliberately teaching-oriented — it captures not just *what* shipped but *how*
+> testing and evals work, and the Q&A that shaped the session. A companion
+> beginner's walkthrough lives in
+> [../leetsage-learning-guide.md](../leetsage-learning-guide.md) §32; the interview
+> framing is in [INTERVIEW_PREP.md](./INTERVIEW_PREP.md) (Q3a + the "working with
+> agents" Q&As). On branch `feature/evals-and-tests` (off `main`@`16710a1`), **not
+> yet committed**.
+
+**What.** Stood up **Vitest** (5.0.1) as the project's first test framework
+(`vitest.config.ts`: node environment, `src/**/*.{test,spec}.ts`, explicit imports
+— `globals: false`; `test` / `test:watch` / `eval` scripts in `package.json`) and
+wrote two tiers of coverage:
+- **Tier 1 — unit tests on the pure logic** (~118 tests across 6 files under
+  `src/services/__tests__/`): the solution-filter guardrail, the structured-output
+  parser, the session digest, the cross-problem analytics, the progress records,
+  plus URL normalization, the stuck timer, and the rate limiter.
+- **Tier 2 — a labeled guardrail EVAL** under `src/evals/`, framed as a **release
+  gate** rather than "just more unit tests": a hand-labeled dataset, pure
+  confusion-matrix metrics, an offline/injectable LLM-as-judge scaffold, and a test
+  that runs the filter over the dataset and asserts catch/false-positive thresholds.
+
+Final state, verified: **`npx vitest run` = 134 tests pass across 10 files**;
+**`npm.cmd run build` compiles clean** (`tsc -b && vite build`, ~800ms).
+
+**Why.** Evals + tests were the top roadmap item (biggest resume/interview unlock,
+and the source of the project's first defensible numbers), and structured output
+(2026-09-03) had made them easier — assert on `data` fields, not scraped prose.
+Two concrete gaps also demanded closing: the structured-parser's **prose-only
+fallback** had until now been "verified by code-reading only, not observed against
+a real bad response," and the newly-built pure helpers (analytics, records) had no
+regression net.
+
+**What broke / the hard part.** Three distinct stories.
+
+(1) ⭐ **The eval disagreed with me and found real bugs.** On its **first run the
+guardrail eval scored 62.5% catch rate** — it caught only **5 of 8** known leaks in
+a filter I believed was solid. It surfaced two genuine blind spots: a **compact
+complete function** (an 8-line Two Sum) slipped through because the complete-function
+check was gated behind a line-count threshold (`> MAX_SNIPPET_LINES`), and
+**pseudocode that folds the conditional into a loop header** (a monotonic-stack
+writeup with no standalone `if`) wasn't recognized because the heuristic required an
+explicit branch line. While fixing, I found a third: **multi-brace Java/C++
+functions** were missed because the old regex used `[^}]{200,}`, which can't span
+nested braces.
+
+(2) **A characterization-bias trap I actually hit.** A `session-digest` test I wrote
+asserted an *empty* digest for a lone `GET_HINT` with no data. It **failed** — the
+code intentionally emits a hint line whenever a hint was used. The wrong reaction
+would have been to change the test to expect whatever the code returned (rubber-
+stamping the implementation). The right one — what I did — was to go back to the
+source, confirm the behavior was *intended* per the design/comments, and rewrite the
+test to assert the **real contract**. Pure functions with a stated contract are what
+let you tell "intended" from "bug."
+
+(3) **The mock-time gotcha.** The rate-limiter persists usage via
+`chrome.storage.local`, which doesn't exist in Node — so the test installs a minimal
+in-memory `chrome` mock on `globalThis`. Four tests then failed anyway: `storage.ts`
+derives its **daily usage key from `new Date()` (the real wall clock)**, while the
+test mocked `Date.now()`. Mocking one clock but not the other made the storage key
+mismatch. Fix: derive the test's key with the **same formula** `storage.ts` uses.
+Lesson: when you mock time, mock *all* the clocks the code reads, or align your
+fixtures to the ones you didn't mock.
+
+**How solved.**
+- **The filter fixes** (`src/services/solution-filter.ts`): removed the
+  `block.lineCount > MAX_SNIPPET_LINES` gate on the complete-function check (a
+  compact-but-whole solution is still the whole answer) and dropped the now-unused
+  constant; added `looksLikeCompleteBraceFunction` (a brace-function header + a
+  `return`) to catch multi-brace languages; dropped the strict standalone-`if`
+  requirement in the pseudocode heuristic (kept loop + result + ≥5 control lines) and
+  broadened control-line detection to include imperative algorithm verbs
+  (pop/push/append/remove/insert/swap/update/increment/mark/compute/store/record/
+  compare/check). **Result after fixes: 100% catch / 0% false-positive / 100%
+  precision on the 16 cases**, with the existing negative cases confirming no new
+  over-blocking. (The offline mock judge scores 75% catch / 0% FP — it misses the 2
+  pure-prose pseudocode cases, which nicely *illustrates* why a real semantic judge
+  would be needed: the mock is a marker-matcher, not a validated judge.)
+- **The eval's honesty design (the important decision).** Before building, I laid
+  out three options — (A) synthetic-only, honestly labeled; (B) synthetic now + a
+  documented slot for real captured Gemini responses + an offline/mockable
+  LLM-as-judge; (C) pause the eval. The developer chose **B**. So every fixture case
+  carries `source: 'authored'` with a documented `'captured'` slot, the dataset file
+  opens with an explicit **HONESTY NOTE** (a self-authored set is a strong
+  *regression gate* but overstates real-world recall), the metrics report
+  catch/FP/precision in plain language, and the judge takes an injected `JudgeFn`
+  transport so it **never touches the network** (a deterministic mock in tests; a
+  real Gemini call in a future run). `metrics.test.ts` unit-tests the metric math
+  itself — "an eval you can't trust the math of is worse than none."
+- **Two build-time type errors** fixed during verification (an unused import; a
+  partial-object cast routed through `unknown`). Temp verification file cleaned up.
+- **Manual vs automatic (a thing the developer asked about, worth recording):** the
+  tests are **manual right now** — they run only on `npm.cmd run test` (one pass) or
+  `test:watch` (re-run on save). Nothing triggers them automatically. Wiring them
+  into a git pre-commit/pre-push hook or CI (so the eval becomes a true release gate)
+  was **deliberately deferred** this session.
+
+**The Q&A that shaped the session (preserved because the developer is learning
+testing/evals for the first time).**
+- *"What is Vitest, how do tests work, when are they run — manual or automatic?"* —
+  Vitest is a **test runner** (the Jest-equivalent for the Vite ecosystem): it finds
+  test files, runs the assertions inside, and reports pass/fail; it reuses the
+  Vite/TS config and runs `.ts` directly with no separate compile step. A "test" is
+  just code that calls a real function with a known input and checks the output with
+  an assertion (`expect(x).toBe(y)`); if the value differs the assertion throws and
+  Vitest prints a diff — no magic. `describe()` groups, `it()`/`test()` is one case,
+  `expect()` asserts, `vi.fn()` is a fake function that records calls,
+  `vi.useFakeTimers()` swaps in a controllable clock, and the chrome mock stands in
+  for `chrome.storage.local` since Node has no Chrome. And — see above — they're
+  **manual until wired into a hook or CI.**
+- *"What's the accuracy of these tests since they were written AFTER the code — is
+  there no bias?"* (the sharp question). There are **two** biases.
+  **(1) Characterization bias:** tests written against existing code risk just
+  photographing whatever the code does, bugs included — they pass by construction and
+  prove nothing. The antidote is to anchor assertions to the **stated contract and
+  boundary values** (not observed output), include cases the author might not think
+  of (malformed JSON, day-boundary rollover, cooldown windows), and ideally have a
+  different person/agent review them. The failing session-digest test above is the
+  proof I was doing this rather than rubber-stamping. Honest caveat: a test written
+  by the same agent that just read the implementation still carries *some* residual
+  bias. **(2) Eval-dataset bias (nastier):** if the same author writes both the
+  filter heuristics *and* the eval examples, the examples skew toward what the filter
+  already catches — the classic "evaluating on your training distribution" problem —
+  so the reported catch rate flatters the author's imagination, not real model
+  behavior. That's exactly why the honest version needs cases the author didn't
+  hand-craft (real Gemini outputs, adversarial phrasings) and a validated judge; a
+  purely synthetic set is a useful **regression gate** but a **weak measurement** of
+  true precision/recall, and that limitation is stated rather than hidden behind a
+  flattering number.
+- After the eval failed at 62.5%, I offered **Path 1** (fix the filter — stronger
+  guardrail, better story) vs **Path 2** (keep the filter, report the honest 62.5% as
+  a known limitation). Recommended Path 1; the developer said "let's proceed with
+  path 1 carefully." Fixed carefully, re-ran, reached 100%/0%.
+
+**Interview angle.** ⭐ This is the headline eval story and the strongest proof-of-
+rigor in the project. **The eval found bugs my intuition missed** (62.5% → 100%) —
+which is the single best answer to "how do you know agent-written, after-the-fact
+tests aren't just rubber-stamping the code": an independent measurement *disagreed*
+with me and forced a real fix. Pair it with two meta-lessons that read as senior:
+**eval honesty** (label a self-authored dataset as a regression gate, design it to
+ingest real responses + a validated judge, and *say* the number is optimistic — that
+framing is a stronger signal than any percentage) and **testing discipline for
+non-deterministic/stateful code** (contract-anchored assertions over characterization;
+"mock all the clocks"; "a judge you haven't validated is just another opinion — score
+it too"). Also a clean "how do tests actually run" fundamentals answer (runner,
+assertions, fake timers, mocks, manual-vs-CI).
+
+**Caveats (not overclaimed).** The dataset is **author-generated** — a strong
+regression gate, an optimistic estimate of real-world recall until real captured
+Gemini responses are added. The **LLM-as-judge is a scaffold** — offline, injectable,
+and exercised only with a deterministic mock; no validated, live judge run has been
+done. Tests are **not wired into any automatic trigger** (no pre-commit hook, no CI)
+— manual only, by choice, for now. *[Superseded same day — see the 2026-09-15
+follow-up entry below: the tests+eval were wired into GitHub Actions CI + a Husky
+pre-commit hook, so they now run automatically.]* And these are still **unit/eval
+tests of pure logic** — no component/integration/E2E tests of the React panel or the
+message plumbing.
+
+**Commits.** None yet — uncommitted on `feature/evals-and-tests` (off
+`main`@`16710a1`). New: `vitest.config.ts`, `src/services/__tests__/` (8 files:
+`solution-filter`, `structured-parser`, `session-digest`, `progress-analytics`,
+`progress-records`, `normalize-url`, `stuck-timer`, `rate-limiter`), `src/evals/`
+(`fixtures/guardrail-cases.ts`, `metrics.ts`, `metrics.test.ts`, `llm-judge.ts`,
+`guardrail-eval.test.ts`). Modified: `src/services/solution-filter.ts` (the three
+fixes), `package.json` / `package-lock.json` (Vitest + scripts), and the career docs
+(`RESUME.md`, `INTERVIEW_PREP.md`, and this journal + roadmap/guide/specs index).
+
+## 2026-09-15 (follow-up) — CI/CD: the eval becomes an automatic release gate
+
+> A same-day follow-up to the tests+eval session above. The tests existed but were
+> **manual** — this wired them into an automatic gate. Written teaching-oriented on
+> purpose: the developer is newer to CI/CD, Docker, and Jenkins, so the *why we
+> chose X and rejected Y* reasoning is preserved as much as the change itself. On
+> branch `feature/evals-and-tests` (off `main`@`16710a1`), **pushed; first CI run
+> green (~24s)**.
+
+**What.** Two things that turn "run the tests when you remember to" into "the tests
+run themselves":
+- **A GitHub Actions CI workflow** (`.github/workflows/ci.yml`): on every push and
+  pull request (all branches), a fresh `ubuntu-latest` runner does
+  checkout (`actions/checkout@v7`) → Node 22 LTS (`actions/setup-node@v7`,
+  `cache: npm`) → `npm ci` → `npm run lint` → `npm run test` → `npm run build`. The
+  `test` step runs the labeled guardrail eval, so **a change that weakens the "never
+  hand over the solution" guardrail now fails CI automatically** — that's the whole
+  payoff: the eval becomes a real, automatic **release gate** instead of a thing you
+  remember to run.
+- **A Husky pre-commit hook** (`.husky/pre-commit` + a `"prepare": "husky"` script;
+  Husky 9 as a devDependency). The hook runs the **same** npm scripts CI runs
+  (`lint` + `test` + `build`) locally before a commit lands — fast, local early
+  warning. It uses `npm` (not `npm.cmd`) because Git for Windows runs hooks under
+  its own bash, which resolves `npm` fine; the `npm.cmd` rule was only ever about
+  this repo's PowerShell command wrapper.
+
+**Why (the decision reasoning — this is the point of the entry).**
+- **Why GitHub Actions (chosen).** It's built into the repo (already on GitHub),
+  free for this use, needs no server to maintain, is configured by one YAML file,
+  and runs the *exact same npm scripts* a developer runs locally. Lowest-overhead
+  way to make the eval an automatic gate.
+- **Why NOT Docker.** Docker packages an app *plus its whole environment* into an
+  image that runs identically anywhere — it solves "works on my machine" and earns
+  its keep when you deploy a **long-running service** (a Node API, a Python backend)
+  as a container on a host. **LeetSage has no backend.** Its build artifact is a
+  static bundle (`dist/` — side_panel.js, background.js, content.js, manifest.json),
+  i.e. files the browser loads, not a server process. There's nothing to
+  containerize and nothing to deploy to a host, so a Dockerfile would be an image to
+  maintain for zero benefit. (GitHub Actions already gives a clean Node environment
+  for the test run, so Docker isn't needed for CI reproducibility either.)
+- **Why NOT Jenkins.** Jenkins is a **self-hosted** CI/CD server — you install and
+  maintain the machine, plugins, security, and uptime yourself. Common in large
+  enterprises; for a solo GitHub project it's pure operational overhead versus
+  GitHub Actions, which needs no server. Worth *understanding* for interviews (you
+  will be asked), not worth *running* here.
+- **Why NOT CD / auto-publish (consciously skipped).** CD would package the
+  extension and upload it to the Chrome Web Store automatically on a release/tag.
+  Deliberately not built now because publishing requires storing API credentials as
+  encrypted secrets **and** every new version goes through Google's review (hours to
+  days), so it's never truly instant; most solo extension projects stop at "CI +
+  build a zip artifact" and upload to the store manually. So CI is in; CD/auto-
+  publish is a documented non-choice for now. (How the extension is deployed today:
+  build `dist/` and load unpacked at `chrome://extensions` — see the learning guide
+  §20; there is no automated publish.)
+
+**The pre-commit-hook vs CI distinction (the developer explicitly asked "can
+pre-commit pass but CI fail? are they the same checks?").** They run the *same* npm
+scripts here, but they are **not** guaranteed to agree, and understanding why is the
+point:
+- **CI is the authority** because it runs `npm ci` on a **clean** machine from the
+  lockfile — it installs *exactly* the locked versions and fails if `package.json`
+  and the lockfile disagree.
+- **The hook is a fast, local, best-effort early warning** — it runs against
+  whatever is already in your local `node_modules`, which can have **drifted** from
+  the lockfile.
+- So a commit can **pass the hook and still fail CI** — the classic case is a
+  dependency you installed locally but forgot to add to `package.json`: the hook
+  (local `node_modules` has it) passes; CI (clean install) fails. That
+  dependency-drift check is exactly what **only** CI's clean install can catch.
+- The hook is also **skippable** (`git commit --no-verify`); CI is not. So: hook =
+  courtesy/fast feedback, CI = the gate that can't be skipped. The right mental
+  model is the hook should be a **subset** of CI, not a duplicate or a replacement.
+
+**What broke / the hard part.** When the full CI sequence was first run locally,
+`npm run lint` **failed** with 4 pre-existing `@typescript-eslint/no-explicit-any`
+**errors** in `src/services/code-extractor.ts` and `src/services/llm-service.ts` —
+**not** caused by the tests/eval work; they predated it. Since both CI and the hook
+run `npm run lint`, CI would have been **red on day one** for reasons unrelated to
+the tests.
+
+**How solved.** The developer chose to **fix** the errors (rather than make lint
+non-blocking or drop it), in a **separate commit** (`ea82f9b`) so the CI plumbing
+commit stays clean. The fixes typed the two external-boundary reads instead of
+`any`: a minimal `MonacoModel`/`MonacoGlobal` interface in `code-extractor.ts`
+(Monaco's own types aren't imported in the MAIN-world reader), and minimal
+`ChatCompletionResponse`/`APIErrorBody` shapes for the two `response.json()` reads
+in `llm-service.ts` (with `finish_reason` typed as `LLMResponse['finishReason']` so
+the `?? 'stop'` fallback stays type-correct). Also removed 2 now-unnecessary
+`eslint-disable-next-line no-console` directives in `guardrail-eval.test.ts` (the
+config has no `no-console` rule). Behavior unchanged — every access stays
+`?.`-guarded (still treated as an untrusted boundary). Result: **lint 0 errors**
+(2 intentional `react-hooks/exhaustive-deps` **warnings** remain in `App.tsx` — the
+deliberately-omitted deps from the structured-output work; warnings don't fail
+lint), **build clean**, **134 tests still pass**. Verified the full CI sequence
+locally (`npm run lint` = 0 errors, `npm run build` = clean, `npm run test` = 134
+pass across 10 files). On push, the first CI run went **green in ~24s** and the
+Actions UI showed the Vitest report of **10 files / 134 tests passing**.
+
+**What broke / the hard part (the action-version episode — a "verify, don't
+assume" lesson).** The first green CI run emitted **3 warnings**: a **Node 20
+deprecation** notice plus the 2 intentional `react-hooks/exhaustive-deps` warnings.
+The Node-20 warning is about the **action's own runtime** — `actions/checkout@v4`
+and `actions/setup-node@v4` run *the action itself* on Node 20, which GitHub is
+removing from the runners (2026-09-23); it is **separate** from our `node-version:
+"22"`, which governs our build/test and was always fine. GitHub's remediation is
+"update to the latest versions of the actions" (they run on Node 24).
+
+**How solved (correction-on-top, not history-rewrite).** First I bumped both actions
+to `@v5` (`22ddfba`) — which *did* clear the warning (v5 already runs on Node 24) —
+but I had pinned `@v5` **from memory**, and it turned out to be **two majors stale**.
+The fix was to **verify the current major against the actions' release pages and the
+GitHub changelog** rather than trust a plausible-looking number: `actions/checkout`
+current major is **v7** (v7.0.1) and `actions/setup-node` is **v7** (v7.0.0), so I
+corrected both to `@v7` in a follow-up commit (`e7653b8`). I left `22ddfba` in
+history and corrected **on top** rather than rewriting it — it may already have been
+pushed, and the correction-on-top is the honest record. (Side note: setup-node v5+
+auto-caches when it detects a package manager and v6 limited that to npm; we set
+`cache: "npm"` explicitly, so that behavior change doesn't affect this workflow.)
+This is the **same failure mode** as the earlier `gemini-2.5-*` model-name 404 — a
+plausible-but-stale identifier trusted without checking — and the recurring
+discipline is the same: **verify names/versions against provider docs, don't
+assume.** After the `@v7` bump the Node-20 warning is **gone**; the 2
+`react-hooks/exhaustive-deps` warnings **remain and are intentionally left** for a
+proper future fix (understand and fix the hooks), **not** silenced with
+disable comments.
+
+**Interview angle.** A clean, teachable **CI/CD tooling-choice** story: *why GitHub
+Actions and not Docker or Jenkins* grounded in a real constraint (no backend → no
+service to containerize → nothing for Docker/Jenkins to earn), and *why not
+CD/auto-publish* (Web Store review latency + secret management → manual publish is
+the right call for a solo project). Plus the **pre-commit-vs-CI authority
+distinction** — same scripts, but only CI's clean `npm ci` catches dependency drift,
+and the hook is skippable while CI isn't — which is a sharp "do you actually
+understand your pipeline?" answer. And it completes the 2026 evals theme: the
+guardrail eval is now an **automatic** release gate, not a manual discipline. Minor
+supporting story: a green *build* still had a red *lint* (pre-existing `any` errors),
+fixed in its own commit rather than by weakening the gate.
+
+**Caveats (not overclaimed).** **Pushed; the first CI run is green** (~24s,
+10 files / 134 tests) and the Node-20 deprecation warning is now cleared by the
+`@v7` bump. The 2 `react-hooks/exhaustive-deps` warnings **remain and are
+intentionally left** for a proper future fix (not silenced). **CD / auto-publish to
+the Web Store is not built** (a deliberate not-now); deployment stays manual (build
+`dist/`, load unpacked). The hook is skippable (`--no-verify`) and best-effort
+against local `node_modules`.
+
+**Commits.** `ea82f9b` (fix: resolve `no-explicit-any` lint errors so lint passes
+cleanly — `src/services/code-extractor.ts`, `src/services/llm-service.ts`,
+`src/evals/guardrail-eval.test.ts`), `b0b98e3` (ci: add GitHub Actions CI + a Husky
+pre-commit hook — `.github/workflows/ci.yml`, `.husky/pre-commit`, `package.json`,
+`package-lock.json`), `22ddfba` (ci: bump checkout/setup-node to `@v5` to clear the
+Node 20 deprecation warning), `e7653b8` (ci: pin checkout/setup-node to the current
+major `@v7`, not `@v5` — verified against release pages + the changelog) — on branch
+`feature/evals-and-tests` (off `main`@`16710a1`), on top of `0031cb9` (test suite +
+eval) and `818c70d` (docs) from the prior session.
+**Since pushed with this CI/CD work — first CI run green; not yet merged to main.**
 
 ---
 
@@ -406,14 +733,23 @@ session-digest,prompts,structured-parser,code-extractor}.ts`,
    now session-aware and records/analytics/evals have a machine-readable contract
    to consume.
 2. ~~**Progress-tracking Phase B/C** — persistent records + "My Progress" view +
-   analytics~~ — **DONE (2026-09-04)**, on the unpushed
-   `feature/progress-tracking-phase-b` branch. Phase D (auto-save on an Accepted
-   submission → verified attempts) is the deferred remainder.
-3. **Evals + tests + metrics** — the biggest resume/interview unlock; easier now
-   that structured output exists (assert on `data` fields, not prose), and there's
-   now a fresh batch of pure helpers to unit-test (`complexityRank`,
-   `computeBestAttemptIndex`, `computeInsights`, `computeStruggleScore`,
-   `shouldReplaceLatest`, `sameCalendarDay`, `slugFromUrl`).
+   analytics~~ — **DONE (2026-09-04)**, merged to main via PR #11. Phase D
+   (auto-save on an Accepted submission → verified attempts) is the deferred
+   remainder.
+3. ~~**Evals + tests + metrics**~~ — **tests + eval DONE (2026-09-15)**: Vitest
+   across the pure modules (134 tests / 10 files) + a labeled guardrail eval scored
+   as a release gate (100% catch / 0% FP after it caught & fixed 2 real leak paths),
+   on the `feature/evals-and-tests` branch (pushed; CI green). The **metrics** slice is still
+   open — runtime numbers (p50/p95 latency, tokens/request, requests handled) are now
+   the top unmet "quantified impact" gap.
+4. ~~**Wiring the tests into a pre-commit hook / CI** so the eval becomes an
+   automatic release gate~~ — **DONE (2026-09-15 follow-up)**: GitHub Actions CI
+   (`npm ci` → lint → test → build on every push/PR) + a Husky pre-commit hook, on
+   the `feature/evals-and-tests` branch (pushed; first CI run green, actions pinned
+   `@v7`). **CD / auto-publish to the Web
+   Store was deliberately skipped** (review latency + secret management → manual
+   publish). Still open: **real captured-Gemini eval cases + a validated (non-mock)
+   LLM-as-judge** — deferred.
 
 *When each lands, add an entry above (via the project-historian agent) and backfill
 any resulting numbers into [RESUME.md](./RESUME.md).*
@@ -486,8 +822,16 @@ any resulting numbers into [RESUME.md](./RESUME.md).*
   exists and the chat surface shipped as the hybrid input, but the original
   spec's standalone Chat Mode component and full stuck-timer UX are not the
   shipped shape; describe the hybrid input + tuned timer as what actually ships.
-- **Evals / automated tests / metrics** — not yet; the optional property tests in
-  the task plans (`*`-marked) were not implemented.
+- **Automated tests + a guardrail eval, wired into CI** — **shipped 2026-09-15**
+  (Vitest, 134 tests / 10 files, plus a labeled solution-filter eval as a release
+  gate) and, as of a **2026-09-15 follow-up**, run **automatically** by a GitHub
+  Actions workflow (`npm ci` → lint → test → build on every push/PR) and a Husky
+  pre-commit hook; all on the `feature/evals-and-tests` branch (pushed; first CI run
+  green, actions pinned `@v7`). Still *not*
+  done: **runtime metrics** (latency/tokens/cost), **real captured-response eval
+  cases + a validated LLM-as-judge** (only an offline mock judge exists), and **CD /
+  auto-publish to the Web Store** (deliberately skipped — review latency + secrets;
+  deployment stays manual: build `dist/`, load unpacked).
 
 ### ✅ Model version — resolved (safe to state in an interview)
 

@@ -1,0 +1,20 @@
+# Pre-commit hook — LOCAL, fast, best-effort early warning.
+#
+# This runs the SAME npm scripts as CI (.github/workflows/ci.yml), so what fails
+# here would fail there too. It is intentionally a *subset relationship*, not a
+# guarantee of parity: CI is still the authority because it runs `npm ci` on a
+# CLEAN machine from the lockfile, while this hook uses whatever is already in
+# your local node_modules. So a commit can pass here and still fail CI if your
+# local deps have drifted from package.json/package-lock.json — that dependency-
+# drift check is exactly what only CI's clean install can catch.
+#
+# Bypass in a pinch with `git commit --no-verify` (that's why the hook is a
+# courtesy check and CI is the gate that can't be skipped).
+#
+# Note: uses `npm` (not `npm.cmd`) — Git for Windows runs hooks under its own
+# bash, which resolves `npm` fine; `npm.cmd` was only needed for this repo's
+# PowerShell command wrapper.
+
+npm run lint
+npm run test
+npm run build

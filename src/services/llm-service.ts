@@ -5,6 +5,23 @@ import { getSystemPrompt, buildUserMessage, formatProblemContext } from './promp
 // standard chat-completions request/response shape while using a free-tier
 // provider (no billing required; over-limit requests are rejected, not billed).
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai';
+
+// Minimal shape of the OpenAI-compatible chat-completions JSON we read. All
+// fields optional — it's an untrusted external boundary, so every access is
+// guarded with `?.` and a fallback.
+interface ChatCompletionResponse {
+  choices?: Array<{
+    message?: { content?: string };
+    finish_reason?: LLMResponse['finishReason'];
+  }>;
+  usage?: { prompt_tokens: number; completion_tokens: number };
+}
+
+/** Shape of the JSON error body Gemini returns on a failed request. */
+interface APIErrorBody {
+  error?: { message?: string };
+}
+
 const DEFAULT_MODEL: GeminiModel = 'gemini-3.5-flash-lite';
 const DEFAULT_MAX_TOKENS = 800;
 const DEFAULT_TIMEOUT_MS = 20000;
@@ -48,7 +65,7 @@ export async function sendLLMRequest(request: LLMRequest): Promise<LLMResponse> 
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${request.apiKey}` },
       body, signal: controller.signal,
     }, 2);
-    const data = await response.json() as any;
+    const data = await response.json() as ChatCompletionResponse;
     return {
       content: data.choices?.[0]?.message?.content ?? '',
       finishReason: data.choices?.[0]?.finish_reason ?? 'stop',
@@ -114,7 +131,7 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries: num
 
 async function buildAPIError(response: Response): Promise<Error> {
   let message = `API Error ${response.status}`;
-  try { const body = await response.json() as any; message = body?.error?.message ?? message; } catch { /* ignore */ }
+  try { const body = await response.json() as APIErrorBody; message = body?.error?.message ?? message; } catch { /* ignore */ }
   if (response.status === 401 || response.status === 403) return new Error(`Invalid or unauthorized Gemini API key. ${message}`);
   if (response.status === 429) return new Error('Gemini rate limit / free-tier quota reached. Please wait and try again.');
   return new Error(message);

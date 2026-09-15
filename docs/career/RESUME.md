@@ -94,6 +94,12 @@ Pick 2–4 depending on space. Swap in real numbers as soon as you have them
 - Made and documented core **AI system-design tradeoffs** (bring-your-own-key vs.
   managed backend; client-only vs. server) with a written decision log and an
   articulated scaling path.
+- Built a **labeled eval suite** for the AI safety guardrail — scoring the
+  deterministic solution-filter on a hand-labeled dataset as a release gate
+  (**catch rate / false-positive rate / precision**), plus an offline
+  **LLM-as-judge** scaffold for the semantic cases regex can't catch; the eval
+  **surfaced two solution-leak paths** the filter missed, which were then fixed
+  (regression-gated at 100% catch / 0% false-positive on the set).
 - Designed a **single-source-of-truth structured-output contract** (hybrid prose +
   schema'd JSON) for a non-deterministic model, with **tolerant parsing that
   degrades to prose-only** and streaming preserved — turning freeform responses
@@ -115,12 +121,12 @@ Pick 2–4 depending on space. Swap in real numbers as soon as you have them
 Only list what you can defend. Currently truthful for LeetSage:
 
 `LLM integration` · `Google Gemini` · `prompt engineering` · `streaming responses`
-· `structured output` · `AI output guardrails` · `Chrome Extension (Manifest V3)` ·
+· `structured output` · `AI output guardrails` · `LLM evals` · `LLM-as-judge` ·
+`unit testing (Vitest)` · `Chrome Extension (Manifest V3)` ·
 `React` · `TypeScript` · `Tailwind CSS` · `Vite` · `client-side architecture` ·
 `cost optimization / rate limiting` · `AI-assisted development (custom agents)`
 
-Add once built: `LLM evals` · `LLM-as-judge` · `RAG` · `unit testing (Vitest)` ·
-`prompt-injection mitigation`.
+Add once built: `RAG` · `prompt-injection mitigation` · `production metrics / monitoring`.
 
 ---
 
@@ -132,28 +138,36 @@ ordered by resume-value-per-effort. Each maps to
 
 | Gap | Why it matters on a resume | Fix | Effort |
 |---|---|---|---|
-| **No evals** | "I wrote evals for my LLM feature" is a top 2026 signal; it also proves the guardrail works | Eval suite for the solution-filter (deterministic + LLM-as-judge) | Medium |
-| **No quantified impact** | Resumes reward numbers; you currently have none | Instrument basics: requests handled, filter catch-rate, p50/p95 latency, tokens/request | Low–Med |
-| **No automated tests** | Signals engineering rigor | Vitest on filter, rate-limiter, URL normalization | Low–Med |
+| ~~**No evals**~~ ✅ **shipped (2026-09-15)** | "I wrote evals for my LLM feature" is a top 2026 signal; it also proves the guardrail works | Labeled guardrail eval (16 cases, 8 leak / 8 safe) scoring the solution-filter as a release gate: **100% catch / 0% false-positive / 100% precision**; the eval **caught 2 real leak paths** (a compact complete function; loop-embedded-conditional pseudocode) that were then fixed. Offline **LLM-as-judge** scaffold included (injectable, no live key). *(Caveat: dataset is author-generated — a strong regression gate, but overstates real-world recall until real captured responses are added.)* | ~~Medium~~ done |
+| **No quantified impact** *(partial)* | Resumes reward numbers; you currently have none | **Test/eval numbers now real** (134 tests; filter catch-rate/FP-rate above). Still missing runtime metrics: p50/p95 latency, tokens/request, requests handled | Low–Med |
+| ~~**No automated tests**~~ ✅ **shipped (2026-09-15)** | Signals engineering rigor | **Vitest** on the pure modules: solution-filter, structured-parser, session-digest, progress-analytics, progress-records, rate-limiter, stuck-timer, URL normalization — **134 tests across 10 files**, plus the eval harness. | ~~Low–Med~~ done |
 | ~~**No structured output**~~ ✅ **shipped (2026-09-03)** | Named modern-LLM-I/O skill | Hybrid prose + `data` response for the 2 report-feeding actions, tolerant parse w/ prose-only fallback, deterministic session digest → session-aware report. Strong architecture story. *(Caveats: 2 actions only; no unit tests yet.)* | ~~Medium~~ done |
 | **Broad permissions** | Reviewers/users notice; weakens "security-minded" claim | Scope `host_permissions` to leetcode.com (prototyped + reverted; deferred until progress export lands) | Low |
 | **RAG/agentic element** *(partial)* | Both are headline 2026 keywords | Progress-tracking **Phase A–C shipped** (persistent records + "My Progress" + weakest-link analytics, built on the structured contract) + a custom Kiro **project-historian agent**; RAG cheatsheet + verified-submission (Phase D) records still ahead | Med–High |
 
-**The single highest-leverage move:** build the **eval suite for the guardrail.**
-It hardens the core product promise *and* unlocks the strongest resume bullet
-("designed evals that measure an AI safety constraint at scale") *and* gives you
-the quantified numbers every other bullet is missing.
+**The single highest-leverage move — now done (2026-09-15):** the **eval suite for
+the guardrail** is built. It hardened the core product promise (caught and fixed
+two real leak paths), unlocked the strongest resume bullet ("designed evals that
+measure an AI safety constraint"), and produced the first defensible numbers.
+**Next highest-leverage:** runtime metrics (latency, tokens/request) to finish the
+"quantified impact" gap, and feeding **real captured Gemini responses** into the
+eval set so the catch-rate reflects real-world recall, not just the authored set.
 
 > **Recent progress (keep this honest as it ships):** progress-tracking MVP
 > shipped; "Understand solution" correctness bug fixed; **structured output
 > shipped** (2026-09-03 — hybrid prose + `data` for the report-feeding actions,
 > making the report session-aware); **progress-tracking Phase B/C shipped**
 > (2026-09-04 — persistent per-problem records, a "My Progress" view, and
-> weakest-link analytics built on the structured contract; on an unpushed branch);
-> a custom Kiro project-historian agent now maintains these docs. See
+> weakest-link analytics built on the structured contract; merged to main via PR #11);
+> a custom Kiro project-historian agent now maintains these docs; **evals + unit
+> tests shipped** (2026-09-15 — Vitest across the pure modules, 134 tests, plus a
+> labeled guardrail eval that caught and fixed two real solution-leak paths), then
+> **wired into CI** (2026-09-15 follow-up — GitHub Actions runs lint/test/build on
+> every push/PR, making the eval an automatic release gate; pushed, first run green).
+> See
 > [DEV_JOURNAL.md](./DEV_JOURNAL.md) for the full narrative. The gaps above stay
-> listed until the work is actually *built*, not just designed — evals, tests, and
-> metrics remain the top unmet gap.
+> listed until the work is actually *built*, not just designed — **runtime metrics**
+> (latency/cost) are now the top unmet gap.
 
 ---
 

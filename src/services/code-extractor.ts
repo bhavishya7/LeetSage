@@ -26,13 +26,19 @@ function readEditorFromPage(): { code: string; language: string } {
   let code = '';
   let language = 'unknown';
 
+  // Minimal shape of the Monaco bits we touch (Monaco's types aren't imported
+  // in this MAIN-world function). Methods are optional because we're reading an
+  // untrusted global that may not be present or fully-formed.
+  interface MonacoModel { getValue?: () => string; getLanguageId?: () => string }
+  interface MonacoGlobal { editor?: { getModels?: () => MonacoModel[] } }
+
   // Preferred: Monaco model value (full document, not just visible lines).
   try {
-    const w = window as unknown as { monaco?: any };
-    const models = w.monaco?.editor?.getModels?.() ?? [];
+    const w = window as unknown as { monaco?: MonacoGlobal };
+    const models: MonacoModel[] = w.monaco?.editor?.getModels?.() ?? [];
     if (models.length > 0) {
       // The editor model is usually the largest / first; pick the longest value.
-      const values: string[] = models.map((m: any) => (typeof m.getValue === 'function' ? m.getValue() : ''));
+      const values: string[] = models.map((m) => (typeof m.getValue === 'function' ? m.getValue() : ''));
       code = values.sort((a, b) => b.length - a.length)[0] ?? '';
       // Language id from the model. NOTE: LeetCode often leaves the Monaco
       // model's language as "plaintext" (highlighting/execution are handled

@@ -23,8 +23,8 @@
 | Spec | Status | What it is |
 |---|---|---|
 | [`leetsage-phase1-gemini`](./leetsage-phase1-gemini/) | ✅ **Shipped** | The authoritative built state: Gemini (BYOK, OpenAI-compatible endpoint, `gemini-3.5-*`), chat-hybrid UI, free-tier guardrails, dark/light theme, MV3 fixes. This is the spec that describes what actually runs. |
-| [`leetsage-progress-tracking`](./leetsage-progress-tracking/) | ✅ Phase A–C / 📐 Phase D | Study-notes & progress tracking. **Phases A–C shipped** — Phase A (the "Generate report" action + copy button), then **Phase B/C built 2026-09-04** on the unpushed `feature/progress-tracking-phase-b` branch: persistent per-problem `ProblemRecord`s (`record_{slug}` + a light `progress_index`, schema-migrated on read), a full-panel "My Progress" view (list → detail with attempts timeline, copy/delete, "Copy all"), and a deterministic cross-problem analytics pass ("weakest link" / revisit list, insights gated behind ≥3 problems + a confidence badge). `GENERATE_REPORT` became a structured producer so records populate reliably. **Phase D designed, not built** — auto-save on an Accepted submission (so an attempt's `outcome: 'solved'` is *verified*, not inferred; the attempt count is deferred from the UI until then). |
-| [`leetsage-structured-output`](./leetsage-structured-output/) | ✅ **Shipped** | A hybrid prose + structured `data` response so the report, records, analytics, and evals consume one machine-readable contract instead of re-parsing prose. **Shipped 2026-09-03** for the 2 report-feeding actions (`CHECK_APPROACH`, `UNDERSTAND_SOLUTION`); the report now consumes a deterministic session digest built from it. Caveats: only those 2 actions are structured; prose↔data consistency is a prompt instruction, not enforced; no unit tests yet. Unblocks progress-tracking Phase B. |
+| [`leetsage-progress-tracking`](./leetsage-progress-tracking/) | ✅ Phase A–C / 📐 Phase D | Study-notes & progress tracking. **Phases A–C shipped** — Phase A (the "Generate report" action + copy button), then **Phase B/C built 2026-09-04** (merged to main via PR #11): persistent per-problem `ProblemRecord`s (`record_{slug}` + a light `progress_index`, schema-migrated on read), a full-panel "My Progress" view (list → detail with attempts timeline, copy/delete, "Copy all"), and a deterministic cross-problem analytics pass ("weakest link" / revisit list, insights gated behind ≥3 problems + a confidence badge). `GENERATE_REPORT` became a structured producer so records populate reliably. **Phase D designed, not built** — auto-save on an Accepted submission (so an attempt's `outcome: 'solved'` is *verified*, not inferred; the attempt count is deferred from the UI until then). |
+| [`leetsage-structured-output`](./leetsage-structured-output/) | ✅ **Shipped** | A hybrid prose + structured `data` response so the report, records, analytics, and evals consume one machine-readable contract instead of re-parsing prose. **Shipped 2026-09-03** for the 2 report-feeding actions (`CHECK_APPROACH`, `UNDERSTAND_SOLUTION`); the report now consumes a deterministic session digest built from it. Caveats: only those 2 actions are structured; prose↔data consistency is a prompt instruction, not enforced. (The parser now has unit tests as of 2026-09-15 — the prose-only fallback is observed against malformed/partial/non-object JSON, not just code-read.) Unblocks progress-tracking Phase B. |
 | [`leetsage-cheatsheet`](./leetsage-cheatsheet/) | 📝 **Planned** | Static, zero-token language cheatsheets (Python/Java/C++) + Big-O chart, stored in the extension. Candidate for a lightweight local RAG later. |
 | [`leetsage-pseudocode-mode`](./leetsage-pseudocode-mode/) | 📝 **Planned** | A lightweight "plan your approach" playground with limited, token-conscious feedback. |
 | [`leetsage-phase2-struggle-first`](./leetsage-phase2-struggle-first/) | 📝 **Planned** | Deeper hints unlock only after the user explains their reasoning — the coaching-identity gate. |
@@ -34,10 +34,29 @@
 ## Quick "what's true right now"
 
 - **Shipped & authoritative:** `leetsage-phase1-gemini` + progress-tracking
-  Phase A–C + `leetsage-structured-output`. (Progress Phase B/C is on the unpushed
-  `feature/progress-tracking-phase-b` branch, three commits.)
-- **Next to build:** evals/tests (now with a fresh batch of pure helpers to test),
-  then progress-tracking Phase D (verified submissions) and export-to-file.
+  Phase A–C + `leetsage-structured-output`. (Progress Phase B/C — three commits —
+  is merged to main via PR #11.)
+- **Tests + a guardrail eval — shipped 2026-09-15, now wired into CI** (not a spec,
+  but part of the authoritative built state): **Vitest** across the pure modules
+  (134 tests / 10 files) plus a labeled **solution-filter eval** scored as a release
+  gate. The eval caught two real solution-leak paths, now fixed — so the shipped
+  `solution-filter.ts` is *hardened* vs. its earlier description (no line-count gate
+  on complete functions; multi-brace-function detection; a looser pseudocode
+  heuristic). As of a **2026-09-15 follow-up**, the tests+eval run **automatically**:
+  a **GitHub Actions** workflow (`npm ci` → lint → test → build on every push/PR) and
+  a **Husky pre-commit hook** — so a change that weakens the guardrail fails the
+  build. (GitHub Actions chosen over Docker/Jenkins because there's no backend to
+  containerize or host; **CD / auto-publish to the Web Store was deliberately
+  skipped** — review latency + secret management → manual publish.) All on the
+  `feature/evals-and-tests` branch — **pushed; CI runs green** (first run ~24s,
+  10 files / 134 tests; the Node-20 action-runtime warning was cleared by pinning
+  `checkout`/`setup-node` to the verified current major `@v7`). See
+  [`../../docs/career/DEV_JOURNAL.md`](../../docs/career/DEV_JOURNAL.md) (2026-09-15
+  + its follow-up).
+- **Next to build:** runtime metrics (latency/tokens/cost — the last "quantified
+  impact" gap), then the deferred eval follow-up (real captured responses + a
+  validated LLM-as-judge — CI wiring is now done), then progress-tracking Phase D
+  (verified submissions) and export-to-file.
 - **Don't trust for current state:** `ai-learning-assistant` (historical).
 
 *Keep this index current when a spec changes status — it's the fastest way for a

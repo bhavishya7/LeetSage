@@ -1,7 +1,6 @@
 import type { ActionType, FilterResult } from '../types';
 
 const MAX_CODE_BLOCK_LINES = 14;
-const MAX_SNIPPET_LINES = 8;
 
 /**
  * Actions where including the actual solution is the point: analyzing/explaining
@@ -15,10 +14,26 @@ const SOLUTION_PHRASES = [
 ];
 
 const COMPLETE_FUNCTION_PATTERNS = [
+  // Python: a def header followed by 5+ indented body lines.
   /def\s+\w+\s*\([^)]*\)\s*(?:->.*?)?:\s*\n(?:\s+.+\n){5,}/,
+  // Brace-language function with a large single-scope body (no nested braces).
   /(?:function\s+\w+|const\s+\w+\s*=\s*(?:async\s*)?\([^)]*\)\s*=>)\s*\{[^}]{200,}\}/s,
   /(?:public|private|protected)?\s+\w+\s+\w+\s*\([^)]*\)\s*\{[^}]{200,}\}/s,
 ];
+
+/**
+ * A "complete function" that the char-count brace patterns miss: a brace-family
+ * function HEADER (optional modifiers/return type, name, params, `{`) whose body
+ * contains a `return`. The `[^}]{200,}` patterns above can't match a function
+ * with NESTED braces (an inner `if {...}` closes the char class early), so a
+ * compact-but-complete Java/C++/JS solution slipped through — the guardrail eval
+ * caught it (case pos-code-2). This detects the signature + a return statement
+ * anywhere in the block, which a short illustrative snippet won't have.
+ */
+const BRACE_FUNCTION_HEADER = /(?:(?:public|private|protected|static|final|async)\s+)*[\w<>[\],\s]*\b\w+\s*\([^)]*\)\s*\{/;
+function looksLikeCompleteBraceFunction(code: string): boolean {
+  return BRACE_FUNCTION_HEADER.test(code) && /\breturn\b/.test(code);
+}
 
 /**
  * Detects step-by-step pseudocode that amounts to a full algorithm — the
@@ -29,16 +44,29 @@ const COMPLETE_FUNCTION_PATTERNS = [
  */
 function looksLikeFullPseudocode(text: string): boolean {
   const lines = text.split('\n').map(l => l.trim().toLowerCase()).filter(Boolean);
+  // Control/step lines: loop & branch keywords PLUS the imperative operation
+  // verbs that make up a spelled-out algorithm (pop/push/append/remove/...). A
+  // line that STARTS with one of these is an instruction step, not narrative
+  // prose — a monotonic-stack writeup ("pop the stack and record...") is all
+  // steps, which is exactly what we want to catch (case pos-pseudo-prose-2).
   const controlLines = lines.filter(l =>
     /^(for |while |if |else|return |add |set |initialize|iterate|loop|repeat)/.test(l) ||
+    /^(pop |push |append |remove |insert |swap |update |increment |decrement |mark |compute |store |record |compare |check )/.test(l) ||
     /\bfor each\b|\bfor every\b/.test(l)
   );
   // A full algorithm typically has a loop AND a conditional AND a return/result,
   // spread across enough lines to constitute the whole procedure.
   const hasLoop = lines.some(l => /^(for |while |repeat|loop|iterate)|\bfor each\b/.test(l));
-  const hasBranch = lines.some(l => /^(if |else)/.test(l));
   const hasResult = lines.some(l => /^(return |output|result|add .*to )/.test(l));
-  return controlLines.length >= 5 && hasLoop && hasBranch && hasResult;
+  // A full algorithm has a loop AND a result, spread across enough imperative
+  // control lines to constitute the whole procedure. We deliberately do NOT
+  // require a standalone `if`: algorithms that fold the conditional into a loop
+  // header (e.g. "while the stack is not empty and the top is smaller" — a
+  // monotonic stack) have no line-leading branch yet are still the complete
+  // solution. The guardrail eval caught that over-fit (case pos-pseudo-prose-2).
+  // Requiring loop + result + 5 control lines keeps plain narrative prose (which
+  // has no loop/return structure) from tripping this.
+  return controlLines.length >= 5 && hasLoop && hasResult;
 }
 
 function extractCodeBlocks(content: string): Array<{ code: string; lineCount: number }> {
@@ -69,7 +97,14 @@ export function filterResponse(content: string, actionType: ActionType): FilterR
     if (block.lineCount > MAX_CODE_BLOCK_LINES) {
       return { filteredContent: buildFilteredMessage(`Code block had ${block.lineCount} lines (max ${MAX_CODE_BLOCK_LINES})`), wasFiltered: true, filterReason: `Code block too long` };
     }
-    if (block.lineCount > MAX_SNIPPET_LINES && COMPLETE_FUNCTION_PATTERNS.some(p => p.test(block.code))) {
+    // A COMPLETE function implementation is a leak regardless of line count: a
+    // compact 8-line solution (e.g. Two Sum) is still the whole answer. The
+    // patterns require a real function signature + a substantial body (5+
+    // indented lines, or a 200-char brace body), so a short illustrative
+    // snippet — the thing we WANT to allow — won't match. The old
+    // `> MAX_SNIPPET_LINES` gate let compact full solutions slip through; the
+    // guardrail eval caught it (case pos-code-1).
+    if (COMPLETE_FUNCTION_PATTERNS.some(p => p.test(block.code)) || looksLikeCompleteBraceFunction(block.code)) {
       return { filteredContent: buildFilteredMessage('Complete function implementation detected'), wasFiltered: true, filterReason: 'Complete implementation detected' };
     }
     // A fenced block that's really full pseudocode of the algorithm.
