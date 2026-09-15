@@ -1,0 +1,68 @@
+# Continuous Integration for LeetSage.
+#
+# WHY GitHub Actions (and not Jenkins/Docker) — the short version, recorded here
+# so the choice is legible to anyone reading the repo:
+#   - LeetSage has NO backend. The build artifact is a static bundle (dist/),
+#     not a running server, so there is nothing to containerize with Docker and
+#     nothing to deploy to a host. Docker earns its keep when you ship a
+#     long-running service; here it would add a Dockerfile and an image to
+#     maintain for zero benefit.
+#   - Jenkins is a self-hosted CI server you install and maintain (plugins,
+#     security, uptime). For a solo GitHub project that's pure overhead.
+#   - GitHub Actions is built into the repo, free for this use, needs no server
+#     to run, and is configured by this one YAML file. It runs the SAME npm
+#     scripts a developer runs locally, on a clean machine, on every push/PR.
+#
+# What this gate does: on every push and pull request, a fresh Linux runner
+# installs dependencies from the lockfile, lints, runs the full test suite
+# (which INCLUDES the labeled guardrail eval — so a change that weakens the
+# "never hand over the solution" guardrail fails the build here, automatically),
+# and builds the extension. Red check = don't merge.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Get the code onto the clean runner.
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # 2. Install Node. Node 22 LTS is the conservative CI choice; the code uses
+      #    no Node-24-specific features. `cache: npm` reuses the npm cache between
+      #    runs to speed installs.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      # 3. Clean, reproducible install straight from package-lock.json. `npm ci`
+      #    (not `npm install`) is what makes CI authoritative: it installs EXACTLY
+      #    the locked versions and fails if package.json and the lockfile disagree.
+      #    This is the dimension a local pre-commit hook can't replicate — the hook
+      #    uses whatever is already in your node_modules, which can have drifted.
+      - name: Install dependencies
+        run: npm ci
+
+      # 4. Lint.
+      - name: Lint
+        run: npm run lint
+
+      # 5. Full test suite — includes the guardrail eval (src/evals/). This is the
+      #    step that turns the eval into an automatic release gate.
+      - name: Test (unit + guardrail eval)
+        run: npm run test
+
+      # 6. Prove the extension still compiles (tsc -b && vite build). The build
+      #    also type-checks the test files, so a broken test type fails here too.
+      - name: Build
+        run: npm run build
