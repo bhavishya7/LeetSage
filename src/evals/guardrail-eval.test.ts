@@ -30,7 +30,6 @@ describe('Guardrail eval — solution-filter over the labeled dataset', () => {
 
   it('prints the eval report (release-gate summary)', () => {
     // Surfaced in test output / CI logs — the headline numbers.
-    // eslint-disable-next-line no-console
     console.log('\n' + formatReport('Solution-filter guardrail eval (authored dataset)', metrics) + '\n');
     expect(metrics.total).toBe(GUARDRAIL_CASES.length);
   });
@@ -78,7 +77,6 @@ describe('LLM-as-judge scaffold — runs OFFLINE over the same dataset', () => {
     expect(predictions).toHaveLength(GUARDRAIL_CASES.length);
 
     const judgeMetrics = computeMetrics(labels, predictions);
-    // eslint-disable-next-line no-console
     console.log('\n' + formatReport('LLM-as-judge (offline mock) eval', judgeMetrics) + '\n');
     // The mock is a stand-in, not a validated judge — we only assert it ran and
     // scored, demonstrating the harness works end-to-end without a live key.
