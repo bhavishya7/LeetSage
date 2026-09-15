@@ -33,18 +33,22 @@ jobs:
 
     steps:
       # 1. Get the code onto the clean runner.
-      #    @v5 runs the action itself on Node 24 — @v4 ran on Node 20, which
-      #    GitHub now warns is deprecated on the runner (a warning about the
-      #    ACTION's own runtime, separate from our node-version below).
+      #    Pinned to the current major (v7). GitHub is removing Node 20 as the
+      #    action runtime on the runners (deprecation warning on older majors);
+      #    its remediation is "use the latest versions of the actions," which run
+      #    on Node 24. NB this is the ACTION's own runtime — separate from the
+      #    node-version we install below for our build/test.
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # 2. Install Node. Node 22 LTS is the conservative CI choice for OUR build;
-      #    the code uses no Node-24-specific features. `cache: npm` reuses the npm
-      #    cache between runs to speed installs. (setup-node@v5, like checkout@v5,
-      #    runs the action on Node 24 to clear the Node-20 deprecation warning.)
+      #    the code uses no Node-24-specific features. `cache: "npm"` reuses the
+      #    npm cache between runs. setup-node is pinned to the current major (v7),
+      #    which runs on Node 24. (setup-node v5+ auto-caches when it detects a
+      #    package manager; we set cache explicitly, so that change doesn't affect
+      #    us.)
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: "npm"
