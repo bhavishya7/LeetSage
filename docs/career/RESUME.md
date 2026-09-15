@@ -158,10 +158,13 @@ eval set so the catch-rate reflects real-world recall, not just the authored set
 > shipped** (2026-09-03 — hybrid prose + `data` for the report-feeding actions,
 > making the report session-aware); **progress-tracking Phase B/C shipped**
 > (2026-09-04 — persistent per-problem records, a "My Progress" view, and
-> weakest-link analytics built on the structured contract; on an unpushed branch);
+> weakest-link analytics built on the structured contract; merged to main via PR #11);
 > a custom Kiro project-historian agent now maintains these docs; **evals + unit
 > tests shipped** (2026-09-15 — Vitest across the pure modules, 134 tests, plus a
-> labeled guardrail eval that caught and fixed two real solution-leak paths). See
+> labeled guardrail eval that caught and fixed two real solution-leak paths), then
+> **wired into CI** (2026-09-15 follow-up — GitHub Actions runs lint/test/build on
+> every push/PR, making the eval an automatic release gate; pushed, first run green).
+> See
 > [DEV_JOURNAL.md](./DEV_JOURNAL.md) for the full narrative. The gaps above stay
 > listed until the work is actually *built*, not just designed — **runtime metrics**
 > (latency/cost) are now the top unmet gap.

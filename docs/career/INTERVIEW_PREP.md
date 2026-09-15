@@ -348,8 +348,9 @@ deterministic aggregation over an LLM; and — the differentiator — designing 
 
 > Lead with this for CI/CD, DevOps, or "how do you gate releases" prompts. It pairs
 > with the eval (Q3a): CI is what turns that eval from a manual discipline into an
-> **automatic** release gate. **Shipped 2026-09-15 (follow-up)**, committed on the
-> unpushed `feature/evals-and-tests` branch.
+> **automatic** release gate. **Shipped 2026-09-15 (follow-up)** on
+> `feature/evals-and-tests` — **pushed; first CI run green** (~24s, 10 files /
+> 134 tests).
 
 **Short answer.** I use **GitHub Actions**. On every push and pull request a clean
 Linux runner does `npm ci` → lint → test → build, and the test step includes my
@@ -398,6 +399,17 @@ Rather than make lint non-blocking (weakening the gate on day one), I fixed them
 a separate commit by properly typing the two external-boundary reads (the Monaco
 MAIN-world reader and the two `response.json()` shapes), keeping every access
 `?.`-guarded. Green gate, honestly earned.
+
+**A second wrinkle — version hygiene / verification discipline.** On the first run
+CI warned that **Node 20 was deprecated** (that's the *action's* own runtime on the
+runner, separate from the `node-version: "22"` I install for the build). I bumped
+the actions — but initially to a version I **remembered**, `@v5`, which turned out
+to be **two majors stale**. Instead of trusting the plausible-looking number, I
+**verified the current major against the actions' release pages and the GitHub
+changelog** and pinned **`@v7`** for both. It's the *same* "verify against docs,
+don't trust a remembered identifier" discipline that bit me once before with a
+stale model name (`gemini-2.5-*` → a 404). I also corrected it **on top** of the
+`@v5` commit rather than rewriting history, since it may already have been pushed.
 
 **Signal.** Choosing CI/CD tooling from real constraints, not cargo-culting Docker/
 Jenkins; knowing what each tool actually *buys* you (and that "no backend" removes

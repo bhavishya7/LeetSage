@@ -311,8 +311,8 @@ and a full-panel **My Progress** UI (problem list → record detail with an atte
 timeline, per-record copy/delete, "Copy all"; insights hidden until ≥3 problems,
 with a Low/Medium/High confidence badge). `GENERATE_REPORT` also became a
 **structured producer** so records populate reliably, and several honesty bugs
-were fixed (see below). On branch `feature/progress-tracking-phase-b`, not yet
-pushed.
+were fixed (see below). Built on branch `feature/progress-tracking-phase-b`
+(since merged to main via PR #11).
 **Why.** Phase A shipped only an on-demand report; the value of "track my progress
 and tell me my weakest pattern across problems" needs persistence, a structured
 data model, and aggregation — a real system-design exercise under the no-backend
@@ -391,8 +391,8 @@ noted in code).
 **Commits.** `798228b` (feat: progress tracking Phase B + C — records, My Progress,
 analytics), `538781c` (feat: make `GENERATE_REPORT` a structured producer; stop
 model-written dates), `f0b7c58` (fix: honest attempt semantics + correct projection
-& language) — all on branch `feature/progress-tracking-phase-b` (off
-`main`@`336e34a`), **not yet pushed**. Files:
+& language) — all built on branch `feature/progress-tracking-phase-b` (off
+`main`@`336e34a`), **since merged to main via PR #11**. Files:
 `src/types/{models,index}.ts`, `src/services/{progress-records,progress-analytics,
 session-digest,prompts,structured-parser,code-extractor}.ts`,
 `src/components/{ProgressView,ContentDisplay}.tsx`, `src/sidepanel/App.tsx`, and
@@ -574,13 +574,14 @@ fixes), `package.json` / `package-lock.json` (Vitest + scripts), and the career 
 > **manual** — this wired them into an automatic gate. Written teaching-oriented on
 > purpose: the developer is newer to CI/CD, Docker, and Jenkins, so the *why we
 > chose X and rejected Y* reasoning is preserved as much as the change itself. On
-> branch `feature/evals-and-tests` (off `main`@`16710a1`), **committed, not pushed**.
+> branch `feature/evals-and-tests` (off `main`@`16710a1`), **pushed; first CI run
+> green (~24s)**.
 
 **What.** Two things that turn "run the tests when you remember to" into "the tests
 run themselves":
 - **A GitHub Actions CI workflow** (`.github/workflows/ci.yml`): on every push and
   pull request (all branches), a fresh `ubuntu-latest` runner does
-  checkout (`actions/checkout@v4`) → Node 22 LTS (`actions/setup-node@v4`,
+  checkout (`actions/checkout@v7`) → Node 22 LTS (`actions/setup-node@v7`,
   `cache: npm`) → `npm ci` → `npm run lint` → `npm run test` → `npm run build`. The
   `test` step runs the labeled guardrail eval, so **a change that weakens the "never
   hand over the solution" guardrail now fails CI automatically** — that's the whole
@@ -662,7 +663,36 @@ config has no `no-console` rule). Behavior unchanged — every access stays
 deliberately-omitted deps from the structured-output work; warnings don't fail
 lint), **build clean**, **134 tests still pass**. Verified the full CI sequence
 locally (`npm run lint` = 0 errors, `npm run build` = clean, `npm run test` = 134
-pass across 10 files), so CI will be green when pushed.
+pass across 10 files). On push, the first CI run went **green in ~24s** and the
+Actions UI showed the Vitest report of **10 files / 134 tests passing**.
+
+**What broke / the hard part (the action-version episode — a "verify, don't
+assume" lesson).** The first green CI run emitted **3 warnings**: a **Node 20
+deprecation** notice plus the 2 intentional `react-hooks/exhaustive-deps` warnings.
+The Node-20 warning is about the **action's own runtime** — `actions/checkout@v4`
+and `actions/setup-node@v4` run *the action itself* on Node 20, which GitHub is
+removing from the runners (2026-09-23); it is **separate** from our `node-version:
+"22"`, which governs our build/test and was always fine. GitHub's remediation is
+"update to the latest versions of the actions" (they run on Node 24).
+
+**How solved (correction-on-top, not history-rewrite).** First I bumped both actions
+to `@v5` (`22ddfba`) — which *did* clear the warning (v5 already runs on Node 24) —
+but I had pinned `@v5` **from memory**, and it turned out to be **two majors stale**.
+The fix was to **verify the current major against the actions' release pages and the
+GitHub changelog** rather than trust a plausible-looking number: `actions/checkout`
+current major is **v7** (v7.0.1) and `actions/setup-node` is **v7** (v7.0.0), so I
+corrected both to `@v7` in a follow-up commit (`e7653b8`). I left `22ddfba` in
+history and corrected **on top** rather than rewriting it — it may already have been
+pushed, and the correction-on-top is the honest record. (Side note: setup-node v5+
+auto-caches when it detects a package manager and v6 limited that to npm; we set
+`cache: "npm"` explicitly, so that behavior change doesn't affect this workflow.)
+This is the **same failure mode** as the earlier `gemini-2.5-*` model-name 404 — a
+plausible-but-stale identifier trusted without checking — and the recurring
+discipline is the same: **verify names/versions against provider docs, don't
+assume.** After the `@v7` bump the Node-20 warning is **gone**; the 2
+`react-hooks/exhaustive-deps` warnings **remain and are intentionally left** for a
+proper future fix (understand and fix the hooks), **not** silenced with
+disable comments.
 
 **Interview angle.** A clean, teachable **CI/CD tooling-choice** story: *why GitHub
 Actions and not Docker or Jenkins* grounded in a real constraint (no backend → no
@@ -676,19 +706,24 @@ guardrail eval is now an **automatic** release gate, not a manual discipline. Mi
 supporting story: a green *build* still had a red *lint* (pre-existing `any` errors),
 fixed in its own commit rather than by weakening the gate.
 
-**Caveats (not overclaimed).** Committed, **not pushed** (push/PR is the developer's
-call), so CI hasn't run on GitHub's servers yet — "green" is the verified *local*
-run of the same scripts. **CD / auto-publish to the Web Store is not built** (a
-deliberate not-now); deployment stays manual (build `dist/`, load unpacked). The
-hook is skippable (`--no-verify`) and best-effort against local `node_modules`.
+**Caveats (not overclaimed).** **Pushed; the first CI run is green** (~24s,
+10 files / 134 tests) and the Node-20 deprecation warning is now cleared by the
+`@v7` bump. The 2 `react-hooks/exhaustive-deps` warnings **remain and are
+intentionally left** for a proper future fix (not silenced). **CD / auto-publish to
+the Web Store is not built** (a deliberate not-now); deployment stays manual (build
+`dist/`, load unpacked). The hook is skippable (`--no-verify`) and best-effort
+against local `node_modules`.
 
 **Commits.** `ea82f9b` (fix: resolve `no-explicit-any` lint errors so lint passes
 cleanly — `src/services/code-extractor.ts`, `src/services/llm-service.ts`,
 `src/evals/guardrail-eval.test.ts`), `b0b98e3` (ci: add GitHub Actions CI + a Husky
 pre-commit hook — `.github/workflows/ci.yml`, `.husky/pre-commit`, `package.json`,
-`package-lock.json`) — on branch `feature/evals-and-tests` (off `main`@`16710a1`),
-on top of `0031cb9` (test suite + eval) and `818c70d` (docs) from the prior session.
-**Not yet pushed.**
+`package-lock.json`), `22ddfba` (ci: bump checkout/setup-node to `@v5` to clear the
+Node 20 deprecation warning), `e7653b8` (ci: pin checkout/setup-node to the current
+major `@v7`, not `@v5` — verified against release pages + the changelog) — on branch
+`feature/evals-and-tests` (off `main`@`16710a1`), on top of `0031cb9` (test suite +
+eval) and `818c70d` (docs) from the prior session.
+**Since pushed with this CI/CD work — first CI run green; not yet merged to main.**
 
 ---
 
@@ -698,19 +733,20 @@ on top of `0031cb9` (test suite + eval) and `818c70d` (docs) from the prior sess
    now session-aware and records/analytics/evals have a machine-readable contract
    to consume.
 2. ~~**Progress-tracking Phase B/C** — persistent records + "My Progress" view +
-   analytics~~ — **DONE (2026-09-04)**, on the unpushed
-   `feature/progress-tracking-phase-b` branch. Phase D (auto-save on an Accepted
-   submission → verified attempts) is the deferred remainder.
+   analytics~~ — **DONE (2026-09-04)**, merged to main via PR #11. Phase D
+   (auto-save on an Accepted submission → verified attempts) is the deferred
+   remainder.
 3. ~~**Evals + tests + metrics**~~ — **tests + eval DONE (2026-09-15)**: Vitest
    across the pure modules (134 tests / 10 files) + a labeled guardrail eval scored
    as a release gate (100% catch / 0% FP after it caught & fixed 2 real leak paths),
-   on the unpushed `feature/evals-and-tests` branch. The **metrics** slice is still
+   on the `feature/evals-and-tests` branch (pushed; CI green). The **metrics** slice is still
    open — runtime numbers (p50/p95 latency, tokens/request, requests handled) are now
    the top unmet "quantified impact" gap.
 4. ~~**Wiring the tests into a pre-commit hook / CI** so the eval becomes an
    automatic release gate~~ — **DONE (2026-09-15 follow-up)**: GitHub Actions CI
    (`npm ci` → lint → test → build on every push/PR) + a Husky pre-commit hook, on
-   the unpushed `feature/evals-and-tests` branch. **CD / auto-publish to the Web
+   the `feature/evals-and-tests` branch (pushed; first CI run green, actions pinned
+   `@v7`). **CD / auto-publish to the Web
    Store was deliberately skipped** (review latency + secret management → manual
    publish). Still open: **real captured-Gemini eval cases + a validated (non-mock)
    LLM-as-judge** — deferred.
@@ -790,7 +826,8 @@ any resulting numbers into [RESUME.md](./RESUME.md).*
   (Vitest, 134 tests / 10 files, plus a labeled solution-filter eval as a release
   gate) and, as of a **2026-09-15 follow-up**, run **automatically** by a GitHub
   Actions workflow (`npm ci` → lint → test → build on every push/PR) and a Husky
-  pre-commit hook; all on the unpushed `feature/evals-and-tests` branch. Still *not*
+  pre-commit hook; all on the `feature/evals-and-tests` branch (pushed; first CI run
+  green, actions pinned `@v7`). Still *not*
   done: **runtime metrics** (latency/tokens/cost), **real captured-response eval
   cases + a validated LLM-as-judge** (only an offline mock judge exists), and **CD /
   auto-publish to the Web Store** (deliberately skipped — review latency + secrets;

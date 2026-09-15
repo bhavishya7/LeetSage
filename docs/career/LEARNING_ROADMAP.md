@@ -113,8 +113,13 @@ every push and pull request runs `npm ci` → `npm run lint` → `npm run test` 
 the guardrail eval) → `npm run build` on a clean Node 22 LTS runner — so a change
 that weakens the guardrail **fails the build automatically**. Plus a **Husky
 pre-commit hook** (`.husky/pre-commit`) running the same scripts locally as a fast
-early warning. On the unpushed `feature/evals-and-tests` branch (`b0b98e3`; a lint
+early warning. On the `feature/evals-and-tests` branch (`b0b98e3`; a lint
 fix `ea82f9b` cleared 4 pre-existing `no-explicit-any` errors so the gate is green).
+**Pushed; the first CI run is green** (~24s, 10 files / 134 tests). The first run
+warned Node 20 was deprecated (the action's own runtime); bumping the actions —
+`@v5` from memory (`22ddfba`), then corrected to the verified current major `@v7`
+(`e7653b8`) — cleared it. The 2 `react-hooks/exhaustive-deps` warnings remain and
+are intentionally left for a proper future fix.
 **The tooling reasoning (the interview payoff).** GitHub Actions chosen — built into
 the repo, free, no server to maintain, runs the same npm scripts locally as in CI.
 **Docker rejected** — LeetSage has no backend; the artifact is a static `dist/`
@@ -180,8 +185,8 @@ makes evals (#1) easier (assert on `data` fields, not prose).
 summarization.
 **Phase A — DONE.** "Generate report" action + copy button shipped. Testing it
 surfaced the need for #5 above.
-**Phase B/C — DONE (2026-09-04, on the unpushed `feature/progress-tracking-phase-b`
-branch).** Persistent per-problem `ProblemRecord`s in `chrome.storage.local`
+**Phase B/C — DONE (2026-09-04, merged to main via PR #11).** Persistent
+per-problem `ProblemRecord`s in `chrome.storage.local`
 (one `record_{slug}` key + a light `progress_index`, schema-migrated on every
 read), an append-only `attempts[]` history with an append-vs-replace save rule, a
 full-panel "My Progress" view (list → detail with attempts timeline, copy/delete,
@@ -277,11 +282,11 @@ is exactly the GenAI system-design interview. Rehearse it either way — it's in
    report-feeding actions; the report is now session-aware and records, analytics,
    and evals have a machine-readable contract to consume.
 3. **Progress-tracking Phase B/C** (#6) — DONE (2026-09-04). Persistent records +
-   "My Progress" + analytics, populated from #5's structured fields; on the
-   unpushed `feature/progress-tracking-phase-b` branch. Phase D (verified
+   "My Progress" + analytics, populated from #5's structured fields; merged to
+   main via PR #11. Phase D (verified
    submissions) + export-to-file are the deferred remainder.
-4. **Eval suite + tests** (#1, #2) — **DONE (2026-09-15)**, on the unpushed
-   `feature/evals-and-tests` branch. Vitest across the pure modules (134 tests / 10
+4. **Eval suite + tests** (#1, #2) — **DONE (2026-09-15)**, on the
+   `feature/evals-and-tests` branch (pushed; CI green). Vitest across the pure modules (134 tests / 10
    files) + a labeled guardrail eval scored as a release gate; the eval caught and
    fixed two real solution-leak paths (62.5% → 100% catch). Assert-on-structured-
    `data` (from #5) made it cleaner. **CI wiring** (#3b) landed same day as a

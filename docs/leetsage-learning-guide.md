@@ -1484,8 +1484,8 @@ change that weakens the guardrail can't quietly ship.
 
 On **every push and pull request** (all branches), a fresh `ubuntu-latest` runner:
 
-1. checks out the repo (`actions/checkout@v4`),
-2. installs **Node 22 LTS** (`actions/setup-node@v4`, `cache: npm`),
+1. checks out the repo (`actions/checkout@v7`),
+2. installs **Node 22 LTS** (`actions/setup-node@v7`, `cache: npm`),
 3. runs `npm ci` — a clean install straight from `package-lock.json`,
 4. `npm run lint`,
 5. `npm run test` — **this includes the guardrail eval** (`src/evals/`), so a leak
@@ -1498,6 +1498,13 @@ release gate, not a thing you remember to run.
 > **Node 22 vs. local Node 24.** CI pins the conservative **22 LTS** even though
 > local dev is on 24 — the code uses no Node-24-specific features, so 22 is the safer
 > "clean room" version. Documented so the choice isn't a mystery later.
+>
+> **Action versions pinned to `@v7`.** The first CI run warned that **Node 20 is
+> deprecated** — that's the *action's own runtime* (`checkout`/`setup-node` used to
+> run on Node 20), which is separate from the `node-version: "22"` above that
+> governs our build/test. The actions were bumped to the current major **`@v7`**
+> (verified against their release pages + the GitHub changelog, not pinned from
+> memory), which runs on Node 24 and clears the warning.
 
 ### Why GitHub Actions — and not Docker or Jenkins (the reasoning, briefly)
 
@@ -1555,12 +1562,14 @@ the two external-boundary reads properly (a minimal Monaco interface for the
 MAIN-world reader; minimal response/error shapes for the two `response.json()`
 reads), every access still `?.`-guarded. Result: lint 0 errors (2 intentional
 `react-hooks/exhaustive-deps` *warnings* remain — warnings don't fail lint), build
-clean, 134 tests pass.
+clean, 134 tests pass. Those 2 warnings are **intentionally left** for a proper
+future fix, not silenced with disable comments.
 
 ### What's NOT automated (don't overclaim)
 
-- **CI hasn't run on GitHub's servers yet** — the branch is committed but **not
-  pushed**, so "green" is the verified *local* run of the same scripts.
 - **No CD / auto-publish** — deployment is manual (build `dist/`, load unpacked).
+
+(CI now runs on GitHub's servers: the branch is **pushed** and the first run is
+**green** — ~24s, 10 files / 134 tests, Node-20 warning cleared by the `@v7` bump.)
 - The hook is **skippable** (`--no-verify`) and best-effort against local
   `node_modules`.
