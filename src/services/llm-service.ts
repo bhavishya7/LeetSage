@@ -1,5 +1,5 @@
 import type { LLMRequest, LLMResponse, GeminiModel } from '../types';
-import { getSystemPrompt, buildUserMessage, formatProblemContext } from './prompts';
+import { getSystemPrompt, buildUserMessage, formatProblemContext, wrapUntrusted } from './prompts';
 
 // Google Gemini via its OpenAI-compatible endpoint. This lets us keep the
 // standard chat-completions request/response shape while using a free-tier
@@ -30,8 +30,12 @@ function buildMessages(request: LLMRequest) {
   const systemPrompt = getSystemPrompt(request.actionType);
   // Free-form questions replace the templated message but stay grounded by
   // prepending the problem context so the coach knows what we're working on.
+  // The problem context is UNTRUSTED (scraped page content), so it rides inside
+  // the same injection-hardening wrapper as the templated actions; the user's
+  // own question stays outside the block as the instruction. (See
+  // .kiro/specs/leetsage-prompt-injection.)
   const userMessage = request.userQuery
-    ? `${formatProblemContext(request.problemContext)}\n\nMy question: ${request.userQuery}`
+    ? wrapUntrusted(formatProblemContext(request.problemContext), `My question: ${request.userQuery}`)
     : buildUserMessage(request.actionType, request.problemContext, {
         hintLevel: request.previousHintLevel,
         userApproach: request.userApproach,
