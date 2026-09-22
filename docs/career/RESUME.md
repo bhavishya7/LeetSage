@@ -87,10 +87,13 @@ Pick 2–4 depending on space. Swap in real numbers as soon as you have them
 - Shipped a production **LLM-powered** learning feature (Google Gemini, streaming)
   used on live LeetCode problems, applying **prompt engineering**, **output
   validation**, and **model tiering** for cost control.
-- Engineered **defense-in-depth output guardrails** over a non-deterministic model
-  — a deterministic filter that enforces product constraints the prompt alone can't
-  guarantee — and scoped the design against **prompt-injection** risk (untrusted
-  page content, least-privilege, no tool access).
+- Engineered **defense-in-depth guardrails** over a non-deterministic model — a
+  deterministic output filter that enforces product constraints the prompt alone
+  can't guarantee, plus **prompt-injection hardening** (OWASP LLM #1): untrusted
+  page content and user code are structurally fenced as DATA with the guardrail
+  reasserted after, backed by least-privilege (no tool access) and the output
+  filter as the hard backstop — **verified on both sides by tests** (input framing
+  pinned per action; an eval case proves a *successful* injection is still caught).
 - Made and documented core **AI system-design tradeoffs** (bring-your-own-key vs.
   managed backend; client-only vs. server) with a written decision log and an
   articulated scaling path.
@@ -124,9 +127,10 @@ Only list what you can defend. Currently truthful for LeetSage:
 · `structured output` · `AI output guardrails` · `LLM evals` · `LLM-as-judge` ·
 `unit testing (Vitest)` · `Chrome Extension (Manifest V3)` ·
 `React` · `TypeScript` · `Tailwind CSS` · `Vite` · `client-side architecture` ·
-`cost optimization / rate limiting` · `AI-assisted development (custom agents)`
+`cost optimization / rate limiting` · `AI-assisted development (custom agents)` ·
+`prompt-injection mitigation (OWASP LLM #1)`
 
-Add once built: `RAG` · `prompt-injection mitigation` · `production metrics / monitoring`.
+Add once built: `RAG` · `production metrics / monitoring`.
 
 ---
 

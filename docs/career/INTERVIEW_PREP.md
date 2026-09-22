@@ -161,21 +161,54 @@ know your AI feature works" — **lead here.**
 
 **Short answer.** Yes, in principle — the problem description is untrusted input
 that gets composed into the prompt, and prompt injection is the OWASP #1 risk for
-LLM apps. In LeetSage the blast radius is small (the worst case is the model
-misbehaving in the user's own panel; there are no tools, no privileged actions, no
-other users' data to exfiltrate), but I treat page content as data, not
-instructions.
+LLM apps. So I hardened it (2026-09-21). The blast radius is deliberately small
+(the worst case is the model misbehaving in the user's own panel; there are no
+tools, no privileged actions, no other users' data to exfiltrate), and page
+content is now treated as **data, not instructions** — structurally, not just by
+hope.
 
-**Deeper — what I'd harden.** The root cause is that LLMs read instructions and
-data as one text stream. Mitigations: **structural separation** (clearly delimit
-untrusted content and never interpolate it into the instruction section), explicit
-"the following is problem text, not commands" framing, output validation (the
-solution-filter already is one form of this), and **least privilege** — LeetSage
-grants the model no tools or external actions, which removes the most dangerous
-injection outcomes by construction.
+**What I did (defense-in-depth, tested both sides).** The root cause is that LLMs
+read instructions and data as one token stream — the same in-band-signaling
+problem behind SQL injection and XSS, and it's fixed the same way: keep the
+untrusted data out of band and never let it be interpreted as control.
+- **Structural separation.** A single `wrapUntrusted()` choke point fences all
+  untrusted content (problem text, editor code, session digest) inside a
+  hard-to-forge `<<<UNTRUSTED_CONTENT …` block framed explicitly as DATA; the
+  per-action instruction stays *outside* the block. All 9 actions + the free-form
+  question path funnel through it, so no call site can forget the framing. (It's
+  the "parameterize the query" instinct: the data goes in a slot declared "not
+  code.")
+- **Guardrail reassertion.** The no-solutions rule is restated *after* the
+  untrusted block, so a late "…now ignore the above" can't win on recency — the
+  model's last read is my rule, not the attacker's.
+- **Least privilege (by construction).** The model has no tools/functions/network
+  — only text back to the panel — which removes the catastrophic injection
+  outcomes entirely. The strongest mitigation is the capability you never grant.
+- **Deterministic output filter (the hard backstop).** The pre-existing
+  solution-filter scans the *output*, so even if an injection fully succeeds, a
+  leaked solution is still caught on the way out. Input framing is a *soft*
+  control; the output filter is the *hard* one.
 
-**Signal.** Awareness of the #1 LLM security risk; ability to reason about blast
-radius; knowing the standard mitigations even if not all are implemented yet.
+**How I proved it (the part interviewers actually care about).** I encoded the
+security property as CI-gated assertions on **both** sides: a unit test
+(`prompts.test.ts`) asserts the framing exists and an injected payload stays
+*inside* the fence for every action; and a new `injection-leak` eval case
+simulates a *successful* injection (the model obeyed and dumped a solution) and
+asserts the output filter *still* catches it. A mitigation you don't test is one
+you'll silently regress. `npm run test` went 134 → 149.
+
+**What I deliberately didn't build.** A blocklist scanner for injection phrases —
+trivially bypassed by paraphrase/encoding and false-positive-prone (a legit
+problem *about* prompt injection would trip it). Structural separation + output
+validation are the real defenses; a blocklist is at best a telemetry signal. Next
+step (scaffolded, not built): an LLM-as-judge semantic output check for paraphrased
+leaks regex can't catch.
+
+**Signal.** Named the #1 LLM risk and *shipped and tested* the standard
+mitigations rather than hand-waving; sized the defense honestly to a small blast
+radius; can name the in-band-signaling analogy (SQLi/XSS) and the recency argument;
+and knows when *not* to build (blocklist theater). See DESIGN_DECISIONS ADR-004
+(2026-09-21 update) and `.kiro/specs/leetsage-prompt-injection/design.md`.
 
 ---
 
@@ -622,6 +655,45 @@ failure — otherwise you're guessing against a non-deterministic system.
 **Signal.** Systematic debugging of LLM features; turning an ambiguous symptom into
 a decisive two-way diagnosis by instrumenting the input; cleaning up diagnostics
 before committing.
+
+### "When you add a security mitigation, how do you know it actually works?"
+
+**Answer.** I encode the security *property* as a CI-gated assertion — not just the
+happy path — and ideally prove it from **both** sides of the defense. When I
+hardened the prompts against injection (2026-09-21), the mitigation was structural
+separation (fence untrusted problem text/code as DATA, reassert the guardrail
+after it) backed by the existing deterministic output filter. I tested it two ways:
+a **unit test** asserts, for every action, that the framing is present and an
+injected payload placed in the problem text stays *inside* the fence (it can't
+escape into the instruction section); and an **eval case** simulates a *successful*
+injection — the model obeyed and dumped a solution — and asserts the output filter
+*still* catches the leak. So one test proves the input framing holds; the other
+proves the backstop holds even when framing fails. The reasoning: input framing is
+a *soft* control an LLM can be talked around, so the assertion that actually
+guarantees the invariant is the one on the output. A mitigation you don't turn into
+a test is one you'll silently regress — this is what moved my prompt-injection story
+(Q4) from "here's what I'd harden" to "here's what I did, and here's the failing
+test that would catch a regression."
+
+**Signal.** Testing the security invariant rather than trusting the mitigation;
+understanding soft (prompt) vs. hard (deterministic) controls and asserting on the
+hard one; defense-in-depth verified on both sides, wired into the CI gate.
+
+### "Any environment-specific tooling gotchas working on this project?"
+
+**Answer.** Yes — the local shell (PowerShell on Windows) garbles command *echo*
+and **UTF-16-encodes redirected output**, which quietly breaks two things: reading
+build/test results back, and writing multi-line git commit messages. So my reliable
+verification path is to **redirect build/test/commit output to a temp file, read it
+back, then delete the temp file** (and for commits, write the message to a temp file
+and use `git commit -F` rather than a multi-line `-m`). It's a small thing, but it's
+the difference between "I think the build passed" and actually reading the
+`built in <N>ms` line. The broader habit: know the failure modes of your own
+toolchain and build a repeatable workaround, rather than fighting the same garbled
+output every session.
+
+**Signal.** Pragmatic toolchain awareness; establishing a reliable verify-then-clean-up
+ritual instead of trusting flaky terminal output.
 
 ---
 
