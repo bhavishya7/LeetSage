@@ -5,6 +5,15 @@
 > composed into prompts, so a crafted problem statement can't hijack the model
 > and undermine the core "teach, never solve" guardrail (ADR-004).
 >
+> **Spec scope — design-only (deliberate).** Per `.kiro/steering/workflow.md`
+> ("Spec discipline"), this is a small, well-understood change with a single clear
+> objective and known mitigations, so it does **not** carry separate
+> `requirements.md` / `tasks.md`. The requirements (§1–§2: the threat and what must
+> hold) and the task breakdown (§3–§5: the mitigations to implement and how to
+> verify) are folded into this document. Contrast the two flagship features
+> (`leetsage-structured-output`, `leetsage-progress-tracking`), which carry the
+> full trilogy.
+>
 > Companion docs:
 > [../../../docs/career/DESIGN_DECISIONS.md](../../../docs/career/DESIGN_DECISIONS.md) (ADR-004 guardrail) ·
 > [../../../docs/career/INTERVIEW_PREP.md](../../../docs/career/INTERVIEW_PREP.md) (Q4 — prompt injection) ·

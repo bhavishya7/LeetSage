@@ -18,6 +18,22 @@
 - 📝 **Planned** — idea/requirements captured; not yet designed in depth.
 - 🗄️ **Historical** — superseded; kept for context, not authoritative.
 
+## Spec-document completeness
+
+Rigor is scaled to the feature (see `.kiro/steering/workflow.md` → "Spec
+discipline"): substantial features get the full **requirements + design + tasks**
+trilogy; small/well-understood changes may be **design-only** with the reason
+stated in the doc. Current state:
+
+- **Full trilogy** (requirements + design + tasks): `leetsage-structured-output`,
+  `leetsage-progress-tracking` — the two flagships (requirements + tasks
+  **backfilled 2026-09-21** from the shipped code to complete the record).
+- **Design-only (documented as such):** `leetsage-prompt-injection` — small,
+  well-scoped; the design.md states requirements/tasks were folded in given the
+  narrow scope.
+- **Vision/requirements-style:** the `📝 Planned` specs below (design/tasks come
+  when they're built).
+
 ## The specs
 
 | Spec | Status | What it is |
