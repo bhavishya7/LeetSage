@@ -614,9 +614,67 @@ saved), and a **"plaintext" language** (LeetCode leaves Monaco's model language 
 run). None of these was a type error; a green build looked done. For any LLM-fed
 data path, my rule is now: inspect the persisted state, not just compilation.
 
+**Reinforced again by the guardrail-hardening pass (2026-09-24).** I shipped the
+B1 pre-display gate; the build was green and the suite passed. Then I *exercised the
+running extension* — the mandatory "eyeball the UI before commit" step — and three
+real bugs fell out that no test had asserted: chat was blind to the editor code
+(**B4** — "what's my time complexity?" returned "you didn't include your code"), the
+gate's placeholder felt frozen on a 5–6s action (**B5**), and the complexity badge
+split on nested parens (**B7** — `O(log(M) + log(N))` rendered half as a badge and
+half as prose). A passing green build would have shipped all three. The lesson held:
+**human-in-the-loop review after a green build is where the real bugs live** — so I
+logged each in the standing bug registry and fixed it *with its own guard* before
+committing.
+
 **Signal.** Testing discipline for non-deterministic systems; knowing that type-
 checking and the happy path don't cover data-flow/closure bugs; reaching for
 persisted-state inspection as a debugging tool.
+
+### "How do you keep AI-assisted work honest when the build is green — where do the real bugs come from?" ⭐
+
+**Answer.** A green build and a passing suite are necessary, not sufficient — they
+only prove the code does what a test *already asserts*, and an agent that wrote the
+code and the tests together can leave whole behaviors unasserted. My habit is a hard
+gate: **build → explain what changed → STOP and manually exercise the running
+thing** before anything is committed. The clearest payoff was my guardrail-hardening
+pass. I shipped one planned fix (B1, a pre-display gate that withholds a streaming
+response behind a "thinking" placeholder until it clears the solution filter). Build
+green, tests green. Then I *used* it, and three bugs the suite never saw surfaced:
+free-form chat couldn't answer "what's my time complexity?" because it never sent the
+editor code (B4); the placeholder felt frozen on a heavy 5–6s action (B5); and the
+complexity badge split on nested parens like `O(log(M) + log(N))` (B7). None was a
+type error. I treat those human-caught bugs as first-class: each became a row in a
+**standing bug registry** and each got its own test/eval before I committed, so it
+can't silently regress.
+
+**Signal.** I don't equate "compiles + tests pass" with "correct" for interactive,
+non-deterministic features. I structure the workflow (build → explain → stop →
+eyeball) so a human catches what the suite can't, and I convert those catches into
+durable guards instead of one-off fixes. It's a concrete, honest answer to "how do
+you use AI effectively" — the AI writes fast, the human review is where quality
+enters.
+
+### "You said you fixed a bug with an eval. How do you know the eval actually reproduced the bug?" ⭐
+
+**Answer.** Because I made it fail *first*. When I closed a filter blind spot (B3 —
+compact pseudocode that folds its `if` into the loop header slipped past the
+"folded-conditional" detector), the honest move wasn't just "add a case and watch it
+pass." My **first** fixture didn't reproduce the bug at all: it had line-leading
+`if`/`else`/`return`, so the *old* heuristic already caught it — a green test that
+proved nothing. I rewrote the fixture to the *real* folded shape, confirmed the eval
+dropped from **100% to 85.7% catch rate BEFORE the fix** (with the leak actually
+getting through), then made the fix and watched it climb back to **100% with FP still
+0%**. Getting red-before-green here needed a throwaway probe, because vitest under
+`env=node` suppresses `console.log` unless a test throws — so "verify the fixture
+fails" was itself a small piece of work. The principle: **change a heuristic against
+an eval, not a hunch** — and a characterization case that never failed against the
+old code is theater, not evidence.
+
+**Signal.** Test/eval discipline: I know a fixture has to reproduce the defect
+(red-before-green) or the "eval-driven fix" claim is hollow; I tune guardrail
+heuristics against a labeled confusion matrix rather than hand-editing a regex until
+it looks right; and I'll build throwaway tooling to *prove* the red state when the
+test harness hides output.
 
 ### "You wrote the tests after the code — with an agent. How do you know they aren't just rubber-stamping the existing behavior?"
 

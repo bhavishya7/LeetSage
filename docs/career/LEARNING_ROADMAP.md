@@ -103,6 +103,48 @@ answers INTERVIEW_PREP Q5a. **Consciously deferred (scope-creep):** per-model
 breakdown, success/error-rate capture (only successful requests are timed), a "reset
 stats" button. **Effort:** ~~Low–Medium~~ done.
 
+### 3.5. Guardrail hardening + a standing bug registry  ✅ DONE (2026-09-24)
+
+**Spec:** `leetsage-guardrail-hardening` (full trilogy). **Skill:** guardrail
+correctness (enforcement-point reasoning), eval-driven heuristic tuning, disciplined
+bug tracking, human-in-the-loop review.
+**What shipped.** Six real bugs fixed on branch `feature/guardrail-hardening`
+(8 commits `c56d506`…`f6d2a5a` off spec `0edfd69`; **local — not pushed, no PR**),
+two documented as deferrals — every fix bound to a guard, per the spec's governing
+principle. **B1** the headline: the solution filter ran *after* tokens streamed to
+the visible card, so a leak was briefly readable — moved to a **pre-display gate**
+(non-exempt responses render behind an animated "thinking" placeholder and reveal
+only after the filter; exempt actions still stream live). **B2** a dedicated
+direct-answer chat prompt replacing the reused `EXPLAIN_CONCEPT` (no forced analogy).
+**B3** closed the compact folded-conditional pseudocode blind spot in
+`looksLikeFullPseudocode`, tuned against the labeled eval (**85.7% → 100%** catch,
+FP 0%). Exercising the shipped B1 build then surfaced **B4** (chat was blind to the
+editor code — now code-aware but still NON-EXEMPT/filtered), **B5** (the gate felt
+frozen on heavy actions — an elapsed-seconds proof-of-life after a 3s grace), and
+**B7** (complexity badge split on nested parens — a pure balanced-paren parser).
+Test suite **167 → 205**; build clean.
+**Why it mattered.** B1 is a clean "a gate belongs *before* the resource it guards"
+correctness story; the registry makes bug-fixing durable (each entry can't silently
+regress); and B4/B5/B7 are proof that human review after a green build catches what
+the suite can't.
+**Interview payoff.** RESUME "block-before-reveal" bullet; INTERVIEW_PREP Q&A on
+green-build honesty and red-before-green eval fixtures. **Effort:** ~~Medium~~ done.
+
+### 3.6. Chat intent-routing (B6) — its own next spec  📝 PLANNED
+
+**Spec:** `leetsage-chat-intent-routing` (a context-transfer was handed to the
+developer; not yet designed in depth). **Skill:** intent classification (LLM vs
+heuristic), guardrail decision-making.
+**What to build.** Route a free-form chat message to a matching action when one
+fits (e.g. "is my code O(n²)?" → Analyze code), else fall back to free-form. **Why
+it's deferred to its own spec.** It needs a classifier choice *and* a guardrail
+decision — routing free text into the filter-**exempt** actions is exactly the
+bypass B4 declined to open, so the routing design must decide that deliberately, not
+inherit it. **Effort:** Medium. **Also deferred (registry-only, harder to guard):**
+**B8** — `Analyze code` under-credits optimality because it doesn't apply algebraic
+complexity equivalence (`O(log M + log N) = O(log(M·N))`); a prompt nudge, but fuzzy
+model-reasoning that's hard to guard deterministically.
+
 ---
 
 ## Tier 1.5 — Finish what the eval started (deferred from 2026-09-15)
@@ -334,6 +376,10 @@ is exactly the GenAI system-design interview. Rehearse it either way — it's in
    `feature/prompt-injection-hardening` (`667b473`, not yet merged): untrusted
    content fenced as DATA + guardrail reasserted after, tested both sides
    (`prompts.test.ts` + `injection-leak` eval cases), `npm.cmd run test` 134 → 149.
+8. ~~**Guardrail hardening** (#3.5)~~ — **DONE (2026-09-24)** on branch
+   `feature/guardrail-hardening` (8 commits, local — not pushed): pre-display gate
+   (B1) + 5 more bug fixes and a standing bug registry, `npm.cmd run test` 167 → 205.
+   **B6 chat intent-routing** (#3.6) is its own next spec; **B8** deferred.
    Then **cheatsheet / RAG** (#8), then Tier 3 stretch items.
 
 At each step, backfill numbers into [RESUME.md](./RESUME.md) and new Q&A into
