@@ -1,5 +1,5 @@
 import type { LLMRequest, LLMResponse, GeminiModel } from '../types';
-import { getSystemPrompt, buildUserMessage, formatProblemContext, wrapUntrusted } from './prompts';
+import { getSystemPrompt, getChatSystemPrompt, buildUserMessage, formatProblemContext, wrapUntrusted } from './prompts';
 
 // Google Gemini via its OpenAI-compatible endpoint. This lets us keep the
 // standard chat-completions request/response shape while using a free-tier
@@ -27,7 +27,11 @@ const DEFAULT_MAX_TOKENS = 800;
 const DEFAULT_TIMEOUT_MS = 20000;
 
 function buildMessages(request: LLMRequest) {
-  const systemPrompt = getSystemPrompt(request.actionType);
+  // Free-form chat uses its OWN direct-answer prompt (B2), not the templated
+  // action prompt. Reusing EXPLAIN_CONCEPT here forced an analogy onto every
+  // question; the chat prompt answers directly while keeping the same guardrail
+  // + output rules. See .kiro/specs/leetsage-guardrail-hardening.
+  const systemPrompt = request.userQuery ? getChatSystemPrompt() : getSystemPrompt(request.actionType);
   // Free-form questions replace the templated message but stay grounded by
   // prepending the problem context so the coach knows what we're working on.
   // The problem context is UNTRUSTED (scraped page content), so it rides inside
