@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import type { UserSettings, GeminiModel, GuardrailSettings } from '../types';
 import { DEFAULT_GUARDRAILS } from '../types';
 import { saveSettings } from '../services/storage';
+import StatsPanel from './StatsPanel';
 
 interface SettingsModalProps { currentSettings: UserSettings | null; onSave: (settings: UserSettings) => void; onClose: () => void; }
 
@@ -10,7 +11,7 @@ const MODEL_OPTIONS: { value: GeminiModel; label: string }[] = [
   { value: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash — smarter, lower free limits' },
 ];
 
-const inputCls = 'w-full text-xs border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400';
+const inputCls = 'w-full min-w-0 text-xs border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400';
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, onClose }) => {
   const [apiKey, setApiKey] = useState(currentSettings?.apiConfig.apiKey ?? '');
@@ -18,6 +19,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
   const [enableStuckTimer, setEnableStuckTimer] = useState(currentSettings?.enableStuckTimer ?? true);
   const [guardrails, setGuardrails] = useState<GuardrailSettings>(currentSettings?.guardrails ?? DEFAULT_GUARDRAILS);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showStats, setShowStats] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -52,13 +54,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 rounded-xl shadow-xl w-full max-w-sm border border-neutral-200 dark:border-neutral-700 max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200 dark:border-neutral-700 sticky top-0 bg-white dark:bg-neutral-900">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3">
+      <div className="bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 rounded-xl shadow-xl w-full max-w-sm min-w-0 border border-neutral-200 dark:border-neutral-700 max-h-[90vh] flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shrink-0">
           <h2 className="font-semibold text-sm">Settings</h2>
           <button onClick={onClose} className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 text-lg leading-none">×</button>
         </div>
-        <div className="px-4 py-4 space-y-4">
+        <div className="px-4 py-4 space-y-4 overflow-y-auto min-w-0">
           <div>
             <label className="block text-xs font-medium mb-1">Gemini Model</label>
             <select value={model} onChange={e => setModel(e.target.value as GeminiModel)} className={inputCls}>
@@ -108,10 +110,18 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
               </div>
             )}
           </div>
+
+          {/* Runtime stats (collapsible, read-only) */}
+          <div className="border-t border-neutral-200 dark:border-neutral-700 pt-3">
+            <button onClick={() => setShowStats(v => !v)} className="text-xs font-medium text-blue-500 hover:text-blue-600">
+              {showStats ? '▲ Hide' : '▼ Show'} session stats
+            </button>
+            {showStats && <StatsPanel />}
+          </div>
         </div>
-        <div className="flex gap-2 px-4 py-3 border-t border-neutral-200 dark:border-neutral-700 sticky bottom-0 bg-white dark:bg-neutral-900">
-          <button onClick={onClose} className="flex-1 text-xs py-1.5 border border-neutral-300 dark:border-neutral-600 rounded hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors">Cancel</button>
-          <button onClick={handleSave} disabled={saving} className="flex-1 text-xs py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 transition-colors">{saving ? 'Saving...' : 'Save'}</button>
+        <div className="flex gap-2 px-4 py-3 border-t border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shrink-0">
+          <button onClick={onClose} className="flex-1 text-center text-xs py-1.5 border border-neutral-300 dark:border-neutral-600 rounded hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="flex-1 text-center text-xs py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 transition-colors">{saving ? 'Saving...' : 'Save'}</button>
         </div>
       </div>
     </div>
