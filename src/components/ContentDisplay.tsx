@@ -1,5 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import type { LearningContent } from '../types';
+import { isSolutionExemptAction } from '../services/solution-filter';
+import ThinkingIndicator from './ThinkingIndicator';
+import { thinkingLabel } from './thinking-labels';
 
 interface ContentDisplayProps {
   content: LearningContent[];
@@ -151,9 +154,13 @@ const UserBubble: React.FC<{ text: string }> = ({ text }) => (
 const ContentCard: React.FC<{
   item: LearningContent;
   isStreaming: boolean;
+  /** B1: this card is a non-exempt action mid-stream — show the gated
+   *  "thinking" placeholder instead of streamed tokens (content is withheld
+   *  until the filter has run). */
+  isGated: boolean;
   onSaveToProgress?: (item: LearningContent) => void;
   isSaved?: boolean;
-}> = ({ item, isStreaming, onSaveToProgress, isSaved }) => {
+}> = ({ item, isStreaming, isGated, onSaveToProgress, isSaved }) => {
   const [expanded, setExpanded] = React.useState(true);
   const [copied, setCopied] = React.useState(false);
   const meta = TYPE_META[item.type];
@@ -178,7 +185,9 @@ const ContentCard: React.FC<{
           <span className="text-sm">{meta.icon}</span>
           <span className="text-[13px] font-semibold text-neutral-800 dark:text-neutral-100">{label}</span>
           {item.metadata?.hintLevel && <span className="text-[10px] bg-yellow-400/20 text-yellow-600 dark:text-yellow-400 px-1.5 rounded-full">Level {item.metadata.hintLevel}</span>}
-          {isStreaming && <span className="text-[10px] text-neutral-400 animate-pulse">generating…</span>}
+          {/* Live "generating…" tag only for actions that stream visibly (exempt
+              actions). Gated non-exempt cards show their own thinking label. */}
+          {isStreaming && !isGated && <span className="text-[10px] text-neutral-400 animate-pulse">generating…</span>}
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-neutral-400">{time}</span>
@@ -187,8 +196,14 @@ const ContentCard: React.FC<{
       </button>
       {expanded && (
         <div className="px-3 pb-2 min-w-0 break-words overflow-x-hidden">
-          {item.content ? renderContent(item.content) : <div className="h-4 bg-neutral-200 dark:bg-neutral-700 rounded animate-pulse" />}
-          {isStreaming && item.content && <span className="inline-block w-1 h-3 bg-neutral-400 animate-pulse ml-0.5" />}
+          {isGated
+            // B1: non-exempt action mid-stream — withhold tokens, show the
+            // animated action-aware "thinking" placeholder until the filter runs.
+            ? <ThinkingIndicator label={thinkingLabel(item.actionType, item.type === 'CHAT_MESSAGE')} />
+            : item.content
+              ? renderContent(item.content)
+              : <div className="h-4 bg-neutral-200 dark:bg-neutral-700 rounded animate-pulse" />}
+          {isStreaming && !isGated && item.content && <span className="inline-block w-1 h-3 bg-neutral-400 animate-pulse ml-0.5" />}
           {item.content && !isStreaming && (
             <div className="flex justify-end items-center gap-2 mt-1.5">
               {/* Save-to-progress: only offered on a finished Study Report card. */}
@@ -241,11 +256,27 @@ const ContentDisplay: React.FC<ContentDisplayProps> = ({ content, isLoading, str
 
   return (
     <div className="flex-1 min-w-0 overflow-x-hidden overflow-y-auto px-3 py-3">
-      {content.map(item =>
-        item.type === 'CHAT_MESSAGE' && item.actionType === 'CHECK_APPROACH' && item.metadata?.isUserQuery
-          ? <UserBubble key={item.id} text={item.content} />
-          : <ContentCard key={item.id} item={item} isStreaming={item.id === streamingId} onSaveToProgress={onSaveToProgress} isSaved={savedReportIds?.has(item.id)} />
-      )}
+      {content.map(item => {
+        if (item.type === 'CHAT_MESSAGE' && item.actionType === 'CHECK_APPROACH' && item.metadata?.isUserQuery) {
+          return <UserBubble key={item.id} text={item.content} />;
+        }
+        const isStreaming = item.id === streamingId;
+        // B1 pre-display gate: while a NON-EXEMPT action streams, its tokens are
+        // withheld (accumulated in App, not pushed to `content`), so this card
+        // shows the "thinking" placeholder instead of partial, unfiltered text.
+        // Exempt actions stream live, so they are never gated.
+        const isGated = isStreaming && !isSolutionExemptAction(item.actionType);
+        return (
+          <ContentCard
+            key={item.id}
+            item={item}
+            isStreaming={isStreaming}
+            isGated={isGated}
+            onSaveToProgress={onSaveToProgress}
+            isSaved={savedReportIds?.has(item.id)}
+          />
+        );
+      })}
       <div ref={bottomRef} />
     </div>
   );
