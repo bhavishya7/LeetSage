@@ -1,9 +1,13 @@
 # LeetSage — Guardrail Hardening: Design
 
-> **Status: 📐 Planned — not yet built.** Design for the three bug fixes in
+> **Status: ✅ Built — implemented as designed.** Design for the three bug fixes in
 > [requirements.md](./requirements.md) (B1 pre-display gate, B2 direct-answer chat,
 > B3 filter blind spot). Same teaching format as the other design docs: each
-> section pairs a **DESIGN** decision with a **📚 SYSTEM-DESIGN LESSON**.
+> section pairs a **DESIGN** decision with a **📚 SYSTEM-DESIGN LESSON**. Built on
+> branch `feature/guardrail-hardening` (B1 via a `ThinkingIndicator` placeholder +
+> `streamLive` gate in `App.tsx`; B2 via `getChatSystemPrompt()`; B3 via a
+> folded-conditional detection path in `looksLikeFullPseudocode`, tuned against the
+> eval).
 >
 > Grounds against real code: `src/sidepanel/App.tsx` (the stream loop),
 > `src/services/prompts.ts` (prompts + `wrapUntrusted`), `src/services/llm-service.ts`

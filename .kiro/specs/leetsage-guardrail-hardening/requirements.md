@@ -1,9 +1,11 @@
 # LeetSage — Guardrail Hardening & Bug Registry: Requirements
 
-> **Status: 📐 Planned — not yet built.** A pre-launch hardening spec. It fixes a
-> set of guardrail/UX bugs found in real use, and it establishes a **standing bug
-> registry** (below) that future bugs append to, so bug fixes stay consolidated
-> and each one is guarded by a test/eval instead of silently regressing.
+> **Status: ✅ Built — B1, B2, B3 fixed and guarded.** A pre-launch hardening
+> spec. It fixes a set of guardrail/UX bugs found in real use, and it establishes
+> a **standing bug registry** (below) that future bugs append to, so bug fixes
+> stay consolidated and each one is guarded by a test/eval instead of silently
+> regressing. All three bugs are fixed, each backed by an automated guard; the
+> full suite (191 tests incl. the guardrail eval) is green.
 >
 > Companion: [design.md](./design.md) · [tasks.md](./tasks.md) ·
 > [../leetsage-structured-output/design.md](../leetsage-structured-output/design.md) ·
@@ -68,6 +70,30 @@ action produced it).
 > code/pseudocode. That prompt fix is deferred to the streamlining spec (see the
 > dependency note above). B3 here is about the **filter**, which must catch such a
 > leak no matter what produced it.
+
+### B4 — Free-form chat is blind to the user's editor code *(missing capability)* — 📝 deferred
+**Observed** (during B1's visual review, 2026-09-23): asking chat "what is the
+current time complexity" with a complete, Accepted solution in the editor returned
+"you didn't include your code in the prompt". **Root cause:** the `userQuery` path
+(`handleChatSubmit`) never calls `extractCurrentCode` — only the templated
+`CHECK_APPROACH`/`UNDERSTAND_SOLUTION`/`GENERATE_REPORT` actions send editor code.
+So chat literally cannot see the code and correctly says so. **Not a B2 regression**
+(B2 only removed the forced analogy, which worked). This is a distinct new bug —
+**deferred to a later session** (see registry row B4); it needs a call on whether
+code-bearing chat should be filter-exempt like the other code-analysis actions.
+
+### B5 — Heavy non-exempt actions feel slow behind the B1 gate *(perceived performance)* — 📝 deferred
+**Observed** (same review): `Concept` showed ~5–6s of "Thinking…" before revealing,
+while `Hint`/`Pattern` returned in ~1s. **Root cause:** B1's gate withholds the
+whole stream until complete, so the user now waits the FULL generation time that
+live streaming used to mask; `Concept` has the heaviest non-exempt prompt. The gate
+is behaving correctly (design §1 called out this trade) — this is a **perceived-
+performance** follow-up, **deferred** (see registry row B5).
+
+> B4 and B5 were surfaced by exercising the shipped B1 change — exactly the "get UI
+> changes eyeballed" step catching real issues. They are logged here (per the
+> standing-registry principle) and left for a later session rather than folded into
+> this spec, to keep this change scoped to B1–B3.
 
 ---
 
@@ -138,9 +164,11 @@ action produced it).
 
 | ID | Symptom | Root cause | Fix (req) | Guard | Status |
 |----|---------|-----------|-----------|-------|--------|
-| B1 | Flagged content visible before filter replaces it | Streams to view; filter runs post-stream | Pre-display gate for non-exempt actions (R1) | Test of the gate behavior | 📐 planned |
-| B2 | Chat forces irrelevant real-world analogy | `userQuery` uses `EXPLAIN_CONCEPT` prompt | Direct-answer chat prompt (R2) | Prompt-shape test | 📐 planned |
-| B3 | Compact folded-conditional pseudocode leaks through filter | `looksLikeFullPseudocode` threshold blind spot | Detect folded-conditional algorithms (R3) | New eval case(s) + unit test | 📐 planned |
+| B1 | Flagged content visible before filter replaces it | Streams to view; filter runs post-stream | Pre-display gate for non-exempt actions (R1) | `src/sidepanel/__tests__/predisplay-gate.test.ts` (gate contract) | ✅ fixed |
+| B2 | Chat forces irrelevant real-world analogy | `userQuery` uses `EXPLAIN_CONCEPT` prompt | Direct-answer chat prompt (R2) | `prompts.test.ts` — "direct-answer, no forced analogy (B2)" | ✅ fixed |
+| B3 | Compact folded-conditional pseudocode leaks through filter | `looksLikeFullPseudocode` threshold blind spot | Detect folded-conditional algorithms (R3) | Eval cases `pos-pseudo-binsearch-folded[-prose]` + `solution-filter.test.ts` | ✅ fixed |
+| B4 | Free-form chat can't answer questions about the user's own code (e.g. "what is the current time complexity" → "you didn't include your code") | The `userQuery` path in `handleChatSubmit` never extracts/sends the editor code — only the templated `CHECK_APPROACH`/`UNDERSTAND_SOLUTION`/`GENERATE_REPORT` actions call `extractCurrentCode`. Chat is blind to the editor. | Send the editor code with chat questions (opt-in or when the question references "my code"), fenced via `wrapUntrusted`; decide exempt-vs-filtered handling since chat may then legitimately discuss the user's solution | Test that the chat request includes editor code when present + a filter/gate decision test | 📝 planned |
+| B5 | Non-exempt actions with heavy prompts (esp. `Concept`) show 5–6s of "Thinking…" before reveal — feels frozen | B1's pre-display gate withholds the whole stream until complete, so the user now waits the FULL generation time (which live streaming used to mask). `Concept`'s prompt is the heaviest non-exempt one. | Reduce perceived wait: elapsed-time / staged placeholder copy, and/or trim `Concept`'s `max_tokens` / prompt heft so it generates faster. (Correctness of the gate is not in question — this is perceived-performance only.) | UX-level; a placeholder-state test if logic is added | 📝 planned |
 
 *(Append future bugs below this line as new rows.)*
 
