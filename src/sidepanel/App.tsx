@@ -309,6 +309,27 @@ const App: React.FC = () => {
       return;
     }
 
+    // B4: free-form chat used to be blind to the editor, so "what is my code's
+    // time complexity?" got "you didn't include your code". Read the current
+    // editor code and send it along (when non-empty) so chat can answer about
+    // the user's own work — like a tutor who can see their screen. Chat stays
+    // NON-EXEMPT (filtered): the model may analyze/quote short pieces, but a
+    // full-solution dump is still caught by filterResponse below.
+    // See .kiro/specs/leetsage-guardrail-hardening (B4).
+    let userCode: string | undefined;
+    let codeLanguage: string | undefined;
+    {
+      const tabId = await getActiveLeetCodeTabId();
+      if (tabId != null) {
+        const extracted = await extractCurrentCode(tabId);
+        if (extracted && extracted.code.trim().length > 0) {
+          userCode = extracted.code;
+          codeLanguage = extracted.language;
+        }
+        setHasCode(!!extracted && extracted.code.trim().length > 20);
+      }
+    }
+
     // User bubble
     const userMsg: LearningContent = {
       id: generateId(), type: 'CHAT_MESSAGE', actionType: 'CHECK_APPROACH', content: q,
@@ -334,7 +355,7 @@ const App: React.FC = () => {
         problemContext, actionType: 'EXPLAIN_CONCEPT', systemPrompt: '', userMessage: '',
         apiKey: settings.apiConfig.apiKey, model: settings.apiConfig.model,
         maxTokens: settings.guardrails.maxTokens, timeoutMs: settings.guardrails.requestTimeoutMs,
-        userQuery: q,
+        userQuery: q, userCode, codeLanguage,
         onUsage: (u) => { capturedUsage = u; },
       })) {
         full += chunk;
