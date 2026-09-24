@@ -94,6 +94,11 @@ Pick 2–4 depending on space. Swap in real numbers as soon as you have them
   reasserted after, backed by least-privilege (no tool access) and the output
   filter as the hard backstop — **verified on both sides by tests** (input framing
   pinned per action; an eval case proves a *successful* injection is still caught).
+- **Instrumented client-side runtime metrics** (per-request latency, tokens, and
+  estimated cost) with pure, unit-tested p50/p95 aggregation and bounded local
+  storage — measuring **p50 ~1.6 s / p95 ~3.0 s latency and ~1,459 tokens (~$0.00025)
+  per request** (self-collected, single model) to reason about latency and cost with
+  numbers, not adjectives.
 - Made and documented core **AI system-design tradeoffs** (bring-your-own-key vs.
   managed backend; client-only vs. server) with a written decision log and an
   articulated scaling path.
@@ -128,9 +133,9 @@ Only list what you can defend. Currently truthful for LeetSage:
 `unit testing (Vitest)` · `Chrome Extension (Manifest V3)` ·
 `React` · `TypeScript` · `Tailwind CSS` · `Vite` · `client-side architecture` ·
 `cost optimization / rate limiting` · `AI-assisted development (custom agents)` ·
-`prompt-injection mitigation (OWASP LLM #1)`
+`prompt-injection mitigation (OWASP LLM #1)` · `production metrics / monitoring`
 
-Add once built: `RAG` · `production metrics / monitoring`.
+Add once built: `RAG`.
 
 ---
 
@@ -143,19 +148,21 @@ ordered by resume-value-per-effort. Each maps to
 | Gap | Why it matters on a resume | Fix | Effort |
 |---|---|---|---|
 | ~~**No evals**~~ ✅ **shipped (2026-09-15)** | "I wrote evals for my LLM feature" is a top 2026 signal; it also proves the guardrail works | Labeled guardrail eval (16 cases, 8 leak / 8 safe) scoring the solution-filter as a release gate: **100% catch / 0% false-positive / 100% precision**; the eval **caught 2 real leak paths** (a compact complete function; loop-embedded-conditional pseudocode) that were then fixed. Offline **LLM-as-judge** scaffold included (injectable, no live key). *(Caveat: dataset is author-generated — a strong regression gate, but overstates real-world recall until real captured responses are added.)* | ~~Medium~~ done |
-| **No quantified impact** *(partial)* | Resumes reward numbers; you currently have none | **Test/eval numbers now real** (134 tests; filter catch-rate/FP-rate above). Still missing runtime metrics: p50/p95 latency, tokens/request, requests handled | Low–Med |
+| ~~**No quantified impact**~~ ✅ **closed (2026-09-23)** | Resumes reward numbers | **Eval numbers** (100% catch / 0% FP; 167 tests) **+ runtime metrics now real**: instrumented per-request latency/tokens/cost client-side — self-run **p50 1579 ms / p95 2982 ms latency, 1459 avg tokens/request, ~$0.000252 est. cost/request** ($0.002271 over 9 requests). *(Caveat: self-collected, single model `gemini-3.5-flash-lite`, small n=9 sample — an order-of-magnitude signal, not a benchmark.)* | ~~Low–Med~~ done |
 | ~~**No automated tests**~~ ✅ **shipped (2026-09-15)** | Signals engineering rigor | **Vitest** on the pure modules: solution-filter, structured-parser, session-digest, progress-analytics, progress-records, rate-limiter, stuck-timer, URL normalization — **134 tests across 10 files**, plus the eval harness. | ~~Low–Med~~ done |
 | ~~**No structured output**~~ ✅ **shipped (2026-09-03)** | Named modern-LLM-I/O skill | Hybrid prose + `data` response for the 2 report-feeding actions, tolerant parse w/ prose-only fallback, deterministic session digest → session-aware report. Strong architecture story. *(Caveats: 2 actions only; no unit tests yet.)* | ~~Medium~~ done |
 | **Broad permissions** | Reviewers/users notice; weakens "security-minded" claim | Scope `host_permissions` to leetcode.com (prototyped + reverted; deferred until progress export lands) | Low |
 | **RAG/agentic element** *(partial)* | Both are headline 2026 keywords | Progress-tracking **Phase A–C shipped** (persistent records + "My Progress" + weakest-link analytics, built on the structured contract) + a custom Kiro **project-historian agent**; RAG cheatsheet + verified-submission (Phase D) records still ahead | Med–High |
 
-**The single highest-leverage move — now done (2026-09-15):** the **eval suite for
+**The single highest-leverage move — done (2026-09-15):** the **eval suite for
 the guardrail** is built. It hardened the core product promise (caught and fixed
 two real leak paths), unlocked the strongest resume bullet ("designed evals that
 measure an AI safety constraint"), and produced the first defensible numbers.
-**Next highest-leverage:** runtime metrics (latency, tokens/request) to finish the
-"quantified impact" gap, and feeding **real captured Gemini responses** into the
-eval set so the catch-rate reflects real-world recall, not just the authored set.
+**Runtime metrics — done (2026-09-23):** per-request latency/tokens/cost are now
+instrumented client-side (p50/p95 latency, avg tokens, est. cost), closing the
+"quantified impact" gap. **Next highest-leverage:** feeding **real captured Gemini
+responses** into the eval set so the catch-rate reflects real-world recall, not just
+the authored set (plus a validated, non-mock LLM-as-judge).
 
 > **Recent progress (keep this honest as it ships):** progress-tracking MVP
 > shipped; "Understand solution" correctness bug fixed; **structured output
@@ -167,26 +174,42 @@ eval set so the catch-rate reflects real-world recall, not just the authored set
 > tests shipped** (2026-09-15 — Vitest across the pure modules, 134 tests, plus a
 > labeled guardrail eval that caught and fixed two real solution-leak paths), then
 > **wired into CI** (2026-09-15 follow-up — GitHub Actions runs lint/test/build on
-> every push/PR, making the eval an automatic release gate; pushed, first run green).
-> See
+> every push/PR, making the eval an automatic release gate; pushed, first run green);
+> and **runtime metrics shipped** (2026-09-23 — per-request latency/tokens/cost
+> instrumented client-side, aggregated with pure p50/p95 math; test suite 149 → 167;
+> on the `feature/metrics` branch, not yet pushed) closing the "quantified impact"
+> gap. See
 > [DEV_JOURNAL.md](./DEV_JOURNAL.md) for the full narrative. The gaps above stay
-> listed until the work is actually *built*, not just designed — **runtime metrics**
-> (latency/cost) are now the top unmet gap.
+> listed until the work is actually *built*, not just designed — the top unmet
+> resume gap is now **real captured-response eval cases + a validated LLM-as-judge**.
 
 ---
 
-## Numbers to start capturing now
+## Numbers captured (and still to capture)
 
-You can't quote impact you never measured. Even rough, self-collected numbers help:
+You can't quote impact you never measured. Even rough, self-collected numbers help.
+**Captured so far** (keep the honesty caveats when quoting):
 
-- Requests served / problems coached (your own usage counts).
-- Solution-filter **catch rate** and false-positive rate (needs the eval set).
-- Median + p95 **response latency**.
-- Average **tokens per request** and estimated **cost per request** (even though
-  it's the user's free quota — the math shows cost-awareness).
+- ✅ Solution-filter **catch rate 100% / false-positive rate 0% / precision 100%**
+  on the 16-case labeled set (2026-09-15). *Caveat: author-generated dataset — a
+  strong regression gate, optimistic vs. real-world recall until real captured
+  responses are added.*
+- ✅ **p50 latency 1579 ms, p95 latency 2982 ms** (2026-09-23 runtime metrics).
+- ✅ **Avg 1459 tokens/request**; **est. $0.000252/request**, **$0.002271 total**
+  over the sample. *Caveat: self-collected, single model `gemini-3.5-flash-lite`,
+  small n=9 sample — an order-of-magnitude signal, not a benchmark. Cost is an
+  estimate from public per-token pricing (BYOK / free quota), not a bill.*
+- ✅ **167 automated tests** across the pure modules + the guardrail eval.
+
+**Still to capture:**
+
+- Requests served / problems coached (your own usage counts) — the metrics store now
+  keeps a lifetime `totalRequests`, so a larger real-usage number can be read off it.
 - Hint-progression adherence (does level 1 stay conceptual?).
+- A larger metrics sample (n=9 today) and a per-model breakdown (deferred).
 
-Log these as you build the eval suite, then backfill the `[X]` placeholders above.
+Log these as you keep using the extension, then update the numbers above as the
+sample grows.
 
 ---
 

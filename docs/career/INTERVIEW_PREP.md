@@ -229,6 +229,48 @@ price-per-million, times expected request volume.
 
 ---
 
+### Q5a. "You mentioned cost and latency — do you actually measure them?" (runtime metrics) ⭐ quantified impact
+
+> The natural follow-up to Q5. It turns "I care about cost/latency" into "here are
+> the numbers and how I captured them."
+
+**Short answer.** Yes — I instrumented per-request runtime metrics, entirely
+client-side (no backend, same posture as the usage counter). Each AI request records
+**wall-clock latency**, **prompt/completion tokens** when the API exposes usage, and
+a **derived estimated cost** from a cited price table. The numbers from my own runs:
+**p50 latency ~1.6 s, p95 ~3.0 s, ~1,459 tokens/request, ~$0.00025 est. per request.**
+
+**Deeper.** Three things I'd want an interviewer to notice.
+(1) **The capture was not obvious and I verified rather than assumed.** The
+non-streaming path already parsed the OpenAI-compatible `usage` object, but the
+*streaming* path — the one the UI actually uses — yielded only content and never saw
+usage. Reading the real request path caught that; if I'd assumed, I'd have shipped a
+**latency-only** metric and silently missed the headline tokens/cost number. The fix
+was to set `stream_options: { include_usage: true }` and surface the final usage-only
+chunk via an `onUsage` callback, keeping the streaming contract intact. I verified at
+runtime that the Gemini endpoint honors it — and if it ever doesn't, the sample
+records `tokensCaptured: false` and the readout says "not captured" instead of
+fabricating a number.
+(2) **The aggregation is pure and unit-tested.** `percentile()` (interpolated
+p50/p95) and `summarize()` are I/O-free and covered by tests; storage is bounded
+by design (a 200-sample rolling window for the distribution + lifetime running
+aggregates that survive eviction — no unbounded history). And the metrics write is
+**best-effort**: a failure is swallowed so monitoring can never break the coaching
+response or double-count the rate limiter.
+(3) **I kept the numbers honest.** Averages divide by `tokensCapturedRequests`, not
+total requests, so a token-capture gap can't deflate the mean. The cost is an
+*estimate* from public per-token pricing kept in one cited, trivially-updatable table
+— I say "cost-awareness," not "a bill," because it's BYOK on a free quota. And the
+sample is small (n=9, one model), so I present it as an order-of-magnitude signal,
+not a benchmark.
+
+**Signal.** Production monitoring mindset + intellectual honesty about
+self-collected numbers — and "verify, don't assume" applied to reading the actual
+code path. Live cost math still lands here too (tokens × price-per-million ×
+volume). See [DEV_JOURNAL.md](./DEV_JOURNAL.md) (2026-09-23).
+
+---
+
 ### Q6. "Tell me about a hard bug." (Manifest V3 depth)
 
 **Short answer.** MV3 replaced persistent background pages with service workers

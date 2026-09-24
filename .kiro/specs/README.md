@@ -28,9 +28,9 @@ stated in the doc. Current state:
 - **Full trilogy** (requirements + design + tasks): `leetsage-structured-output`,
   `leetsage-progress-tracking` — the two flagships (requirements + tasks
   **backfilled 2026-09-21** from the shipped code to complete the record).
-- **Design-only (documented as such):** `leetsage-prompt-injection` — small,
-  well-scoped; the design.md states requirements/tasks were folded in given the
-  narrow scope.
+- **Design-only (documented as such):** `leetsage-prompt-injection`,
+  `leetsage-metrics` — small, well-scoped; each design.md states requirements/tasks
+  were folded in given the narrow scope.
 - **Vision/requirements-style:** the `📝 Planned` specs below (design/tasks come
   when they're built).
 
@@ -42,6 +42,7 @@ stated in the doc. Current state:
 | [`leetsage-progress-tracking`](./leetsage-progress-tracking/) | ✅ Phase A–C / 📐 Phase D | Study-notes & progress tracking. **Phases A–C shipped** — Phase A (the "Generate report" action + copy button), then **Phase B/C built 2026-09-04** (merged to main via PR #11): persistent per-problem `ProblemRecord`s (`record_{slug}` + a light `progress_index`, schema-migrated on read), a full-panel "My Progress" view (list → detail with attempts timeline, copy/delete, "Copy all"), and a deterministic cross-problem analytics pass ("weakest link" / revisit list, insights gated behind ≥3 problems + a confidence badge). `GENERATE_REPORT` became a structured producer so records populate reliably. **Phase D designed, not built** — auto-save on an Accepted submission (so an attempt's `outcome: 'solved'` is *verified*, not inferred; the attempt count is deferred from the UI until then). |
 | [`leetsage-structured-output`](./leetsage-structured-output/) | ✅ **Shipped** | A hybrid prose + structured `data` response so the report, records, analytics, and evals consume one machine-readable contract instead of re-parsing prose. **Shipped 2026-09-03** for the 2 report-feeding actions (`CHECK_APPROACH`, `UNDERSTAND_SOLUTION`); the report now consumes a deterministic session digest built from it. Caveats: only those 2 actions are structured; prose↔data consistency is a prompt instruction, not enforced. (The parser now has unit tests as of 2026-09-15 — the prose-only fallback is observed against malformed/partial/non-object JSON, not just code-read.) Unblocks progress-tracking Phase B. |
 | [`leetsage-prompt-injection`](./leetsage-prompt-injection/) | ✅ **Built** (on branch) | Prompt-injection hardening (OWASP LLM #1): untrusted LeetCode problem text + editor code are now fenced as DATA via a `wrapUntrusted()` choke point in `prompts.ts` (all 9 actions + the free-form `userQuery` path), with the guardrail **reasserted after** the untrusted block; the deterministic output solution-filter stays the hard backstop (defense-in-depth). **Built 2026-09-21** on branch `feature/prompt-injection-hardening` (commit `667b473`) — tested both sides (`prompts.test.ts` pins the framing; new `injection-leak` eval cases prove the filter still catches a *successful* injection), `npm.cmd run test` 134 → 149, build clean. **Not yet merged to main.** A blocklist input scanner was considered and deliberately rejected; an LLM-as-judge semantic output check (scaffold in `src/evals/llm-judge.ts`) is the named-but-unbuilt next step. Design doc: the spec's [`design.md`](./leetsage-prompt-injection/design.md). |
+| [`leetsage-metrics`](./leetsage-metrics/) | ✅ **Built** (on branch) | Runtime metrics instrumentation: per-request **latency / tokens / est. cost** captured fully client-side (no backend), aggregated by pure unit-tested p50/p95 math over a bounded 200-sample rolling window + lifetime aggregates, surfaced in a read-only "Session stats" readout in the settings modal. **Built 2026-09-23** on branch `feature/metrics` (`6012265` + `f980103`) — **design-only spec** (requirements/tasks folded in; scope mirrors the existing usage-counter pattern). Key discovery: the streaming path never captured tokens, fixed via `stream_options.include_usage` + an `onUsage` callback (verified the Gemini endpoint honors it; honest `tokensCaptured:false` fallback otherwise). Self-run numbers: p50 1579 ms / p95 2982 ms, 1459 avg tokens/request, ~$0.000252/request over 9 requests (self-collected, single model — an estimate, not a bill). `npm.cmd run test` 149 → 167. **Not yet pushed / merged.** |
 | [`leetsage-cheatsheet`](./leetsage-cheatsheet/) | 📝 **Planned** | Static, zero-token language cheatsheets (Python/Java/C++) + Big-O chart, stored in the extension. Candidate for a lightweight local RAG later. |
 | [`leetsage-pseudocode-mode`](./leetsage-pseudocode-mode/) | 📝 **Planned** | A lightweight "plan your approach" playground with limited, token-conscious feedback. |
 | [`leetsage-phase2-struggle-first`](./leetsage-phase2-struggle-first/) | 📝 **Planned** | Deeper hints unlock only after the user explains their reasoning — the coaching-identity gate. |
@@ -79,8 +80,15 @@ stated in the doc. Current state:
   injection); `npm.cmd run test` 134 → 149. See
   [`../../docs/career/DEV_JOURNAL.md`](../../docs/career/DEV_JOURNAL.md) (2026-09-21)
   and DESIGN_DECISIONS ADR-004 (2026-09-21 update).
-- **Next to build:** runtime metrics (latency/tokens/cost — the last "quantified
-  impact" gap), then the deferred eval follow-up (real captured responses + a
+- **Runtime metrics — built 2026-09-23** (`leetsage-metrics`, branch
+  `feature/metrics`, `6012265` + `f980103`; **not yet pushed**): per-request
+  latency/tokens/cost captured fully client-side, aggregated by pure unit-tested
+  p50/p95 math over a bounded rolling window + lifetime aggregates, surfaced in a
+  read-only "Session stats" readout. Closed the "quantified impact" gap (self-run:
+  p50 1579 ms / p95 2982 ms, 1459 avg tokens/request, ~$0.000252/request over 9
+  requests). `npm.cmd run test` 149 → 167. See
+  [`../../docs/career/DEV_JOURNAL.md`](../../docs/career/DEV_JOURNAL.md) (2026-09-23).
+- **Next to build:** the deferred eval follow-up (real captured responses + a
   validated LLM-as-judge — the injection work names this as its next step too), then
   progress-tracking Phase D (verified submissions) and export-to-file.
 - **Don't trust for current state:** `ai-learning-assistant` (historical).

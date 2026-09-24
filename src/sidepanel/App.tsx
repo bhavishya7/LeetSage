@@ -10,6 +10,7 @@ import { getSettings, saveSettings } from '../services/storage';
 import { streamLLMRequest } from '../services/llm-service';
 import { filterResponse } from '../services/solution-filter';
 import { checkRateLimit, recordRequest, getUsageToday } from '../services/rate-limiter';
+import { recordMetric } from '../services/metrics-store';
 import { extractCurrentCode } from '../services/code-extractor';
 import { parseStructuredResponse, stripDataBlockForDisplay } from '../services/structured-parser';
 import { buildSessionDigest, extractSessionFacts, buildRecordProjection } from '../services/session-digest';
@@ -232,11 +233,16 @@ const App: React.FC = () => {
       setUsageCount(usage.count);
 
       let fullContent = '';
+      // Runtime metrics: wall-clock latency around the call + token usage if the
+      // stream surfaces it. Recorded best-effort after the stream (see below).
+      const startedAt = performance.now();
+      let capturedUsage: { promptTokens: number; completionTokens: number } | undefined;
       for await (const chunk of streamLLMRequest({
         problemContext, actionType, systemPrompt: '', userMessage: '',
         apiKey: settings.apiConfig.apiKey, model: settings.apiConfig.model,
         maxTokens: settings.guardrails.maxTokens, timeoutMs: settings.guardrails.requestTimeoutMs,
         previousHintLevel: progress?.hintLevel ?? 0, userApproach, userCode, codeLanguage, sessionDigest,
+        onUsage: (u) => { capturedUsage = u; },
       })) {
         fullContent += chunk;
         // For structured actions, hide the trailing data block while streaming
@@ -245,6 +251,13 @@ const App: React.FC = () => {
         const display = stripDataBlockForDisplay(fullContent, actionType);
         setLearningContent(prev => prev.map(c => c.id === contentId ? { ...c, content: display } : c));
       }
+      // Record runtime metrics (best-effort — never let a metrics write break the
+      // response or the rate-limit accounting; design R7).
+      void recordMetric({
+        model: settings.apiConfig.model,
+        latencyMs: performance.now() - startedAt,
+        usage: capturedUsage,
+      }).catch(() => { /* metrics are non-critical */ });
       // Split prose from the machine-readable data block, then filter the prose.
       // structured?.data (if any) is stored on metadata for the report/records/
       // analytics to consume — the prose is never re-parsed for facts (§2, §4).
@@ -302,15 +315,24 @@ const App: React.FC = () => {
       setUsageCount(usage.count);
 
       let full = '';
+      const startedAt = performance.now();
+      let capturedUsage: { promptTokens: number; completionTokens: number } | undefined;
       for await (const chunk of streamLLMRequest({
         problemContext, actionType: 'EXPLAIN_CONCEPT', systemPrompt: '', userMessage: '',
         apiKey: settings.apiConfig.apiKey, model: settings.apiConfig.model,
         maxTokens: settings.guardrails.maxTokens, timeoutMs: settings.guardrails.requestTimeoutMs,
         userQuery: q,
+        onUsage: (u) => { capturedUsage = u; },
       })) {
         full += chunk;
         setLearningContent(prev => prev.map(c => c.id === respId ? { ...c, content: full } : c));
       }
+      // Runtime metrics (best-effort; design R7).
+      void recordMetric({
+        model: settings.apiConfig.model,
+        latencyMs: performance.now() - startedAt,
+        usage: capturedUsage,
+      }).catch(() => { /* metrics are non-critical */ });
       const { filteredContent } = filterResponse(full, 'EXPLAIN_CONCEPT');
       const finalResp = { ...respMsg, content: filteredContent };
       setLearningContent(prev => prev.map(c => c.id === respId ? finalResp : c));

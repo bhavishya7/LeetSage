@@ -814,6 +814,107 @@ working set — `docs/resume-compilation/`, a docs-only commit of files previous
 untracked on main). Both on branch `feature/prompt-injection-hardening` (off
 `main`@`97c8f28`) — **not yet merged to main.**
 
+## 2026-09-23 — Runtime metrics: per-request latency, tokens & est. cost (the last "quantified impact" gap)
+
+**What.** Instrumented lightweight, fully client-side runtime metrics on every AI
+request and surfaced the aggregated numbers in a small read-only "Session stats"
+readout. Per request it captures **wall-clock latency** (`performance.now()` around
+the streamed call), **prompt/completion tokens** when the API exposes usage, and a
+**derived estimated USD cost** from a single cited price table. Aggregation is done
+by pure, unit-tested functions — `percentile()` (interpolated p50/p95) and
+`summarize()` in `metrics-aggregate.ts`, `estimateCostUsd()` + the
+`GEMINI_PRICING_USD_PER_1M` table in `metrics-pricing.ts`. State persists in one
+`chrome.storage.local` key (`metrics_v1`) as a **bounded 200-sample rolling window**
+(for the percentile distribution) plus **lifetime running aggregates** that survive
+window eviction; `recordMetric()` is **best-effort** (callers swallow failures so a
+metrics write can never break a coaching response or double-count the rate limiter).
+The readout is a collapsible "Show session stats" section in the settings modal
+(mirroring the existing "Show usage limits" affordance). Wrote the design as a
+**design-only spec** (`.kiro/specs/leetsage-metrics/design.md`, requirements + tasks
+folded in with the rationale stated at the top). On branch `feature/metrics` (off
+`main`@`dcc6fe1`), two commits, **not pushed** — the developer's call.
+**Why.** Closes the resume "quantified impact" gap (LEARNING_ROADMAP item #3): the
+guardrail eval already gave the *quality* numbers (catch / false-positive rate);
+this gives the *runtime* numbers — p50/p95 latency, avg tokens/request, est.
+cost/request. It also adds a production-monitoring / cost-awareness signal ("I
+instrument what I ship and reason about latency and cost"). No backend — everything
+local, mirroring the existing usage-counter pattern (`storage.ts` / `rate-limiter.ts`).
+**What broke / the hard part.** No dead-end bug this time; the value was in two
+verified discoveries and one honesty call.
+(1) ⭐ **The streaming path — the one the UI actually uses — never captured tokens.**
+Reading the actual request path (not assuming) revealed that `sendLLMRequest`
+(non-streaming) already parsed the OpenAI-compatible `usage` object but its callers
+discarded it, while `streamLLMRequest` (what `App.tsx` uses for every action and the
+chat box) yielded **only content chunks** and never requested or read usage. An
+assumption-driven implementation would have silently recorded **latency-only** and
+quietly missed the headline tokens/cost number.
+(2) **Pricing honesty.** The public per-token rates were cleanest for the
+`gemini-2.5-*` tier ($0.10/$0.40 per 1M lite; $0.30/$2.50 flash) at retrieval time,
+but LeetSage's model IDs are `gemini-3.5-*` — the `3.5` rates weren't cleanly
+corroborated across sources.
+(3) **Averages could be silently deflated** if token/cost means divided by total
+requests while some requests never captured tokens.
+**How solved.**
+(1) Enabled `stream_options: { include_usage: true }` on the streaming request body
+and surfaced the final usage-only chunk (empty `choices`, populated `usage`, emitted
+right before `[DONE]`) via an optional **`onUsage` callback** on `LLMRequest` —
+keeping the generator's `string` yield contract intact and opt-in per call site.
+**Verified at runtime** that the OpenAI-compatible Gemini endpoint *does* honor
+`include_usage`, so real token/cost numbers are captured. Built an honest fallback
+regardless: if usage is ever absent the sample records `tokensCaptured: false` and
+the readout says "not captured" rather than fabricating a count (R2).
+(2) Kept the price table in **one clearly-labeled, source-cited place**
+(`metrics-pricing.ts`, retrieved 2026-09-23) with a written caveat that it's an
+**estimate basis, not a bill** (BYOK / free quota), trivially updatable when the
+exact 3.5 rates are confirmed.
+(3) Token/cost averages divide by `tokensCapturedRequests`, **not** `totalRequests`,
+so the streaming-usage gap can't deflate the average.
+Also — the metrics UI change surfaced **two pre-existing latent CSS bugs** in the
+settings modal that only appeared once the panel grew taller: the footer
+(Cancel/Save) used `sticky bottom-0` inside a rounded, scrolling container so the
+rounded corners **clipped it** (reworked into a proper flex column — `shrink-0`
+header/footer, scrollable body, `overflow-hidden` container), and the modal rendered
+**off-center** because the Gemini-model `<select>`'s long option labels forced an
+intrinsic min-width wider than the narrow side panel (added `min-w-0` to the shared
+input class + containers so inputs shrink to fit; centered the button labels). Caught
+via the mandatory "user eyeballs the built extension before commit" visual-review
+gate — not by assuming a green build meant it looked right. Verified: **test suite
+149 → 167** (18 new tests in `metrics-aggregate.test.ts` + `metrics-pricing.test.ts`),
+build clean, the Husky pre-commit hook (lint + test + build) passed on both commits.
+**Self-run numbers** (backfilled into RESUME/INTERVIEW_PREP, with the honesty
+caveats kept — self-collected, single model `gemini-3.5-flash-lite`, small sample of
+**9 requests**): **p50 latency 1579 ms, p95 2982 ms**; **avg 1459 tokens/request**;
+**est. $0.000252/request**, **$0.002271 total** over the 9 requests.
+**Interview angle.** ⭐ Two clean stories. **Production instrumentation & cost-
+awareness:** I instrument latency/tokens/cost on what I ship, aggregate with pure
+unit-tested percentile math, bound the storage (rolling window + lifetime
+aggregates), and isolate the metrics write so monitoring can never break the feature
+it observes — and I can do the cost math live (tokens × price-per-million). **"Verify,
+don't assume" (again):** reading the real request path caught that the streaming
+code never captured tokens — the same discipline as the `gemini-2.5-*` model-name
+404 — so I fixed the capture (`include_usage` + `onUsage`) rather than shipping a
+latency-only metric and missing the headline number; and I kept the pricing honest
+(cited estimate basis, not a bill) and the average un-deflatable (divide by
+`tokensCapturedRequests`). Supporting signal: the visual-review gate caught two
+latent CSS bugs a compile check never would.
+**Caveats (not overclaimed).** The numbers are **self-measured** — the developer's
+own 9 runs on one model — a real order-of-magnitude signal, not a benchmark; say so
+when quoting them. Token capture depends on the endpoint honoring `include_usage`
+(verified today; the `tokensCaptured:false` fallback covers regressions). The price
+table is an **estimate** (2.5-tier rates as a proxy for 3.5 IDs), isolated to one
+cited table with a written caveat. **Consciously deferred (designed-not-built):**
+per-model metric breakdown, success/error-rate capture (only *successful* requests
+are timed), and a "reset stats" button — all scope-creep, left out.
+**Commits.** `6012265` (feat(metrics): instrument per-request latency, tokens, and
+est. cost — the design spec, new types `RequestMetricSample`/`MetricsState`/
+`MetricsSummary` + `onUsage` on `LLMRequest`, `metrics-pricing.ts`,
+`metrics-aggregate.ts`, `metrics-store.ts`, the `include_usage`/`onUsage` wiring in
+`llm-service.ts`, the capture points in `App.tsx`, and the two Vitest files),
+`f980103` (feat(ui): session-stats readout + settings-modal layout fixes —
+`StatsPanel.tsx` + the collapsible section in `SettingsModal.tsx`, plus the
+footer-clipping and off-center-modal fixes) — both on branch `feature/metrics` (off
+`main`@`dcc6fe1`), **not pushed / not merged.**
+
 ---
 
 ## Next up (see [LEARNING_ROADMAP.md](./LEARNING_ROADMAP.md))
@@ -828,9 +929,12 @@ untracked on main). Both on branch `feature/prompt-injection-hardening` (off
 3. ~~**Evals + tests + metrics**~~ — **tests + eval DONE (2026-09-15)**: Vitest
    across the pure modules (134 tests / 10 files) + a labeled guardrail eval scored
    as a release gate (100% catch / 0% FP after it caught & fixed 2 real leak paths),
-   on the `feature/evals-and-tests` branch (pushed; CI green). The **metrics** slice is still
-   open — runtime numbers (p50/p95 latency, tokens/request, requests handled) are now
-   the top unmet "quantified impact" gap.
+   on the `feature/evals-and-tests` branch (pushed; CI green). **Metrics DONE
+   (2026-09-23)** — runtime numbers (p50 1579 ms / p95 2982 ms latency, 1459 avg
+   tokens/request, ~$0.000252 est. cost/request over a 9-request self-run) captured
+   client-side on branch `feature/metrics` (not pushed). The "quantified impact" gap
+   is now closed; the deferred remainder is real captured-Gemini eval cases + a
+   validated LLM-as-judge.
 4. ~~**Wiring the tests into a pre-commit hook / CI** so the eval becomes an
    automatic release gate~~ — **DONE (2026-09-15 follow-up)**: GitHub Actions CI
    (`npm ci` → lint → test → build on every push/PR) + a Husky pre-commit hook, on

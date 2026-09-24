@@ -95,6 +95,12 @@ export async function* streamLLMRequest(request: LLMRequest): AsyncGenerator<str
         max_tokens: maxTokens,
         temperature: 0.7,
         stream: true,
+        // Ask the OpenAI-compatible endpoint to emit a final usage-only chunk
+        // (empty `choices`, populated `usage`) right before [DONE]. This is how
+        // we get token counts on the streaming path for the metrics
+        // instrumentation. Best-effort: if the endpoint ignores it, onUsage
+        // simply never fires and metrics record the request as tokens-absent.
+        stream_options: { include_usage: true },
       }),
       signal: controller.signal,
     });
@@ -110,7 +116,17 @@ export async function* streamLLMRequest(request: LLMRequest): AsyncGenerator<str
         if (!line.startsWith('data: ')) continue;
         const data = line.slice(6).trim();
         if (data === '[DONE]') return;
-        try { const parsed = JSON.parse(data); const chunk = parsed.choices?.[0]?.delta?.content; if (chunk) yield chunk; } catch { /* skip malformed chunk */ }
+        try {
+          const parsed = JSON.parse(data);
+          const chunk = parsed.choices?.[0]?.delta?.content;
+          if (chunk) yield chunk;
+          // The usage-only chunk carries no content; surface it once via the
+          // optional callback. Guarded (untrusted external boundary).
+          const u = parsed.usage;
+          if (u && typeof u.prompt_tokens === 'number' && typeof u.completion_tokens === 'number') {
+            request.onUsage?.({ promptTokens: u.prompt_tokens, completionTokens: u.completion_tokens });
+          }
+        } catch { /* skip malformed chunk */ }
       }
     }
   } finally { clearTimeout(timeoutId); }

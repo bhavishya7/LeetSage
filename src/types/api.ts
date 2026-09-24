@@ -29,6 +29,15 @@ export interface LLMRequest {
    * did (see session-digest.ts). Ignored by other actions.
    */
   sessionDigest?: string;
+  /**
+   * Optional callback invoked once with token usage if the API surfaces it.
+   * On the streaming path this fires when the final usage-only chunk arrives
+   * (requires `stream_options.include_usage`); it may never fire if the
+   * endpoint doesn't honor it — callers must treat usage as best-effort. Used
+   * by the metrics instrumentation (see services/metrics-store.ts). Ignored if
+   * omitted.
+   */
+  onUsage?: (usage: { promptTokens: number; completionTokens: number }) => void;
 }
 
 export interface LLMResponse {
@@ -85,6 +94,52 @@ export interface UsageState {
   date: string;             // YYYY-MM-DD (local)
   count: number;            // requests made today
   recentTimestamps: number[]; // epoch ms of recent requests (last ~60s)
+}
+
+/**
+ * A single captured AI request — the rolling-window sample for runtime metrics
+ * (latency / tokens / est. cost). All local; never leaves the browser.
+ */
+export interface RequestMetricSample {
+  ts: number;                 // epoch ms when recorded
+  model: GeminiModel;
+  latencyMs: number;          // wall-clock around the call
+  promptTokens?: number;      // absent when usage unavailable (streaming w/o include_usage)
+  completionTokens?: number;
+  estCostUsd?: number;        // derived; absent when tokens absent
+  tokensCaptured: boolean;    // explicit honesty flag: was token usage available?
+}
+
+/**
+ * Persisted metrics state (one chrome.storage.local key). Bounded: `samples`
+ * is a capped rolling window (for percentile math) and `lifetime` holds running
+ * aggregates that survive window eviction (so totals stay truthful without
+ * keeping unbounded history).
+ */
+export interface MetricsState {
+  version: 1;
+  samples: RequestMetricSample[];
+  lifetime: {
+    totalRequests: number;
+    tokensCapturedRequests: number; // denominator for token/cost averages
+    totalPromptTokens: number;
+    totalCompletionTokens: number;
+    totalEstCostUsd: number;
+  };
+}
+
+/** Aggregated, display-ready metrics computed by the pure summarize() fn. */
+export interface MetricsSummary {
+  totalRequests: number;        // lifetime
+  windowSize: number;           // samples currently in the rolling window
+  p50LatencyMs: number | null;  // null when no samples
+  p95LatencyMs: number | null;
+  avgTokensPerRequest: number | null;   // null when no tokens ever captured
+  avgPromptTokens: number | null;
+  avgCompletionTokens: number | null;
+  tokensCapturedRequests: number;
+  avgEstCostUsd: number | null; // per captured request
+  totalEstCostUsd: number;      // lifetime
 }
 
 /** Result of a guardrail pre-check before making a request. */

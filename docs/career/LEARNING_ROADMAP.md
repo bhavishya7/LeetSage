@@ -77,17 +77,31 @@ after-the-fact tests" Q&A). Now run automatically in CI on every push/PR (#3b, D
 2026-09-15 follow-up). **Still open:** component/integration/E2E tests of the React
 panel + message plumbing (only pure logic is covered today).
 
-### 3. Instrument basic runtime metrics  ⬅ NOW THE TOP UNMET GAP
+### 3. Instrument basic runtime metrics  ✅ DONE (2026-09-23)
 **Skill:** production monitoring mindset, cost-awareness.
-**What to build.** Lightweight local counters for the numbers the eval *didn't*
-produce: **p50/p95 latency, avg tokens/request, requests handled, estimated
-cost/request**. (Filter catch-rate / false-positive rate now exist from the eval —
-this is the remaining half of "quantified impact.")
-**Why.** You can't quote impact you never measured. The eval gave you the *quality*
-numbers; these give you the *runtime* numbers, turning the last qualitative resume
-bullets into quantified ones.
-**Interview payoff.** Fills the remaining `[X]` placeholders in
-[RESUME.md](./RESUME.md). **Effort:** Low–Medium. **Depends on:** nothing.
+**What shipped.** Fully client-side per-request metrics (no backend, mirroring the
+usage counter): **wall-clock latency**, **prompt/completion tokens** (via
+`stream_options.include_usage` + an `onUsage` callback on the streaming path — which
+had never captured tokens before), and a **derived estimated cost** from one cited,
+trivially-updatable price table. Pure, unit-tested aggregation — `percentile()`
+(interpolated p50/p95) + `summarize()` — over a **bounded 200-sample rolling window**
+plus **lifetime running aggregates**; `recordMetric()` is best-effort so it can never
+break a coaching response. A read-only "Session stats" readout lives in the settings
+modal. Design-only spec: `.kiro/specs/leetsage-metrics/design.md`. On branch
+`feature/metrics` (`6012265` + `f980103`; test suite 149 → 167), **not yet pushed.**
+**The numbers (self-run — honesty caveat kept).** **p50 1579 ms / p95 2982 ms**
+latency, **1459 avg tokens/request**, **est. $0.000252/request** ($0.002271 over
+9 requests). Self-collected, single model `gemini-3.5-flash-lite`, small n=9 —
+an order-of-magnitude signal, not a benchmark; cost is an estimate on a BYOK free
+quota, not a bill.
+**Why it mattered.** The eval gave the *quality* numbers; this gave the *runtime*
+numbers, closing the last "quantified impact" gap. The key catch was "verify don't
+assume" — the streaming path (the one the UI uses) never saw token usage, so an
+assumption-driven build would have recorded latency-only and missed the headline.
+**Interview payoff.** Fills the runtime numbers in [RESUME.md](./RESUME.md) and
+answers INTERVIEW_PREP Q5a. **Consciously deferred (scope-creep):** per-model
+breakdown, success/error-rate capture (only successful requests are timed), a "reset
+stats" button. **Effort:** ~~Low–Medium~~ done.
 
 ---
 
@@ -307,8 +321,12 @@ is exactly the GenAI system-design interview. Rehearse it either way — it's in
    follow-up — GitHub Actions + a Husky hook run the eval on every push/PR
    (CD/auto-publish deliberately skipped, #3c). Deferred remainder: **runtime
    metrics** (#3) and **real captured cases + a validated judge** (#3a).
-5. **Runtime metrics** (#3) — **now next**; the last "quantified impact" gap
-   (latency/tokens/cost). Then the remaining Tier-1.5 eval follow-up (#3a).
+5. **Runtime metrics** (#3) — **DONE (2026-09-23)** on branch `feature/metrics`
+   (`6012265` + `f980103`, not yet pushed): per-request latency/tokens/cost captured
+   client-side (p50 1579 ms / p95 2982 ms, 1459 avg tokens, ~$0.000252/request over a
+   9-request self-run), pure unit-tested p50/p95 math, bounded storage; test suite
+   149 → 167. The "quantified impact" gap is closed. **Now next:** the remaining
+   Tier-1.5 eval follow-up (#3a — real captured cases + a validated judge).
 6. **Scope permissions** (#4) — quick security win, but **do progress
    export-to-file first** (only clipboard "Copy all" exists today) so the required
    remove/re-add doesn't wipe accumulated records.
