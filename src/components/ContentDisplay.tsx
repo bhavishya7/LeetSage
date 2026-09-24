@@ -3,6 +3,7 @@ import type { LearningContent } from '../types';
 import { isSolutionExemptAction } from '../services/solution-filter';
 import ThinkingIndicator from './ThinkingIndicator';
 import { thinkingLabel } from './thinking-labels';
+import { splitComplexity } from './complexity-parse';
 
 interface ContentDisplayProps {
   content: LearningContent[];
@@ -48,35 +49,24 @@ function stripLatex(text: string): string {
  * Handles: O(1), O(N), O(N²), O(N³), O(N log N), O(2^N), O(N!), etc.
  */
 function renderComplexity(text: string, keyBase: number): React.ReactNode[] {
-  // Match O(...) patterns, including nested content like "N log N", "N^2", "2^N"
-  const regex = /O\(([^)]+)\)/gi;
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  let match;
-
-  while ((match = regex.exec(text)) !== null) {
-    // Text before this match
-    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
-
-    const inner = match[1];
-    // Convert ^2 -> superscript, uppercase N for consistency
-    const formatted = inner
+  // splitComplexity handles BALANCED (possibly nested) parens, so a complexity
+  // like "O(log(M) + log(N))" is captured whole instead of the old regex
+  // stopping at the first ")" and leaking the tail as prose (B7).
+  const segments = splitComplexity(text);
+  const parts: React.ReactNode[] = segments.map((seg, i) => {
+    if (seg.kind === 'text') return <React.Fragment key={`t-${keyBase}-${i}`}>{seg.value}</React.Fragment>;
+    // Convert ^2 -> superscript, uppercase N for consistency.
+    const formatted = seg.inner
       .replace(/\^(\d+)/g, '⁰¹²³⁴⁵⁶⁷⁸⁹'.includes('') ? '$1' : '^$1') // fallback
       .replace(/n/g, 'N');
-
-    // Build the styled content with real superscripts
     const superscripted = formatSuperscripts(formatted);
-
-    parts.push(
-      <span key={`complexity-${keyBase}-${match.index}`}
+    return (
+      <span key={`complexity-${keyBase}-${seg.at}`}
         className="inline-flex items-baseline px-1 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 font-mono text-[12px] font-semibold whitespace-nowrap">
         O({superscripted})
       </span>
     );
-    lastIndex = match.index + match[0].length;
-  }
-
-  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  });
   return parts.length > 0 ? parts : [text];
 }
 
