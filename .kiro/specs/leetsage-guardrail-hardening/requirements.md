@@ -71,29 +71,40 @@ action produced it).
 > dependency note above). B3 here is about the **filter**, which must catch such a
 > leak no matter what produced it.
 
-### B4 — Free-form chat is blind to the user's editor code *(missing capability)* — 📝 deferred
+### B4 — Free-form chat is blind to the user's editor code *(missing capability)* — ✅ fixed
 **Observed** (during B1's visual review, 2026-09-23): asking chat "what is the
 current time complexity" with a complete, Accepted solution in the editor returned
 "you didn't include your code in the prompt". **Root cause:** the `userQuery` path
-(`handleChatSubmit`) never calls `extractCurrentCode` — only the templated
-`CHECK_APPROACH`/`UNDERSTAND_SOLUTION`/`GENERATE_REPORT` actions send editor code.
-So chat literally cannot see the code and correctly says so. **Not a B2 regression**
-(B2 only removed the forced analogy, which worked). This is a distinct new bug —
-**deferred to a later session** (see registry row B4); it needs a call on whether
-code-bearing chat should be filter-exempt like the other code-analysis actions.
+(`handleChatSubmit`) never called `extractCurrentCode` — only the templated
+`CHECK_APPROACH`/`UNDERSTAND_SOLUTION`/`GENERATE_REPORT` actions sent editor code.
+So chat literally could not see the code and correctly said so. **Not a B2
+regression** (B2 only removed the forced analogy, which worked). **Fix:** chat now
+always sends the (non-empty) editor code, folded into the `wrapUntrusted` DATA
+block (`buildChatData`); the chat prompt is aware of it but must not assume it's
+correct. **Decision — chat stays NON-EXEMPT (filtered):** an action button has a
+fixed trusted intent, but chat is free text, so making code-bearing chat *exempt*
+would let a "complete my stub" ask bypass the filter. Keeping chat filtered lets the
+model analyze/quote pieces of the user's code while a full-solution dump is still
+caught; "show me the solution" is redirected to the `Understand Solution` action.
 
-### B5 — Heavy non-exempt actions feel slow behind the B1 gate *(perceived performance)* — 📝 deferred
+### B5 — Heavy non-exempt actions feel slow behind the B1 gate *(perceived performance)* — ✅ fixed
 **Observed** (same review): `Concept` showed ~5–6s of "Thinking…" before revealing,
 while `Hint`/`Pattern` returned in ~1s. **Root cause:** B1's gate withholds the
 whole stream until complete, so the user now waits the FULL generation time that
 live streaming used to mask; `Concept` has the heaviest non-exempt prompt. The gate
-is behaving correctly (design §1 called out this trade) — this is a **perceived-
-performance** follow-up, **deferred** (see registry row B5).
+is behaving correctly (design §1 called out this trade) — this is **perceived
+performance**. **Fix:** the placeholder no longer reads as frozen — after a 3s grace
+period `ThinkingIndicator` switches to "Still working on it…" plus an elapsed-seconds
+counter, a lightweight proof-of-life (not a real progress bar; the model's progress
+is unknowable). The gate itself is unchanged.
 
 > B4 and B5 were surfaced by exercising the shipped B1 change — exactly the "get UI
-> changes eyeballed" step catching real issues. They are logged here (per the
-> standing-registry principle) and left for a later session rather than folded into
-> this spec, to keep this change scoped to B1–B3.
+> changes eyeballed" step catching real issues. Per the standing-registry principle
+> each was logged as a row and then fixed in a follow-up pass (kept separate from the
+> B1–B3 commits). The larger **intent-routing** idea that grew out of B4 (route a
+> chat message to a matching action when one fits) is intentionally NOT built here —
+> it's its own feature with a guardrail decision (routing free text into
+> filter-exempt actions), tracked separately as a new spec.
 
 ---
 
@@ -167,8 +178,12 @@ performance** follow-up, **deferred** (see registry row B5).
 | B1 | Flagged content visible before filter replaces it | Streams to view; filter runs post-stream | Pre-display gate for non-exempt actions (R1) | `src/sidepanel/__tests__/predisplay-gate.test.ts` (gate contract) | ✅ fixed |
 | B2 | Chat forces irrelevant real-world analogy | `userQuery` uses `EXPLAIN_CONCEPT` prompt | Direct-answer chat prompt (R2) | `prompts.test.ts` — "direct-answer, no forced analogy (B2)" | ✅ fixed |
 | B3 | Compact folded-conditional pseudocode leaks through filter | `looksLikeFullPseudocode` threshold blind spot | Detect folded-conditional algorithms (R3) | Eval cases `pos-pseudo-binsearch-folded[-prose]` + `solution-filter.test.ts` | ✅ fixed |
-| B4 | Free-form chat can't answer questions about the user's own code (e.g. "what is the current time complexity" → "you didn't include your code") | The `userQuery` path in `handleChatSubmit` never extracts/sends the editor code — only the templated `CHECK_APPROACH`/`UNDERSTAND_SOLUTION`/`GENERATE_REPORT` actions call `extractCurrentCode`. Chat is blind to the editor. | Send the editor code with chat questions (opt-in or when the question references "my code"), fenced via `wrapUntrusted`; decide exempt-vs-filtered handling since chat may then legitimately discuss the user's solution | Test that the chat request includes editor code when present + a filter/gate decision test | 📝 planned |
-| B5 | Non-exempt actions with heavy prompts (esp. `Concept`) show 5–6s of "Thinking…" before reveal — feels frozen | B1's pre-display gate withholds the whole stream until complete, so the user now waits the FULL generation time (which live streaming used to mask). `Concept`'s prompt is the heaviest non-exempt one. | Reduce perceived wait: elapsed-time / staged placeholder copy, and/or trim `Concept`'s `max_tokens` / prompt heft so it generates faster. (Correctness of the gate is not in question — this is perceived-performance only.) | UX-level; a placeholder-state test if logic is added | 📝 planned |
+| B4 | Free-form chat can't answer questions about the user's own code (e.g. "what is the current time complexity" → "you didn't include your code") | The `userQuery` path in `handleChatSubmit` never extracts/sends the editor code — only the templated `CHECK_APPROACH`/`UNDERSTAND_SOLUTION`/`GENERATE_REPORT` actions call `extractCurrentCode`. Chat is blind to the editor. | `handleChatSubmit` now always sends the (non-empty) editor code; `buildChatData` folds it into the `wrapUntrusted` block. **Chat stays NON-EXEMPT** (still filtered) — the model may analyze/quote pieces but a full-solution dump is still caught; the prompt points a "show me the solution" ask to `Understand Solution` | `chat-code.test.ts` — code folded in / omitted; prompt aware-of-code but guardrailed | ✅ fixed |
+| B5 | Non-exempt actions with heavy prompts (esp. `Concept`) show 5–6s of "Thinking…" before reveal — feels frozen | B1's pre-display gate withholds the whole stream until complete, so the user now waits the FULL generation time (which live streaming used to mask). `Concept`'s prompt is the heaviest non-exempt one. | `ThinkingIndicator` now runs an elapsed timer: after a 3s grace period it switches to a "Still working on it…" phrase + an elapsed-seconds counter, so the card visibly signals life instead of a frozen label. (Perceived-performance only — the gate is unchanged; not a real progress bar since the model's progress is unknowable.) | Visual review + the existing B1 gate test (labels still fixed strings) | ✅ fixed |
+
+| B6 | Chat should route a question to a matching action (e.g. "is my code O(n²)?" → Analyze code) instead of always free-forming | Chat has no intent classifier; every message goes down the free-form path | Intent routing — its OWN spec (`leetsage-chat-intent-routing`), NOT built here; needs a classifier choice (LLM vs heuristic) + a decision on routing free text into filter-exempt actions | (spec-level; a labeled question→route eval when built) | 📝 planned (separate spec) |
+| B7 | Complexity badge splits on nested parens — `O(log(M) + log(N))` renders only `O(log(M)` as a yellow badge, the rest as plain text | `renderComplexity` regex `/O\(([^)]+)\)/` stops at the FIRST `)`, so any inner paren (`log(M)`, `O(N*log(N))`) truncates the match | Balance parentheses when matching so the whole `O(...)` (incl. nested parens) is one badge | Unit test of `renderComplexity` / the badge output for nested-paren cases | 📝 planned |
+| B8 | `Analyze code` under-credits optimality: didn't note that `O(log M + log N)` is equivalent to `O(log(M·N))`, so a user who reached optimal is told "Optimal: O(log(M*N))" as if different | Prompt/model reasoning — the coach doesn't apply log-equivalence to recognize the user matched optimal | Prompt nudge to recognize algebraic complexity equivalences (deferred — fuzzy, model-reasoning, not rendering) | (prompt-level; hard to guard deterministically) | 📝 deferred |
 
 *(Append future bugs below this line as new rows.)*
 
