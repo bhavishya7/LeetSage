@@ -11,6 +11,34 @@ When beginning work, read these to get current — don't rely on chat memory:
 - `docs/career/LEARNING_ROADMAP.md` — what's next and why (in priority order).
 - The specific spec under `.kiro/specs/` for the feature being built.
 
+## Spec discipline (scale rigor to the feature, never skip silently)
+
+This project showcases a spec-driven workflow, so the process itself matters — but
+match the ceremony to the work, and **document any deviation** rather than letting
+it drift.
+
+- **Substantial or ambiguous feature** (new capability, non-trivial scope, unclear
+  requirements): write the full trilogy under `.kiro/specs/<name>/`:
+  - `requirements.md` — what must be true, as acceptance criteria (EARS-style
+    "WHEN … THE SYSTEM SHALL …" is encouraged). **Get the user's sign-off on
+    requirements before starting design.**
+  - `design.md` — the how: architecture, decisions, alternatives considered.
+  - `tasks.md` — the implementation breakdown, checked off as work completes.
+  - **Pause for the user between phases** (requirements → design → tasks →
+    implement); don't blow through all three unattended.
+- **Small, well-understood change** (a fix, a tweak, mitigations already known):
+  a single `design.md` is acceptable — but **state explicitly at the top why
+  requirements/tasks were skipped** (e.g. "design-only: scope is small and
+  requirements are self-evident"). Skipping is a documented decision, not silent
+  drift.
+- **When unsure which bucket applies, ask the user** rather than defaulting to the
+  lighter path.
+- Keep `.kiro/specs/README.md` accurate as specs are added or change status.
+
+> Being able to say "I scaled process rigor to feature complexity and documented
+> when I deviated" is a stronger interview answer than pretending every change got
+> a full trilogy — but *undocumented* drift is the thing to avoid.
+
 ## Verify before you claim done
 
 - **Always run the build (`npm.cmd run build`) and confirm it compiles** before
@@ -18,14 +46,26 @@ When beginning work, read these to get current — don't rely on chat memory:
 - Fix any errors surfaced by the build before presenting the result.
 - Clean up any temp files created during verification.
 
-## Get UI/UX changes reviewed before committing
+## Explain and STOP for review before committing (hard rule)
 
-- For **visual or UX changes** (layout, buttons, sizing, colors), explain what
-  changed and **wait for the user to eyeball it before committing.** Don't commit
-  a UI tweak on the assumption it looks right — the user reloads the extension to
-  verify.
-- More broadly: explain new or non-trivial work (features, agents, design choices)
-  and let the user decide before committing.
+This is a firm gate, not a preference:
+
+- **Never run an autonomous build → commit → historian pass.** After building or
+  changing anything non-trivial, **explain what was built (what/why/how) and STOP.
+  Wait for the user's review before committing.** The user must be able to say
+  "where did this come from?" and always know the answer *before* it lands in git.
+- **The user triggers commits.** Do not commit on your own initiative because the
+  work "looks done." Present it, then let the user decide.
+- **Visual / UX changes** (layout, buttons, sizing, colors) additionally require
+  the user to eyeball the built extension before committing — don't assume it
+  looks right.
+- The only things safe to do without pausing are read-only investigation and
+  verification (builds, tests, git status). Anything that writes code or docs, or
+  touches git, pauses for review first.
+
+> This rule exists because an end-to-end autonomous run once produced good work
+> the user never got to see or approve before it was committed. Visibility and
+> control beat speed here.
 
 ## Git discipline
 
@@ -95,3 +135,14 @@ specs index — whichever apply.
 The loop: session ends → emit this handoff → paste into the historian → historian
 drafts doc updates → review → commit. Keep it a habit; it's what stops
 conversational insight from evaporating.
+
+### Handoff-authoring rule (for the GM / whoever writes a handoff for a build session)
+
+A handoff that kicks off a *build* session must **not** authorize an end-to-end
+autonomous pass. It must instruct the receiving session to follow the
+"Explain and STOP for review before committing" rule above — i.e. build, explain
+what was done, and **pause for the user to review before committing**, and to
+seek sign-off between spec phases for substantial features. Never write a handoff
+that says "build → commit → run the historian" as one unattended flow. Structure
+build handoffs as: orient → (spec if substantial, with sign-off) → implement →
+**explain and stop** → (commit + historian only after the user approves).

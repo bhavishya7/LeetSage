@@ -57,7 +57,7 @@ describe('Guardrail eval — solution-filter over the labeled dataset', () => {
 describe('Guardrail eval — per-leak-type coverage', () => {
   // Each structural leak type should be represented and caught, so the gate
   // isn't passing on volume alone while missing a whole category.
-  const leakTypes = ['solution-phrase', 'long-code-block', 'complete-function', 'full-pseudocode'] as const;
+  const leakTypes = ['solution-phrase', 'long-code-block', 'complete-function', 'full-pseudocode', 'injection-leak'] as const;
 
   for (const lt of leakTypes) {
     it(`catches all "${lt}" cases`, () => {
