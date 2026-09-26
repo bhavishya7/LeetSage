@@ -1058,6 +1058,82 @@ unchanged. The 85.7% → 100% catch-rate move is on the **labeled eval fixtures*
 `e9241d3` (docs: B4/B5 → fixed, logged B6/B7/B8), `f6d2a5a` (B7 balanced-paren
 `complexity-parse.ts` + tests).
 
+## 2026-09-25 — Action streamlining: 9 quick-actions → a 4-chip 2×2 grid (pre-launch UI curation)
+
+**What.** Curated the quick-action bar from **9 actions to 4**. Before: a `PRIMARY`
+array of 4 (incl. `BREAK_DOWN_PROBLEM`) plus a `SECONDARY` array of 5 hidden behind
+a "More ▾ / Less ▴" toggle. After: a single always-visible **2×2 grid** of the four
+surviving intents — 💡 Hint (`GET_HINT`), 🔬 Analyze my code (`CHECK_APPROACH`),
+🧠 Understand solution (`UNDERSTAND_SOLUTION`), 📝 Generate report
+(`GENERATE_REPORT`). Removed the `SECONDARY` array, the `showMore` state, and the
+toggle entirely from `QuickActions.tsx`; laid the four out as `grid grid-cols-2
+gap-2` (equal-width cells) with uniform styling. The five cut actions
+(`BREAK_DOWN_PROBLEM`, `GENERATE_EXAMPLES`, `EXPLAIN_CONCEPT`,
+`TIME_COMPLEXITY_HINT`, `PATTERN_RECOGNITION`) were **dereferenced from the UI but
+their capabilities kept in code** — the `ActionType` values, the prompts /
+`buildUserMessage` cases, and the generic `handleActionClick` path all stay — so the
+upcoming `chat-intent-routing` spec can dispatch to them without re-adding them
+(spec requirement R3). Scope was UI/UX + wiring only: no filter/guardrail/streaming/
+routing changes. On branch `feature/action-streamlining` (off main `dcababa`), full
+spec trilogy written first (`requirements.md` / `design.md` / `tasks.md`).
+**Why.** Pre-launch curation. The five cut actions are overlapping "understand the
+problem" flavors the sole user never used — and the governing design principle was
+that **a never-used control is a cost, not an asset**, so "hiding it behind More"
+had been treating a *curation* problem as a *layout* problem. Two deliberate
+decisions worth recording: (1) **capability/entry-point separation** — remove only
+the UI entry points, keep the capabilities, so routing is built against a real
+surviving set rather than assumptions; and (2) **sequencing this spec BEFORE
+`chat-intent-routing`** on purpose, so routing is written against the actual
+four-action surface (the "verify, don't assume" discipline applied to spec
+sequencing, not just code).
+**What broke / the hard part.** No bug — the instructive part is that **the visual
+review gate did real work, twice over.** The first pass built a valid *flat 4-chip
+row* that technically satisfied the spec: build clean, eslint 0, tests 205/205. But
+when the user eyeballed the built extension it "felt off." That prompted a design
+critique that surfaced two quality issues no test or "compiles clean" check could:
+(1) the flat `flex-wrap` produced a **ragged row of unequal-width chips** that
+didn't align, and (2) a leftover **`hasCode` context-aware highlight** re-ordered
+and recolored buttons based on hidden editor state the user couldn't predict — a
+"helpful" emphasis that was actually confusing. Neither was in scope of the spec as
+written.
+**How solved.** A *second-order* fix the spec hadn't called for and that only
+surfaced by looking at the running UI: switched to an **equal-width 2×2 grid** with
+one uniform chip style (a plain blue-border hover cue instead of the context-aware
+fill), and **removed the `hasCode` emphasis entirely**. Removing that invisible
+highlight then cascaded into a real dead-code cleanup in `App.tsx` — the `hasCode`
+state, the `refreshHasCode` callback and its three call sites (+ its dep-array
+entry), and the two inline `setHasCode()` calls in the action handlers all existed
+*only* to drive the removed highlight, so they went too (the code-extraction that
+feeds the actual analysis — `userCode` / `codeLanguage` — was untouched). Also
+dropped the now-pointless `justify-between` wrapper that had positioned the old
+toggle. Re-verified: `npm.cmd run build` clean, eslint 0 errors, `npm.cmd run test`
+205/205 (unchanged — this was a UI/wiring change with no test surface; no test
+referenced the removed buttons or the "More" toggle).
+**Interview angle.** ⭐ The headline is a sharper version of the green-build honesty
+story: **"a spec being satisfied is not the same as the UI being good."** A build
+that was green *and* met its written acceptance criteria still had a UX problem that
+only a human looking at the running extension caught — and the fix (equal-width grid,
+uniform styling, removing an unpredictable context-aware highlight) was a
+second-order improvement the spec never asked for. It pairs with a clean product
+principle ("a never-used control is a cost, not an asset" — curation, not more
+layout) and a system-design note about **separating a capability from its UI entry
+point** so a control can be retired from the surface while staying available for a
+later feature to route to. Supporting signal: a UI change can have a surprising
+*logic tail* — deleting one visual affordance cleanly removed a whole chain of state
++ callback + listeners that existed only to feed it.
+**Caveats (not overclaimed).** The five cut actions are **temporarily
+UI-unreferenced by design** — reachable in code but not from any button until
+`chat-intent-routing` (B6) ships; documented and accepted as an interim state
+(single, sole user). **Discovery affordances** (suggested prompts / rotating
+placeholder) and **intent routing itself** are explicitly deferred to
+`chat-intent-routing`, not built here. Nothing pushed, no PR — the branch is 2
+commits ahead of main, awaiting the user's review.
+**Commits** (both on `feature/action-streamlining`, off main `dcababa`, local-only):
+`0cc0b39` (docs(spec): add the `leetsage-action-streamlining` trilogy —
+`requirements.md` / `design.md` / `tasks.md`), `9f0c91a` (feat(ui): streamline
+quick-actions to a 4-chip 2×2 grid — `src/components/QuickActions.tsx`,
+`src/sidepanel/App.tsx`, `.kiro/specs/README.md`).
+
 ---
 
 ## Next up (see [LEARNING_ROADMAP.md](./LEARNING_ROADMAP.md))
@@ -1086,6 +1162,15 @@ unchanged. The 85.7% → 100% catch-rate move is on the **labeled eval fixtures*
    Store was deliberately skipped** (review latency + secret management → manual
    publish). Still open: **real captured-Gemini eval cases + a validated (non-mock)
    LLM-as-judge** — deferred.
+5. ~~**Action streamlining** — 9 quick-actions → a 4-chip 2×2 grid~~ — **DONE
+   (2026-09-25)** on branch `feature/action-streamlining` (`0cc0b39` spec + `9f0c91a`
+   feat, off main `dcababa`, not pushed): pre-launch UI curation to the four
+   surviving intents (Hint / Analyze my code / Understand solution / Generate
+   report); the five cut actions are dereferenced from the UI but kept in code so
+   `chat-intent-routing` can dispatch to them. UI/wiring only; tests unchanged at
+   205. **Next: B6 chat intent-routing** (`leetsage-chat-intent-routing`), sequenced
+   deliberately after this so it's written against the real four-action surface, and
+   which will also own the deferred discovery affordances.
 
 *When each lands, add an entry above (via the project-historian agent) and backfill
 any resulting numbers into [RESUME.md](./RESUME.md).*
@@ -1115,12 +1200,20 @@ any resulting numbers into [RESUME.md](./RESUME.md).*
 
 ### Shipped and verified in `src/`
 
-- **Coaching actions (9 `ActionType`s in `types/models.ts`).** Primary chips:
-  `GET_HINT`, `BREAK_DOWN_PROBLEM`, `CHECK_APPROACH` ("Analyze my code"),
-  `UNDERSTAND_SOLUTION`. Secondary (under "More"): `GENERATE_EXAMPLES`,
-  `EXPLAIN_CONCEPT`, `TIME_COMPLEXITY_HINT`, `PATTERN_RECOGNITION`,
-  `GENERATE_REPORT`. (`QuickActions.tsx`.) Note: this evolved past the original
-  spec's 7 — `UNDERSTAND_SOLUTION` and `GENERATE_REPORT` were added later.
+- **Coaching actions (9 `ActionType`s in `types/models.ts`; 4 exposed in the UI as
+  of 2026-09-25).** The quick-action bar shows **four** chips in a 2×2 grid:
+  `GET_HINT` (💡 Hint), `CHECK_APPROACH` (🔬 Analyze my code), `UNDERSTAND_SOLUTION`
+  (🧠 Understand solution), `GENERATE_REPORT` (📝 Generate report)
+  (`QuickActions.tsx`). The other five `ActionType`s — `BREAK_DOWN_PROBLEM`,
+  `GENERATE_EXAMPLES`, `EXPLAIN_CONCEPT`, `TIME_COMPLEXITY_HINT`,
+  `PATTERN_RECOGNITION` — **still exist in code** (their prompts / `buildUserMessage`
+  cases and the generic `handleActionClick` path are intact) but were
+  **dereferenced from the UI** in the action-streamlining pass; they're
+  intentionally reachable only in code until `chat-intent-routing` ships a way to
+  dispatch to them. Note: the action set evolved past the original spec's 7 —
+  `UNDERSTAND_SOLUTION` and `GENERATE_REPORT` were added later; the earlier
+  primary-row + "More"-overflow (4 + 5) layout was replaced by the 4-chip grid on
+  2026-09-25.
 - **Chat-hybrid UI**, not the original button-only panel. Free-form questions go
   through the same pipeline, grounded by prepending problem context
   (`llm-service.ts` `buildMessages`).

@@ -130,17 +130,55 @@ the suite can't.
 **Interview payoff.** RESUME "block-before-reveal" bullet; INTERVIEW_PREP Q&A on
 green-build honesty and red-before-green eval fixtures. **Effort:** ~~Medium~~ done.
 
-### 3.6. Chat intent-routing (B6) — its own next spec  📝 PLANNED
+### 3.55. Action streamlining — 9 quick-actions → a 4-chip grid  ✅ DONE (2026-09-25)
+
+**Spec:** `leetsage-action-streamlining` (full trilogy). **Skill:** product
+curation, UI/UX judgment, capability/entry-point separation, human-in-the-loop
+visual review.
+**What shipped.** Curated the quick-action bar from **9 actions to 4** on branch
+`feature/action-streamlining` (`0cc0b39` spec + `9f0c91a` feat, off main `dcababa`,
+**not pushed**). The old 4-PRIMARY + 5-behind-"More" layout became a single,
+always-visible **2×2 grid** of the four surviving intents — Hint (`GET_HINT`),
+Analyze my code (`CHECK_APPROACH`), Understand solution (`UNDERSTAND_SOLUTION`),
+Generate report (`GENERATE_REPORT`) — with equal-width cells and uniform styling.
+The `SECONDARY` array, `showMore` state, and the toggle were removed from
+`QuickActions.tsx`; the five cut actions (`BREAK_DOWN_PROBLEM`, `GENERATE_EXAMPLES`,
+`EXPLAIN_CONCEPT`, `TIME_COMPLEXITY_HINT`, `PATTERN_RECOGNITION`) were
+**dereferenced from the UI but kept in code** (types, prompts, `handleActionClick`)
+so #3.6 can dispatch to them. UI/wiring only — no filter/guardrail/streaming
+changes; tests unchanged at **205**, build clean, eslint 0.
+**Why it mattered.** Governing principle: **a never-used control is a cost, not an
+asset** — "hiding behind More" had treated a curation problem as a layout one.
+Sequenced deliberately **before** #3.6 so routing is written against the real
+four-action surface, not assumptions.
+**The payoff (the interview story).** The mandatory visual-review gate caught what
+a green build couldn't: the first pass met the spec and compiled, but eyeballing the
+running extension exposed a ragged unequal-width chip row and an unpredictable
+`hasCode` context-aware highlight — fixed with the equal-width grid + uniform
+styling + removing the highlight (a second-order improvement the spec never asked
+for). Removing the highlight also cascaded into a real dead-code cleanup in
+`App.tsx` (state + callback + 3 listeners). See
+[INTERVIEW_PREP.md](./INTERVIEW_PREP.md) ("a passing spec is not the same as good
+UI" + capability/entry-point separation) and [DEV_JOURNAL.md](./DEV_JOURNAL.md)
+(2026-09-25). **Deferred to #3.6:** discovery affordances (suggested prompts /
+rotating placeholder) and the routing that re-references the five cut actions.
+**Effort:** ~~Low~~ done.
+
+### 3.6. Chat intent-routing (B6) — its own next spec  📝 PLANNED (next up)
 
 **Spec:** `leetsage-chat-intent-routing` (a context-transfer was handed to the
 developer; not yet designed in depth). **Skill:** intent classification (LLM vs
 heuristic), guardrail decision-making.
 **What to build.** Route a free-form chat message to a matching action when one
-fits (e.g. "is my code O(n²)?" → Analyze code), else fall back to free-form. **Why
-it's deferred to its own spec.** It needs a classifier choice *and* a guardrail
-decision — routing free text into the filter-**exempt** actions is exactly the
-bypass B4 declined to open, so the routing design must decide that deliberately, not
-inherit it. **Effort:** Medium. **Also deferred (registry-only, harder to guard):**
+fits (e.g. "is my code O(n²)?" → Analyze code), else fall back to free-form. It will
+also **re-reference the five actions dereferenced from the UI in #3.55** (so they're
+reachable again, via routing rather than dedicated buttons) and **own the discovery
+affordances** (suggested prompts / rotating placeholder) deferred out of that pass.
+**Why it's deferred to its own spec.** It needs a classifier choice *and* a
+guardrail decision — routing free text into the filter-**exempt** actions is exactly
+the bypass B4 declined to open, so the routing design must decide that deliberately,
+not inherit it. Now unblocked: #3.55 shipped, so routing is written against the real
+surviving four-action surface. **Effort:** Medium. **Also deferred (registry-only, harder to guard):**
 **B8** — `Analyze code` under-credits optimality because it doesn't apply algebraic
 complexity equivalence (`O(log M + log N) = O(log(M·N))`); a prompt nudge, but fuzzy
 model-reasoning that's hard to guard deterministically.
@@ -379,8 +417,14 @@ is exactly the GenAI system-design interview. Rehearse it either way — it's in
 8. ~~**Guardrail hardening** (#3.5)~~ — **DONE (2026-09-24)** on branch
    `feature/guardrail-hardening` (8 commits, local — not pushed): pre-display gate
    (B1) + 5 more bug fixes and a standing bug registry, `npm.cmd run test` 167 → 205.
-   **B6 chat intent-routing** (#3.6) is its own next spec; **B8** deferred.
-   Then **cheatsheet / RAG** (#8), then Tier 3 stretch items.
+9. ~~**Action streamlining** (#3.55)~~ — **DONE (2026-09-25)** on branch
+   `feature/action-streamlining` (`0cc0b39` + `9f0c91a`, off main `dcababa`, not
+   pushed): the quick-action bar went 9 actions → a 4-chip 2×2 grid; the five cut
+   actions are dereferenced from the UI but kept in code for routing to reach.
+   UI/wiring only; tests unchanged at 205. **Now next: B6 chat intent-routing**
+   (#3.6) as its own spec — written against the real four-action surface and owning
+   the deferred discovery affordances; **B8** deferred. Then **cheatsheet / RAG**
+   (#8), then Tier 3 stretch items.
 
 At each step, backfill numbers into [RESUME.md](./RESUME.md) and new Q&A into
 [INTERVIEW_PREP.md](./INTERVIEW_PREP.md). The docs are living — grow them with the code.

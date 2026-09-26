@@ -654,6 +654,55 @@ durable guards instead of one-off fixes. It's a concrete, honest answer to "how 
 you use AI effectively" — the AI writes fast, the human review is where quality
 enters.
 
+### "Isn't a passing spec/acceptance-criteria enough? When has 'it meets the spec and compiles' still not been good enough?" ⭐
+
+**Answer.** No — a spec being satisfied is not the same as the UI being *good*, and
+I have a concrete case. I ran a small pre-launch pass to curate my quick-action bar
+from nine actions down to four (five of them were overlapping "understand the
+problem" flavors I never used — my working principle is that *a never-used control
+is a cost, not an asset*, so hiding them behind a "More" toggle had been treating a
+curation problem as a layout problem). My first pass built a valid flat four-chip
+row: build clean, eslint zero, tests 205/205, and it met every acceptance criterion
+in the spec. Then I did what my workflow forces — build, explain, **stop, and
+eyeball the running extension before committing** — and it felt off. Looking at it
+surfaced two quality issues no test could catch: the flat flex-wrap gave a *ragged
+row of unequal-width chips* that didn't align, and a leftover *context-aware
+highlight* recolored buttons based on hidden editor state I couldn't even predict as
+the user. Neither was in the spec. The fix — an equal-width 2×2 grid, one uniform
+chip style, and removing that unpredictable highlight — was a **second-order
+improvement the spec never asked for**, and it only existed because a human looked
+at the running thing. A nice tail: deleting that one invisible highlight cascaded
+into a real dead-code cleanup — a piece of React state, a callback, and its three
+listeners existed *only* to feed it, so a UI change turned out to have a surprising
+logic tail.
+
+**Signal.** I don't treat "meets the spec + compiles + tests green" as "done" for
+UI. The written acceptance criteria are a floor, not a ceiling; the human visual
+gate catches quality the spec-author didn't think to encode. It's the same
+green-build-honesty discipline as my guardrail pass, but sharper — there the suite
+missed bugs; here the *spec itself* was satisfied and the UI was still wrong.
+
+### "You retired a feature from the UI but say you kept it in the code. Why, and isn't that just dead code?" 
+
+**Answer.** It's a deliberate **capability/entry-point separation.** When I
+streamlined the action bar, I removed the five cut actions' *UI entry points* — the
+buttons — but kept their *capabilities*: the `ActionType` values, their prompt /
+message-building cases, and the generic action-dispatch path all stay intact. The
+reason is sequencing: the very next spec is chat-intent-routing, which will route a
+free-form message like "what's the pattern here?" to the matching action. If I'd
+deleted the capabilities, I'd have to re-add and re-write them a spec later; by
+dereferencing only the UI, routing gets built against the *real* surviving action
+set instead of assumptions. I also sequenced the streamlining *before* routing on
+purpose for the same reason — "verify, don't assume" applied to spec order, not just
+code. It's documented as a temporary, accepted interim state (I'm the sole user), so
+it's not silent dead code — it's a capability parked behind a soon-to-arrive entry
+point.
+
+**Signal.** Thinking about a control as a *capability* separate from its *surface*;
+sequencing work so a later feature is built against reality; and being explicit that
+"temporarily unreferenced by design, documented" is different from "dead code left
+lying around."
+
 ### "You said you fixed a bug with an eval. How do you know the eval actually reproduced the bug?" ⭐
 
 **Answer.** Because I made it fail *first*. When I closed a filter blind spot (B3 —
