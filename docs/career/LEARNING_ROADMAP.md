@@ -164,24 +164,51 @@ UI" + capability/entry-point separation) and [DEV_JOURNAL.md](./DEV_JOURNAL.md)
 rotating placeholder) and the routing that re-references the five cut actions.
 **Effort:** ~~Low~~ done.
 
-### 3.6. Chat intent-routing (B6) — its own next spec  📝 PLANNED (next up)
+### 3.6. Chat intent-routing (B6) — its own next spec  ✅ DONE (2026-09-26)
 
-**Spec:** `leetsage-chat-intent-routing` (a context-transfer was handed to the
-developer; not yet designed in depth). **Skill:** intent classification (LLM vs
-heuristic), guardrail decision-making.
-**What to build.** Route a free-form chat message to a matching action when one
-fits (e.g. "is my code O(n²)?" → Analyze code), else fall back to free-form. It will
-also **re-reference the five actions dereferenced from the UI in #3.55** (so they're
-reachable again, via routing rather than dedicated buttons) and **own the discovery
-affordances** (suggested prompts / rotating placeholder) deferred out of that pass.
-**Why it's deferred to its own spec.** It needs a classifier choice *and* a
-guardrail decision — routing free text into the filter-**exempt** actions is exactly
-the bypass B4 declined to open, so the routing design must decide that deliberately,
-not inherit it. Now unblocked: #3.55 shipped, so routing is written against the real
-surviving four-action surface. **Effort:** Medium. **Also deferred (registry-only, harder to guard):**
-**B8** — `Analyze code` under-credits optimality because it doesn't apply algebraic
-complexity equivalence (`O(log M + log N) = O(log(M·N))`); a prompt nudge, but fuzzy
-model-reasoning that's hard to guard deterministically.
+**Spec:** `leetsage-chat-intent-routing` (full trilogy). **Skill:** intent
+classification (LLM vs heuristic), pure-pipeline design, guardrail decision-making.
+**What shipped.** The chat box became a smart entry point on branch
+`feature/chat-intent-routing` (4 commits `8792de6`…`b83a006`, off spec `8dae03f`,
+**local — not pushed**). A **pure `classify → resolveOverlap → route` pipeline**
+(`src/services/intent-router/`) sits *in front of* the existing chat path (it does
+NOT modify `filterResponse`, the pre-display gate, or `getChatSystemPrompt`): a typed
+question that matches an action routes to it, else it falls through to code-aware
+chat. Intents are **data** (`INTENT_REGISTRY`, one `IntentDef` each; exemptness
+**derived** from `isSolutionExemptAction`, never stored); the classifier is a
+**local heuristic** (zero extra API calls — a chat message costs exactly one call);
+the resolver is **three-way** (`route`/`ask`/`chat`) with an **abstain band**
+(precedence: context-sharpening → weight → confidence; genuine multi-intent → chat,
+never N calls); `route()` stays pure by returning a `RouterEffect` that `App.tsx`
+interprets. The guardrail: an **exempt-action match becomes a confirm affordance**
+(one reusable `ConfirmAffordance` serves both the exempt guardrail and the borderline
+`ask`), never a silent route into a filter-exempt action. This spec also owns
+**discovery** (rotating placeholder + "Try asking…" chips, `discovery-prompts.ts`)
+that re-surfaces the five actions dereferenced in #3.55. A **labeled golden set**
+doubles as the router's accuracy metric (incl. the explicit "solution-seeking message
+never silently reaches an exempt action" test). Tests **205 → 236**, build clean.
+**Why it was its own spec.** It needed a classifier choice *and* a guardrail decision
+— routing free text into the filter-**exempt** actions is exactly the bypass B4
+declined to open, so the routing design decided that deliberately (confirm-to-route)
+rather than inheriting it. Sequenced after #3.55 so it was written against the real
+surviving four-action surface.
+**The payoff (interview stories).** A "a router is a classifier, build it like one"
+design story (pure stages, data-driven registry, derived exemptness, one-message-one-
+call, three-way abstain, golden-set-as-metric) **and** a workflow story — the visual-
+review gate caught a guardrail banner that overflowed/blended/under-communicated and
+an adjacent silent data-loss bug (Reset with no confirm), and a "verify don't assume"
+code trace corrected the belief that section headers are deterministic (logged as
+**B9**, deferred). See [INTERVIEW_PREP.md](./INTERVIEW_PREP.md) (Q11 + the workflow
+Q&A) and [DEV_JOURNAL.md](./DEV_JOURNAL.md) (2026-09-26). **Effort:** ~~Medium~~ done.
+**Deferred (documented, not built):** an **LLM/vector/fine-tuned classifier** (only
+the `classify()` seam exists so one can be swapped in later), **action chaining /
+multi-step sequences** (multi-intent → chat instead), the **typewriter placeholder**
+(prototyped then removed — it fought reduced-motion), and **B9** (model-generated
+section headers can hallucinate — out of scope since this spec must not touch
+prompts). **Also still deferred (registry-only, harder to guard):** **B8** —
+`Analyze code` under-credits optimality because it doesn't apply algebraic complexity
+equivalence (`O(log M + log N) = O(log(M·N))`); fuzzy model-reasoning that's hard to
+guard deterministically.
 
 ---
 
@@ -421,10 +448,19 @@ is exactly the GenAI system-design interview. Rehearse it either way — it's in
    `feature/action-streamlining` (`0cc0b39` + `9f0c91a`, off main `dcababa`, not
    pushed): the quick-action bar went 9 actions → a 4-chip 2×2 grid; the five cut
    actions are dereferenced from the UI but kept in code for routing to reach.
-   UI/wiring only; tests unchanged at 205. **Now next: B6 chat intent-routing**
-   (#3.6) as its own spec — written against the real four-action surface and owning
-   the deferred discovery affordances; **B8** deferred. Then **cheatsheet / RAG**
-   (#8), then Tier 3 stretch items.
+   UI/wiring only; tests unchanged at 205.
+10. ~~**Chat intent-routing (B6)** (#3.6)~~ — **DONE (2026-09-26)** on branch
+    `feature/chat-intent-routing` (4 commits `8792de6`…`b83a006`, off spec
+    `8dae03f`, local — not pushed): a pure `classify → resolveOverlap → route`
+    pipeline turns the chat box into a smart entry point in front of the untouched
+    chat path; a confirm-to-route affordance guards the filter-exempt actions; a
+    labeled golden set is its accuracy metric; discovery affordances (rotating
+    placeholder + chips) re-surface the five cut actions. Also fixed an adjacent
+    data-loss bug (silent Reset → two-step confirm) and logged **B9**
+    (model-generated headers can hallucinate — deferred). Tests **205 → 236**.
+    **Now next:** the remaining Tier-1.5 eval follow-up (#3a — real captured cases +
+    a validated judge), then progress-tracking Phase D + export-to-file, then
+    **cheatsheet / RAG** (#8), then Tier 3 stretch items. **B8** still deferred.
 
 At each step, backfill numbers into [RESUME.md](./RESUME.md) and new Q&A into
 [INTERVIEW_PREP.md](./INTERVIEW_PREP.md). The docs are living — grow them with the code.

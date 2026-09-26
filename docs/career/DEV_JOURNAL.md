@@ -1134,6 +1134,154 @@ commits ahead of main, awaiting the user's review.
 quick-actions to a 4-chip 2×2 grid — `src/components/QuickActions.tsx`,
 `src/sidepanel/App.tsx`, `.kiro/specs/README.md`).
 
+## 2026-09-26 — Chat intent-routing (B6): a pure classify→resolve→route pipeline that guards the solution
+
+**What.** The last pre-launch feature and the resolution of guardrail-hardening
+**B6**: the chat box becomes a smart entry point. A typed question that is really
+one of the existing actions gets **routed** to that action (its own prompt,
+structured output, filter/exempt handling); otherwise it falls through to the
+existing code-aware, guardrailed chat. Built as a pure pipeline —
+`classify → resolveOverlap → route` — in a new module `src/services/intent-router/`
+(`types.ts`, `registry.ts`, `classify.ts`, `resolve.ts`, `route.ts`, `index.ts`,
+`__tests__/golden-set.test.ts`), wired into `App.tsx` `submitChat` as a pre-step
+that interprets a returned `RouterEffect` (dispatch | confirm | chat). Shipped
+alongside a reusable `ConfirmAffordance` component (the human-facing guardrail),
+discovery affordances (`discovery-prompts.ts`: a rotating placeholder + dismissible
+"Try asking…" chips that re-surface the five actions that lost their buttons in
+action-streamlining), and a `leetsage-pop-in` CSS entrance. On branch
+`feature/chat-intent-routing` (off spec `8dae03f`), four commits, each of which
+passed the Husky pre-commit gate (lint + test + build); test suite **205 → 236**,
+build clean, working tree clean. **Local — not pushed, no PR.**
+
+**Why.** After action-streamlining cut the quick-action bar to four buttons, the
+five niche actions were reachable only in code (`BREAK_DOWN_PROBLEM`,
+`GENERATE_EXAMPLES`, `EXPLAIN_CONCEPT`, `TIME_COMPLEXITY_HINT`,
+`PATTERN_RECOGNITION`); routing is how a typed question reaches them again without
+re-adding buttons. Key design calls, each with a reason:
+- **A pipeline of PURE stages beats a tangled if-dispatcher** — `classify`,
+  `resolveOverlap`, and `route` are each independently unit-testable against the
+  golden set. `route()` stays pure by returning a `RouterEffect` that `App.tsx`
+  interprets, rather than calling React handlers directly.
+- **Intents are DATA** (`INTENT_REGISTRY`: one `IntentDef` per intent). **Exemptness
+  is DERIVED** from `isSolutionExemptAction(target)`, never stored — one source of
+  truth shared with the filter and the pre-display gate, so a future exempt action
+  inherits the confirm requirement automatically.
+- **The classifier is a LOCAL HEURISTIC** (regex/keyword), zero API calls → routing
+  costs exactly ONE call (the routed action or chat), never two. The `classify()`
+  seam lets an LLM classifier replace it later with no call-site changes. Vector
+  routing / a fine-tuned LLM router / per-request LLM classification were explicitly
+  rejected as over-engineered for ~9 client-side intents with no backend.
+- **The resolver is THREE-WAY** (route / ask / chat) with an **abstain band** —
+  modeled on allow/deny/abstain intent-classifier practice; an explicit "not sure"
+  band beats a binary threshold. Precedence: context-sharpening → weight →
+  confidence bands. Genuine multi-intent falls through to chat (one call answers a
+  multi-part question; never fire N actions).
+- **THE guardrail (the product's non-negotiable):** chat NEVER silently routes into
+  a filter-exempt (solution-bearing) action. An exempt route OR any borderline ask
+  becomes a confirm affordance; the user's "Yes" tap is the deliberate act. This
+  closes the exact hole B6 flagged — reaching a solution by *phrasing*.
+- **The golden set doubles as the router's ACCURACY METRIC** (a router is a
+  classifier) — seeded with the three real observed examples, covering confident
+  match / overlap / borderline ask / multi-intent / no-match, plus an explicit test
+  that "just give me the full solution" never silently reaches an exempt action.
+
+**What broke / the hard part.** No dead-end bug in the routing logic itself — the
+instructive parts were the review round, an adjacent data-loss bug, a corrected
+assumption, and some right-sizing:
+(1) ⭐ **The "explain and STOP for review" gate paid off, again.** The initial build
+compiled and tested green, but the visual review round surfaced multiple issues
+automated checks can't catch: the confirm banner **overflowed the panel's right
+edge**, **blended into the background** (not noticeable enough for a guardrail
+interrupt), had **weak copy** ("Looks like you want to understand the solution" —
+restating the obvious rather than conveying the stakes), and had a **left-text /
+right-buttons alignment mismatch**. Reworked into a vertical card (heading row, then
+a full-width two-button row) that never overflows; reason-driven copy + emphasis
+(the exempt case gets a louder amber "heads-up" that conveys the STAKES — "Reveal
+the full solution? … the thing LeetSage usually holds back" — and offers the
+alternative; the borderline case stays purple); the amber "Yes" uses dark text for
+readability; a `leetsage-pop-in` entrance so the guardrail visibly pops in as an
+interrupt (respects `prefers-reduced-motion`).
+(2) ⭐ **Exercising the built UI surfaced a genuine DATA-LOSS bug unrelated to the
+feature.** "Reset this problem" wiped a problem's whole history/progress on a single
+accidental tap with **no warning**; it's now a two-step confirm (Reset / Cancel).
+Same pattern as the guardrail-hardening B4/B5/B7 discoveries — the review gate
+catches adjacent bugs.
+(3) ⭐ **A wrong assumption got corrected by tracing the code.** I assumed the
+structured-action section HEADERS ("## 🌍 Real-World Analogy") were
+hardcoded/deterministic; they are NOT — they're **model-generated from prompt
+instructions**, so they can hallucinate (observed "Real-Year Analogy"). Verified via
+a code trace that no renderer transform touches heading words (the n→N/superscript
+replace runs only *inside* `O(...)` complexity segments), so the corruption is model
+output. Documented as **B9** (deferred; out of scope — this spec must not modify
+prompts), with candidate fixes (client-side heading canonicalization / prompt
+hardening / client-owned heading templates). Lesson: verify "is this deterministic?"
+against the actual code path before assuming.
+(4) **The Husky pre-commit gate blocked commit #1 on a real lint error**
+(`react-refresh/only-export-components`: `ConfirmAffordance` exported both a
+component and a now-unused `actionPhrase` helper) — fixed by removing the dead
+export, then the commit passed. The gate working as intended.
+(5) **Right-sizing a nice-to-have.** I prototyped a typewriter animated placeholder
+and even extracted its state machine into a pure module to test it (since the vitest
+env is `node`/DOM-free, keeping logic pure is the testability lever) — then
+**reverted the typewriter entirely**: it didn't render under the user's
+reduced-motion setting and wasn't worth the complexity for a placeholder. The
+shipped discovery is the simple rotating placeholder (cadence tuned 3.5s → 5s) +
+chips.
+(6) **Classifier tuning via the golden set (the metric doing its job).** A single
+clear keyword now scores decisively (route); the ask band comes from genuine
+near-ties; `explain-concept` patterns were **narrowed** because they mis-caught
+general trivia ("difference between a set and a dict?") that should fall through to
+chat; `analyze-code` gained "current/my code's complexity" patterns so it
+context-sharpens when the editor has code.
+
+**How solved.** Committed in four logical groups, each guarded and each passing the
+pre-commit gate: the pure pipeline + golden set first, then the `App.tsx` wiring +
+`ConfirmAffordance` + the Reset-confirm data-loss fix, then discovery affordances,
+then docs (README rewrite + specs index + B6 resolved / B9 documented). Verified
+`npm.cmd run build` clean and `npm.cmd run test` at **236 passing** (up from 205).
+
+**Interview angle.** ⭐ Two headline stories. **AI/system design:** "a router is a
+classifier, so I built it like one" — a pure `classify → resolve → route` pipeline
+(each stage independently testable), intents as **data** with **derived** (not
+duplicated) exemptness, a **local heuristic** classifier behind a swap-in seam that
+bounds a chat message to **exactly one API call**, a **three-way resolver with an
+abstain band** (allow/deny/abstain, not a binary threshold), and a **labeled golden
+set that doubles as the accuracy metric**. The load-bearing guardrail decision: a
+free-text entry point must **never silently route into a filter-exempt action** —
+an exempt match or any borderline ask becomes a **confirm-to-route affordance**, so
+the deliberate tap (not clever phrasing) is what reaches a solution-bearing path.
+**Workflow / "how I keep AI-assisted work honest":** the green build was necessary
+but not sufficient — the human visual-review gate caught a guardrail banner that
+overflowed/blended/under-communicated *and* an adjacent silent data-loss bug (Reset
+with no confirm); and a "verify, don't assume" code trace corrected a wrong belief
+that section headers were deterministic (they're model output — logged as B9).
+Supporting signals: right-sizing (reverted a typewriter that fought the
+reduced-motion environment), and the pre-commit gate catching a real
+dead-export lint error.
+
+**Caveats (not overclaimed).** The classifier is a **local heuristic**, not an
+LLM/vector/fine-tuned router — only the `classify()` seam exists so one can be
+swapped in later if golden-set accuracy demands it (explicitly deferred).
+**Action chaining / multi-step agentic sequences** are deferred — genuine
+multi-intent goes to chat, not N actions. **B9** (hallucinated section headers) is
+documented and **deferred, not fixed** (out of scope: this spec must not modify
+prompts). The **typewriter placeholder was prototyped then removed** — shipped
+discovery is a rotating placeholder + chips. The golden set is **authored** (like
+the guardrail eval) — a strong regression/accuracy gate, not a measurement against
+real adversarial traffic. **Not pushed, no PR, not merged to main.**
+
+**Commits** (all on `feature/chat-intent-routing`, off spec `8dae03f`, local-only):
+`8792de6` (feat(intent-router): pure `classify→resolveOverlap→route` pipeline +
+labeled golden set — `src/services/intent-router/` {types, registry, classify,
+resolve, route, index} + `__tests__/golden-set.test.ts`), `2b10ea9` (feat(chat):
+wire routing into `App.tsx` submitChat + the `ConfirmAffordance` component + a
+`leetsage-pop-in` entrance; ALSO the two-step "Reset this problem" confirm that
+fixes the data-loss bug — `src/components/ConfirmAffordance.tsx`, `src/index.css`,
+`src/sidepanel/App.tsx`), `b94c3c7` (feat(chat): discovery affordances —
+`src/components/discovery-prompts.ts`), `b83a006` (docs: README "What it does"
+rewrite + specs/README.md row & status + B6 resolved / B9 documented in the
+guardrail-hardening registry).
+
 ---
 
 ## Next up (see [LEARNING_ROADMAP.md](./LEARNING_ROADMAP.md))
@@ -1168,9 +1316,20 @@ quick-actions to a 4-chip 2×2 grid — `src/components/QuickActions.tsx`,
    surviving intents (Hint / Analyze my code / Understand solution / Generate
    report); the five cut actions are dereferenced from the UI but kept in code so
    `chat-intent-routing` can dispatch to them. UI/wiring only; tests unchanged at
-   205. **Next: B6 chat intent-routing** (`leetsage-chat-intent-routing`), sequenced
-   deliberately after this so it's written against the real four-action surface, and
-   which will also own the deferred discovery affordances.
+   205.
+6. ~~**Chat intent-routing (B6)** — the chat box as a smart entry point~~ — **DONE
+   (2026-09-26)** on branch `feature/chat-intent-routing` (4 commits
+   `8792de6`…`b83a006`, off spec `8dae03f`, local — not pushed): a pure
+   `classify → resolveOverlap → route` pipeline (`src/services/intent-router/`) that
+   routes a typed question to a matching action or falls through to chat, with a
+   confirm-to-route affordance guarding the filter-exempt actions and a labeled
+   golden set as its accuracy metric; re-references the five cut actions and owns the
+   discovery affordances (rotating placeholder + chips). Also fixed an adjacent
+   data-loss bug (silent "Reset this problem" → two-step confirm) and logged **B9**
+   (model-generated section headers can hallucinate — deferred). Tests **205 → 236**.
+   **Next: the deferred eval follow-up** (real captured-Gemini cases + a validated
+   LLM-as-judge), then progress-tracking Phase D (verified submissions) and
+   export-to-file, then cheatsheet / RAG.
 
 *When each lands, add an entry above (via the project-historian agent) and backfill
 any resulting numbers into [RESUME.md](./RESUME.md).*

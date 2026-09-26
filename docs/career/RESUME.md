@@ -100,6 +100,14 @@ Pick 2–4 depending on space. Swap in real numbers as soon as you have them
   render behind an animated placeholder and reveal only after passing the filter,
   turning a detect-and-roll-back into **block-before-reveal** without losing
   perceived responsiveness. Guarded by a DOM-free test on the commit sequence.
+- Built a **chat intent-router** — a pure `classify → resolve → route` pipeline (a
+  local, zero-API-call heuristic classifier behind a swap-in seam, a data-driven
+  intent registry, and a **three-way route/ask/abstain** resolver) that turns a
+  free-form question into the right structured action while bounding each message to
+  **exactly one model call**; enforced the product's core guardrail by making any
+  route into a solution-bearing action a **confirm-to-route** step (never silent),
+  and scored the router against a **labeled golden set** that doubles as its accuracy
+  metric.
 - **Instrumented client-side runtime metrics** (per-request latency, tokens, and
   estimated cost) with pure, unit-tested p50/p95 aggregation and bounded local
   storage — measuring **p50 ~1.6 s / p95 ~3.0 s latency and ~1,459 tokens (~$0.00025)
@@ -139,7 +147,8 @@ Only list what you can defend. Currently truthful for LeetSage:
 `unit testing (Vitest)` · `Chrome Extension (Manifest V3)` ·
 `React` · `TypeScript` · `Tailwind CSS` · `Vite` · `client-side architecture` ·
 `cost optimization / rate limiting` · `AI-assisted development (custom agents)` ·
-`prompt-injection mitigation (OWASP LLM #1)` · `production metrics / monitoring`
+`prompt-injection mitigation (OWASP LLM #1)` · `production metrics / monitoring` ·
+`intent classification / routing`
 
 Add once built: `RAG`.
 
@@ -205,9 +214,10 @@ You can't quote impact you never measured. Even rough, self-collected numbers he
   over the sample. *Caveat: self-collected, single model `gemini-3.5-flash-lite`,
   small n=9 sample — an order-of-magnitude signal, not a benchmark. Cost is an
   estimate from public per-token pricing (BYOK / free quota), not a bill.*
-- ✅ **205 automated tests** across the pure modules + the guardrail eval (167 at
+- ✅ **236 automated tests** across the pure modules + the guardrail eval (167 at
   the 2026-09-23 metrics milestone → **205** after the 2026-09-24 guardrail-
-  hardening pass added guards for B1–B7).
+  hardening pass added guards for B1–B7 → **236** after the 2026-09-26 chat
+  intent-routing pass added the labeled router golden set).
 
 **Still to capture:**
 
