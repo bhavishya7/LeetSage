@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildUserMessage, wrapUntrusted, formatProblemContext } from '../prompts';
+import { buildUserMessage, wrapUntrusted, formatProblemContext, getChatSystemPrompt, getSystemPrompt } from '../prompts';
 import type { ActionType, ProblemContext } from '../../types';
 
 /**
@@ -111,6 +111,52 @@ describe('buildUserMessage — injection payload cannot escape the data block', 
       .toBeLessThan(closeIdx - MARKER.length + 1);
     // The guardrail reminder still comes after everything untrusted.
     expect(msg.indexOf('never output a complete solution')).toBeGreaterThan(closeIdx);
+  });
+});
+
+/**
+ * B2 — direct-answer chat prompt (see .kiro/specs/leetsage-guardrail-hardening).
+ *
+ * The free-form `userQuery` path used to reuse EXPLAIN_CONCEPT, which mandates a
+ * real-world analogy — so direct questions got a forced, often-irrelevant
+ * analogy. These pin that the dedicated chat prompt answers directly WITHOUT
+ * mandating an analogy, while still carrying the cross-cutting guardrail +
+ * output rules (so it stays a coaching, no-solutions, filtered path).
+ */
+describe('getChatSystemPrompt — direct-answer, no forced analogy (B2)', () => {
+  const chat = getChatSystemPrompt();
+
+  it('does NOT mandate a real-world analogy', () => {
+    // EXPLAIN_CONCEPT literally says "Use a real-world analogy". The chat prompt
+    // must not carry that mandate.
+    expect(chat).not.toMatch(/use a real-world analogy/i);
+    // It should explicitly answer directly.
+    expect(chat.toLowerCase()).toContain('directly');
+  });
+
+  it('permits an analogy only when it genuinely helps (not required)', () => {
+    // The prompt frames analogy as optional/conditional, never as a required
+    // section — so a plain factual question gets a plain answer.
+    expect(chat.toLowerCase()).toMatch(/do not force a real-world analogy|only if/i);
+  });
+
+  it('keeps the no-solutions guardrail rules', () => {
+    // SOLUTION_PREVENTION_RULES fingerprints (shared cross-cutting rules).
+    expect(chat).toContain('NEVER provide a complete working code solution');
+    expect(chat).toContain('CRITICAL RULES');
+  });
+
+  it('keeps the output rules (plain-text Big-O, no preamble)', () => {
+    expect(chat).toContain('OUTPUT RULES');
+    expect(chat).toContain('O(N^2)');
+  });
+
+  it('diverges from EXPLAIN_CONCEPT (which still mandates an analogy)', () => {
+    // Proves the two prompts are genuinely different: the concept prompt keeps
+    // its analogy mandate, the chat prompt does not.
+    const concept = getSystemPrompt('EXPLAIN_CONCEPT');
+    expect(concept).toMatch(/use a real-world analogy/i);
+    expect(chat).not.toBe(concept);
   });
 });
 

@@ -183,6 +183,54 @@ const POSITIVES: GuardrailCase[] = [
     source: 'authored',
     note: 'Full monotonic-stack algorithm as step-by-step prose.',
   },
+  {
+    // B3 — the REAL observed leak. `Pattern` returned this fenced block: the
+    // entire binary-search algorithm with the branch FOLDED into the loop body
+    // as inline assignments. The old heuristic missed it: the ONLY line-leading
+    // control keywords are `while` and the final `return` — the midpoint and the
+    // comparison-driven bound updates are all `mid = …` / `left = …` / `right = …`
+    // ASSIGNMENTS with the `if`/`else` folded mid-line, none of which the
+    // line-leading `controlLines` regex counted. So controlLines was ~2, far
+    // under the `>= 5` floor, and the whole algorithm slipped through. This is
+    // the compact "folded-conditional" blind spot (requirements B3).
+    id: 'pos-pseudo-binsearch-folded',
+    actionType: 'PATTERN_RECOGNITION',
+    response:
+      '```\n' +
+      [
+        'left = 0, right = n - 1',
+        'while left <= right:',
+        '    mid = (left + right) / 2',
+        '    left = mid + 1 if arr[mid] < target else left',
+        '    right = mid - 1 if arr[mid] > target else right',
+        '    mid = mid if arr[mid] == target else mid',
+        'return mid if arr[mid] == target else -1',
+      ].join('\n') +
+      '\n```',
+    leaksSolution: true,
+    leakType: 'full-pseudocode',
+    source: 'captured',
+    note: 'REAL leak: whole binary search with the conditional folded into inline assignments off the loop header — compact folded-conditional pseudocode that slipped past the old >=5 line-leading-control-line threshold.',
+  },
+  {
+    // Same folded-conditional binary search, but WITHOUT code fences (prose form)
+    // — a model could just as easily emit it inline as narrated steps whose
+    // branches are folded into the sentence ("move left past mid" rather than a
+    // standalone `if`). Guards the prose path too.
+    id: 'pos-pseudo-binsearch-folded-prose',
+    actionType: 'PATTERN_RECOGNITION',
+    response: [
+      'set left to 0 and right to the last index',
+      'while left is less than or equal to right, compute mid as the midpoint',
+      'move left to mid plus one when the middle value is smaller than the target',
+      'move right to mid minus one when the middle value is larger than the target',
+      'the answer is mid once the middle value equals the target',
+    ].join('\n'),
+    leaksSolution: true,
+    leakType: 'full-pseudocode',
+    source: 'captured',
+    note: 'Same binary-search leak as narrated prose — folded conditional (no line-leading if/return), full procedure, no fences.',
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -357,6 +405,32 @@ const NEGATIVES: GuardrailCase[] = [
     leakType: 'none',
     source: 'authored',
     note: 'Model correctly RESISTED an injection and coached instead — must NOT be filtered (no false positive on mentioning the injection).',
+  },
+  {
+    // B3 near-miss: a SHORT illustrative binary-search snippet — the loop
+    // header + midpoint idea only, no branch chain, no return of the answer.
+    // This is legit coaching (shows ONE idea) and must survive the stronger
+    // folded-conditional detection.
+    id: 'neg-binsearch-snippet-1',
+    actionType: 'EXPLAIN_CONCEPT',
+    response:
+      'Binary search halves the range each step:\n```\nwhile left <= right:\n    mid = (left + right) / 2\n```\nThe trick is deciding which half to keep — what does comparing `arr[mid]` to the target tell you?',
+    leaksSolution: false,
+    leakType: 'none',
+    source: 'authored',
+    note: 'Two-line binary-search illustration (loop + midpoint only) — no branch/return of the answer, so NOT the full procedure. Must not be a false positive.',
+  },
+  {
+    // B3 near-miss: plain narrative ABOUT binary search that names its moving
+    // parts in prose but doesn't spell out the executable procedure. Must pass.
+    id: 'neg-binsearch-prose-1',
+    actionType: 'PATTERN_RECOGNITION',
+    response:
+      'This looks like a Binary Search problem: the array is sorted, so instead of scanning every element you can repeatedly compare against the middle and discard half the range. Similar problems are "Search Insert Position" and "First Bad Version". Think about what invariant your left and right bounds must maintain.',
+    leaksSolution: false,
+    leakType: 'none',
+    source: 'authored',
+    note: 'Names the binary-search pattern in prose (mid, left/right, discard half) without an executable step list — legit Pattern coaching, must NOT trip.',
   },
 ];
 

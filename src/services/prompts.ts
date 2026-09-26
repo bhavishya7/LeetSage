@@ -177,6 +177,27 @@ export function wrapUntrusted(untrustedData: string, instruction: string): strin
   );
 }
 
+/**
+ * System prompt for the FREE-FORM CHAT path (the `userQuery` escape hatch), as
+ * distinct from the templated actions.
+ *
+ * Why this exists (B2, see .kiro/specs/leetsage-guardrail-hardening): the chat
+ * path used to reuse `EXPLAIN_CONCEPT`, whose text mandates "Use a real-world
+ * analogy…". That shoehorned every direct question ("what does this loop do?")
+ * into the concept-explanation template and forced an often-irrelevant analogy.
+ *
+ * This prompt answers the user's ACTUAL question directly. It deliberately does
+ * NOT mandate an analogy (it may use one only when it genuinely helps), but it
+ * KEEPS the cross-cutting guardrail (`SOLUTION_PREVENTION_RULES`) and
+ * `OUTPUT_RULES`. The untrusted-content framing (`wrapUntrusted`) is applied to
+ * the message at the call site, and this path stays NON-EXEMPT — so it still
+ * flows through `filterResponse` and the pre-display gate. The design lesson:
+ * share the cross-cutting rules, not the wrong task template.
+ */
+export function getChatSystemPrompt(): string {
+  return `You are LeetSage, an AI learning coach, answering a developer's free-form question about the LeetCode problem they are working on.\n${SOLUTION_PREVENTION_RULES}\nHOW TO ANSWER:\n- Answer the developer's ACTUAL question directly and concisely. Address exactly what they asked — do not reshape it into a generic concept lecture.\n- Do NOT force a real-world analogy. Use one ONLY if it genuinely clarifies THIS specific question; most direct questions do not need one.\n- The developer's CURRENT EDITOR CODE may be included in the data block. If it is, use it to ground your answer (e.g. analyze THEIR code's complexity, spot a bug, comment on their approach). It may be incomplete, incorrect, or untested — do NOT assume it works, pass tests, or is the correct solution. If no code is present, just answer the question.\n- You MAY quote or reference short pieces of their code to make a point, but do NOT rewrite their whole solution for them, and do NOT reveal the optimal full solution — that is what the dedicated "Understand Solution" action is for. Keep guiding.\n- If they ask directly for the answer/solution, redirect them to a hint or to reasoning it out themselves.\n- Keep it focused and use markdown for readability. If complexity comes up, give both time and space.\n${OUTPUT_RULES}${TONE_GUIDELINES}`;
+}
+
 export function getSystemPrompt(actionType: ActionType): string {
   const prompts: Record<ActionType, string> = {
     GET_HINT: `You are LeetSage, an AI learning coach. Provide a HINT — not a solution.\n${SOLUTION_PREVENTION_RULES}\nHINT LEVELS:\n- Level 1 (Conceptual): What kind of problem? What data structure?\n- Level 2 (Approach): Strategy or algorithm at high level\n- Level 3 (Implementation): Specific guidance, edge cases — still no complete code\n\nFormat as a "## Hint [level]: [short title]" heading, 2-4 sentences, then a "💡 **Think about:**" guiding question. Fill in real content — do not print the bracketed labels literally.\n${OUTPUT_RULES}${TONE_GUIDELINES}`,

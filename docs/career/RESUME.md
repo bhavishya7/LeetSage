@@ -94,6 +94,12 @@ Pick 2–4 depending on space. Swap in real numbers as soon as you have them
   reasserted after, backed by least-privilege (no tool access) and the output
   filter as the hard backstop — **verified on both sides by tests** (input framing
   pinned per action; an eval case proves a *successful* injection is still caught).
+- Hardened the guardrail's **enforcement point**: found that flagged content was
+  streamed to the UI *before* the filter ran (a leak was briefly readable, then
+  replaced), and moved the check to a **pre-display gate** — non-exempt responses
+  render behind an animated placeholder and reveal only after passing the filter,
+  turning a detect-and-roll-back into **block-before-reveal** without losing
+  perceived responsiveness. Guarded by a DOM-free test on the commit sequence.
 - **Instrumented client-side runtime metrics** (per-request latency, tokens, and
   estimated cost) with pure, unit-tested p50/p95 aggregation and bounded local
   storage — measuring **p50 ~1.6 s / p95 ~3.0 s latency and ~1,459 tokens (~$0.00025)
@@ -199,7 +205,9 @@ You can't quote impact you never measured. Even rough, self-collected numbers he
   over the sample. *Caveat: self-collected, single model `gemini-3.5-flash-lite`,
   small n=9 sample — an order-of-magnitude signal, not a benchmark. Cost is an
   estimate from public per-token pricing (BYOK / free quota), not a bill.*
-- ✅ **167 automated tests** across the pure modules + the guardrail eval.
+- ✅ **205 automated tests** across the pure modules + the guardrail eval (167 at
+  the 2026-09-23 metrics milestone → **205** after the 2026-09-24 guardrail-
+  hardening pass added guards for B1–B7).
 
 **Still to capture:**
 

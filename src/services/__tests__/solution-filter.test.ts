@@ -150,6 +150,64 @@ describe('filterResponse — full pseudocode (fenced and prose)', () => {
   });
 });
 
+describe('filterResponse — folded-conditional pseudocode (B3 blind spot)', () => {
+  // The real observed leak: a whole binary search whose branch is folded into
+  // inline bound updates, so it has no line-leading `if`/`return` and used to
+  // score under the old >= 5 control-line threshold. See B3 in
+  // .kiro/specs/leetsage-guardrail-hardening/requirements.md.
+  const foldedBinarySearchFenced = [
+    '```',
+    'left = 0, right = n - 1',
+    'while left <= right:',
+    '    mid = (left + right) / 2',
+    '    left = mid + 1 if arr[mid] < target else left',
+    '    right = mid - 1 if arr[mid] > target else right',
+    'return mid if arr[mid] == target else -1',
+    '```',
+  ].join('\n');
+
+  const foldedBinarySearchProse = [
+    'set left to 0 and right to the last index',
+    'while left is less than or equal to right, compute mid as the midpoint',
+    'move left to mid plus one when the middle value is smaller than the target',
+    'move right to mid minus one when the middle value is larger than the target',
+    'the answer is mid once the middle value equals the target',
+  ].join('\n');
+
+  it('catches a fenced folded-conditional binary search (loop + bound updates + return)', () => {
+    const result = filterResponse(foldedBinarySearchFenced, COACHING);
+    expect(result.wasFiltered).toBe(true);
+    expect(result.filterReason).toContain('Full pseudocode detected');
+  });
+
+  it('catches the same folded binary search written as prose (no fences)', () => {
+    const result = filterResponse(foldedBinarySearchProse, COACHING);
+    expect(result.wasFiltered).toBe(true);
+    expect(result.filterReason).toBe('Full pseudocode detected (prose)');
+  });
+
+  it('passes a short binary-search illustration (loop + one midpoint idea, no full procedure)', () => {
+    // Loop header + a single midpoint line, no bound updates, no answer — legit
+    // "here is the ONE idea" coaching snippet. Must NOT be a false positive.
+    const snippet = [
+      'Binary search halves the range each step:',
+      '```',
+      'while left <= right:',
+      '    mid = (left + right) / 2',
+      '```',
+      'Which half do you keep after comparing `arr[mid]` to the target?',
+    ].join('\n');
+    const result = filterResponse(snippet, 'EXPLAIN_CONCEPT');
+    expect(result.wasFiltered).toBe(false);
+  });
+
+  it('passes plain prose that NAMES binary search without spelling out the procedure', () => {
+    const prose = 'This looks like a Binary Search problem: the array is sorted, so compare against the middle and discard half the range each time. What invariant must your left and right bounds keep?';
+    const result = filterResponse(prose, 'PATTERN_RECOGNITION');
+    expect(result.wasFiltered).toBe(false);
+  });
+});
+
 describe('filterResponse — return shape', () => {
   it('returns original content untouched when it passes', () => {
     const content = 'Here is a nudge: what if you sort first?';

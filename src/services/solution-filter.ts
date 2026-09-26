@@ -8,6 +8,18 @@ const MAX_CODE_BLOCK_LINES = 14;
  */
 const SOLUTION_EXEMPT_ACTIONS: ReadonlySet<ActionType> = new Set(['CHECK_APPROACH', 'UNDERSTAND_SOLUTION', 'GENERATE_REPORT']);
 
+/**
+ * Is this action exempt from the solution guardrail? Exempt actions
+ * (analyze/explain the user's OWN code, or record it as a study note) are
+ * ALLOWED to contain solution content, so they bypass `filterResponse` AND the
+ * B1 pre-display gate — they may stream live. Exported so the UI gate
+ * (App.tsx) and the filter share ONE source of truth for the exempt set
+ * instead of duplicating the list. See .kiro/specs/leetsage-guardrail-hardening.
+ */
+export function isSolutionExemptAction(actionType: ActionType): boolean {
+  return SOLUTION_EXEMPT_ACTIONS.has(actionType);
+}
+
 const SOLUTION_PHRASES = [
   "here's the complete solution", "here is the complete solution", "here's the full solution",
   "complete implementation", "full implementation", "here's the code", "here is the code",
@@ -66,7 +78,39 @@ function looksLikeFullPseudocode(text: string): boolean {
   // solution. The guardrail eval caught that over-fit (case pos-pseudo-prose-2).
   // Requiring loop + result + 5 control lines keeps plain narrative prose (which
   // has no loop/return structure) from tripping this.
-  return controlLines.length >= 5 && hasLoop && hasResult;
+  if (controlLines.length >= 5 && hasLoop && hasResult) return true;
+
+  // FOLDED-CONDITIONAL blind spot (B3): a compact search/two-pointer procedure
+  // folds its branch INTO the loop body as inline updates, so it has almost no
+  // line-leading `if`/`return` and scores under the >= 5 control-line floor
+  // above. The real leak was a whole binary search — `while left <= right`, a
+  // `mid = ...` midpoint, `left = ... / right = ...` bound moves, then the
+  // answer — none of which the line-leading counter caught. We detect the
+  // *signature* of such a procedure instead: a loop, PLUS repeated
+  // pointer/bound-update assignments, PLUS a terminating/answer line.
+  const hasLoopAnywhere = lines.some(l =>
+    /\b(while|for|repeat|loop)\b/.test(l) || /\bfor each\b|\bfor every\b/.test(l)
+  );
+  // Pointer/bound updates that drive a search or two-pointer scan. Both the
+  // code form (`left = mid + 1`, `right = mid - 1`, `mid = ...`) and the
+  // narrated form ("move left to mid plus one") register here.
+  const boundUpdateLines = lines.filter(l =>
+    /\b(mid|lo|hi|left|right|low|high|start|end|l|r)\s*=/.test(l) ||
+    /\bmove (left|right|lo|hi|low|high|the pointer)\b/.test(l) ||
+    /\b(midpoint|middle index|the midpoint)\b/.test(l)
+  );
+  // A terminating line: an explicit return/answer, or a narrated "the answer
+  // is …" / "once … equals …" closing step.
+  const hasTerminator = lines.some(l =>
+    /\breturn\b/.test(l) || /\banswer is\b|\bthe answer\b|\bthe result is\b/.test(l) ||
+    /^(return |output|result)/.test(l)
+  );
+  // The complete-procedure signature: a loop + at least two distinct
+  // pointer/bound updates (the thing that makes it a real algorithm, not a
+  // one-line illustration) + a terminating step. Two-or-more updates is the
+  // floor that keeps short single-idea snippets out: a lone `while … : mid = …`
+  // illustration has one update and no terminator, so it stays allowed.
+  return hasLoopAnywhere && boundUpdateLines.length >= 2 && hasTerminator;
 }
 
 function extractCodeBlocks(content: string): Array<{ code: string; lineCount: number }> {

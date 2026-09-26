@@ -1,5 +1,9 @@
 import React, { useEffect, useRef } from 'react';
 import type { LearningContent } from '../types';
+import { isSolutionExemptAction } from '../services/solution-filter';
+import ThinkingIndicator from './ThinkingIndicator';
+import { thinkingLabel } from './thinking-labels';
+import { splitComplexity } from './complexity-parse';
 
 interface ContentDisplayProps {
   content: LearningContent[];
@@ -45,35 +49,24 @@ function stripLatex(text: string): string {
  * Handles: O(1), O(N), O(N²), O(N³), O(N log N), O(2^N), O(N!), etc.
  */
 function renderComplexity(text: string, keyBase: number): React.ReactNode[] {
-  // Match O(...) patterns, including nested content like "N log N", "N^2", "2^N"
-  const regex = /O\(([^)]+)\)/gi;
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  let match;
-
-  while ((match = regex.exec(text)) !== null) {
-    // Text before this match
-    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
-
-    const inner = match[1];
-    // Convert ^2 -> superscript, uppercase N for consistency
-    const formatted = inner
+  // splitComplexity handles BALANCED (possibly nested) parens, so a complexity
+  // like "O(log(M) + log(N))" is captured whole instead of the old regex
+  // stopping at the first ")" and leaking the tail as prose (B7).
+  const segments = splitComplexity(text);
+  const parts: React.ReactNode[] = segments.map((seg, i) => {
+    if (seg.kind === 'text') return <React.Fragment key={`t-${keyBase}-${i}`}>{seg.value}</React.Fragment>;
+    // Convert ^2 -> superscript, uppercase N for consistency.
+    const formatted = seg.inner
       .replace(/\^(\d+)/g, '⁰¹²³⁴⁵⁶⁷⁸⁹'.includes('') ? '$1' : '^$1') // fallback
       .replace(/n/g, 'N');
-
-    // Build the styled content with real superscripts
     const superscripted = formatSuperscripts(formatted);
-
-    parts.push(
-      <span key={`complexity-${keyBase}-${match.index}`}
+    return (
+      <span key={`complexity-${keyBase}-${seg.at}`}
         className="inline-flex items-baseline px-1 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 font-mono text-[12px] font-semibold whitespace-nowrap">
         O({superscripted})
       </span>
     );
-    lastIndex = match.index + match[0].length;
-  }
-
-  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  });
   return parts.length > 0 ? parts : [text];
 }
 
@@ -151,9 +144,13 @@ const UserBubble: React.FC<{ text: string }> = ({ text }) => (
 const ContentCard: React.FC<{
   item: LearningContent;
   isStreaming: boolean;
+  /** B1: this card is a non-exempt action mid-stream — show the gated
+   *  "thinking" placeholder instead of streamed tokens (content is withheld
+   *  until the filter has run). */
+  isGated: boolean;
   onSaveToProgress?: (item: LearningContent) => void;
   isSaved?: boolean;
-}> = ({ item, isStreaming, onSaveToProgress, isSaved }) => {
+}> = ({ item, isStreaming, isGated, onSaveToProgress, isSaved }) => {
   const [expanded, setExpanded] = React.useState(true);
   const [copied, setCopied] = React.useState(false);
   const meta = TYPE_META[item.type];
@@ -178,7 +175,9 @@ const ContentCard: React.FC<{
           <span className="text-sm">{meta.icon}</span>
           <span className="text-[13px] font-semibold text-neutral-800 dark:text-neutral-100">{label}</span>
           {item.metadata?.hintLevel && <span className="text-[10px] bg-yellow-400/20 text-yellow-600 dark:text-yellow-400 px-1.5 rounded-full">Level {item.metadata.hintLevel}</span>}
-          {isStreaming && <span className="text-[10px] text-neutral-400 animate-pulse">generating…</span>}
+          {/* Live "generating…" tag only for actions that stream visibly (exempt
+              actions). Gated non-exempt cards show their own thinking label. */}
+          {isStreaming && !isGated && <span className="text-[10px] text-neutral-400 animate-pulse">generating…</span>}
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-neutral-400">{time}</span>
@@ -187,8 +186,14 @@ const ContentCard: React.FC<{
       </button>
       {expanded && (
         <div className="px-3 pb-2 min-w-0 break-words overflow-x-hidden">
-          {item.content ? renderContent(item.content) : <div className="h-4 bg-neutral-200 dark:bg-neutral-700 rounded animate-pulse" />}
-          {isStreaming && item.content && <span className="inline-block w-1 h-3 bg-neutral-400 animate-pulse ml-0.5" />}
+          {isGated
+            // B1: non-exempt action mid-stream — withhold tokens, show the
+            // animated action-aware "thinking" placeholder until the filter runs.
+            ? <ThinkingIndicator label={thinkingLabel(item.actionType, item.type === 'CHAT_MESSAGE')} />
+            : item.content
+              ? renderContent(item.content)
+              : <div className="h-4 bg-neutral-200 dark:bg-neutral-700 rounded animate-pulse" />}
+          {isStreaming && !isGated && item.content && <span className="inline-block w-1 h-3 bg-neutral-400 animate-pulse ml-0.5" />}
           {item.content && !isStreaming && (
             <div className="flex justify-end items-center gap-2 mt-1.5">
               {/* Save-to-progress: only offered on a finished Study Report card. */}
@@ -241,11 +246,27 @@ const ContentDisplay: React.FC<ContentDisplayProps> = ({ content, isLoading, str
 
   return (
     <div className="flex-1 min-w-0 overflow-x-hidden overflow-y-auto px-3 py-3">
-      {content.map(item =>
-        item.type === 'CHAT_MESSAGE' && item.actionType === 'CHECK_APPROACH' && item.metadata?.isUserQuery
-          ? <UserBubble key={item.id} text={item.content} />
-          : <ContentCard key={item.id} item={item} isStreaming={item.id === streamingId} onSaveToProgress={onSaveToProgress} isSaved={savedReportIds?.has(item.id)} />
-      )}
+      {content.map(item => {
+        if (item.type === 'CHAT_MESSAGE' && item.actionType === 'CHECK_APPROACH' && item.metadata?.isUserQuery) {
+          return <UserBubble key={item.id} text={item.content} />;
+        }
+        const isStreaming = item.id === streamingId;
+        // B1 pre-display gate: while a NON-EXEMPT action streams, its tokens are
+        // withheld (accumulated in App, not pushed to `content`), so this card
+        // shows the "thinking" placeholder instead of partial, unfiltered text.
+        // Exempt actions stream live, so they are never gated.
+        const isGated = isStreaming && !isSolutionExemptAction(item.actionType);
+        return (
+          <ContentCard
+            key={item.id}
+            item={item}
+            isStreaming={isStreaming}
+            isGated={isGated}
+            onSaveToProgress={onSaveToProgress}
+            isSaved={savedReportIds?.has(item.id)}
+          />
+        );
+      })}
       <div ref={bottomRef} />
     </div>
   );

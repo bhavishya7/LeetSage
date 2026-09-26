@@ -915,6 +915,149 @@ est. cost — the design spec, new types `RequestMetricSample`/`MetricsState`/
 footer-clipping and off-center-modal fixes) — both on branch `feature/metrics` (off
 `main`@`dcc6fe1`), **not pushed / not merged.**
 
+## 2026-09-24 — Guardrail hardening: a pre-display gate + a standing bug registry (B1–B8)
+
+**What.** A pre-launch hardening pass under the `leetsage-guardrail-hardening`
+spec, which also stands up a **bug registry**: every guardrail bug fix must add a
+test/eval that would have caught it. Fixed three planned bugs (B1–B3), then — by
+exercising the shipped B1 build — surfaced and fixed three more (B4/B5/B7), and
+logged two as documented deferrals (B6/B8). All eight tracked as rows in the
+spec's registry. On branch `feature/guardrail-hardening` (off the spec commit
+`0edfd69`), eight commits, **local — not pushed, no PR.**
+
+- **B1 — pre-display gate (the headline fix).** Model tokens streamed straight
+  into the visible card and `filterResponse` ran only *after* the stream, so a
+  solution leak was briefly *readable* before being replaced — a detect-and-
+  roll-back, not a block-before-reveal. Fix: for **non-exempt** actions
+  `streamLive = isSolutionExemptAction(actionType)` is false, so per-chunk
+  rendering is skipped; tokens accumulate in memory behind an animated action-
+  aware "thinking" placeholder (new `ThinkingIndicator.tsx` + `thinking-labels.ts`
+  + a `leetsage-dot-pulse` CSS keyframe), and only the parsed+filtered result is
+  committed, in one update. Exempt actions (`CHECK_APPROACH`/`UNDERSTAND_SOLUTION`/
+  `GENERATE_REPORT`) still stream live. `isSolutionExemptAction` is now exported
+  from `solution-filter.ts` as the single shared source of truth. Guard:
+  `src/sidepanel/__tests__/predisplay-gate.test.ts` (DOM-free — models App's commit
+  sequence to prove a leaking non-exempt response commits ONLY the filtered
+  message).
+- **B2 — direct-answer chat prompt.** Free-form chat reused the `EXPLAIN_CONCEPT`
+  prompt, which mandates a real-world analogy, so direct questions got a forced,
+  often irrelevant analogy. Fix: a dedicated `getChatSystemPrompt()` (answers
+  directly, no mandated analogy, keeps SOLUTION_PREVENTION_RULES + OUTPUT_RULES +
+  the `wrapUntrusted` framing); routed the `userQuery` path through it in
+  `llm-service.ts` `buildMessages`. Chat stays non-exempt/filtered. Guard:
+  prompt-shape tests in `prompts.test.ts`.
+- **B3 — folded-conditional filter blind spot.** `looksLikeFullPseudocode` missed
+  compact pseudocode with the branch folded into inline bound updates (a whole
+  binary search with almost no line-leading `if`/`return`, so it scored under the
+  old `controlLines >= 5` floor). Fix: a second detection path — loop + ≥2 pointer/
+  bound updates (`mid`/`lo`/`hi`/`left`/`right =`, or narrated "move left to…") + a
+  terminating/answer line. Tuned **against the eval, not by hand**: added the real
+  leak + safe near-misses to `src/evals/fixtures/guardrail-cases.ts`, and confirmed
+  via a throwaway probe that the new fixtures dropped the catch rate to **85.7%
+  BEFORE** the fix and back to **100% after** (FP rate stayed **0%**). Guard: unit
+  tests in `solution-filter.test.ts`.
+- **B4 — chat was blind to the editor code.** `handleChatSubmit` never called
+  `extractCurrentCode`, so "what is my code's time complexity?" returned "you
+  didn't include your code" even with an Accepted solution on screen. Fix: chat now
+  always sends the (non-empty) editor code, folded into the `wrapUntrusted` DATA
+  block via a new `buildChatData()`; the chat prompt is code-aware but must not
+  assume the code is correct or reveal the optimal solution. **Deliberate decision:
+  chat stays NON-EXEMPT/filtered** rather than becoming exempt like the code-analysis
+  buttons — an action button has a fixed trusted intent, but chat is free text, so
+  making code-bearing chat exempt would let a "complete my stub" ask bypass the
+  filter. Guard: `chat-code.test.ts`.
+- **B5 — the B1 gate felt frozen on heavy actions.** Heavy non-exempt actions
+  (esp. `Concept`, ~5–6s) felt frozen behind the gate because it withholds the
+  whole stream that live streaming used to mask. Fix: `ThinkingIndicator` runs an
+  elapsed timer; after a **3s grace period** it switches to "Still working on it…"
+  plus a live elapsed-seconds counter (proof of life, not a real progress bar).
+  Fast (<3s) responses never flash the counter. Presentation-only; the gate is
+  unchanged.
+- **B7 — complexity badge split on nested parens.** `renderComplexity`'s regex
+  `/O\(([^)]+)\)/` stopped at the first `)`, so `O(log(M) + log(N))` rendered only
+  `O(log(M)` as a badge and leaked `+ log(N))` as prose. Fix: a pure balanced-paren
+  parser extracted into a new module `src/components/complexity-parse.ts`
+  (`matchingParen` depth-walk + `splitComplexity` segmenter); `renderComplexity`
+  maps over its segments. Its own module so `ContentDisplay` stays component-only
+  (the `react-refresh/only-export-components` lint rule). Guard:
+  `complexity-parse.test.ts` (9 cases).
+- **B6 / B8 — documented deferrals (NOT built).** B6 (chat *intent routing* — route
+  a message to a matching action when one fits) is deliberately its own future spec
+  (`leetsage-chat-intent-routing`): it needs a classifier choice (LLM vs heuristic)
+  and a guardrail decision about routing free text into the filter-*exempt* actions.
+  B8 (`Analyze code` under-crediting optimality — it doesn't recognize
+  `O(log M + log N) = O(log(M·N))`) is deferred as fuzzy model-reasoning that's hard
+  to guard deterministically. Both are registry rows, not code.
+
+**Why.** The organizing principle behind B1: **a gate must sit BEFORE the resource
+it protects.** The filter was logically correct but positioned *after* render, so
+it could only undo exposure, not prevent it — which defeats the product's one
+non-negotiable ("never reveal the solution"). The deliberate trade was to keep the
+*feeling* of responsiveness (a visible working state) while moving the actual reveal
+behind the gate, and only where correctness matters (non-exempt actions stay
+gated; exempt ones still stream live). B2 was a "reuse the cross-cutting rules, not
+the wrong task template" fix. B3 encoded the discipline "change a heuristic against
+an eval, not a hunch." B4 held the line that a free-text entry point is not a
+fixed-intent button, so it must not inherit the exempt actions' pass on the filter.
+And the whole pass scaled process rigor: B1–B3 were the planned spec; B4/B5/B7 were
+appended to the standing registry as they were found and fixed in a separate pass,
+with B6/B8 left as documented deferrals rather than scope-creeping this spec.
+
+**What broke / the hard part.** Three genuinely instructive snags, none a dead-end
+bug but each a lesson:
+(1) ⭐ **Human-in-the-loop review after a green build is where the real bugs fell
+out.** The B1 build was green and looked done, but *manually exercising* the shipped
+change (the mandatory "eyeball the UI before commit" gate) surfaced B4 (chat blind
+to code), B5 (frozen-feeling placeholder), and B7 (badge split) — none of which a
+passing suite had caught, because no test asserted them yet.
+(2) ⭐ **Writing a fixture that ACTUALLY reproduces the bug is itself work.** The
+first B3 fixture had line-leading `if`/`else`/`return`, so the *old* heuristic
+already caught it — it didn't reproduce the blind spot at all. Confirming
+red-before-green on the *real* folded shape (via a throwaway probe, since vitest
+`env=node` suppresses `console.log` unless a test throws) is what made the
+eval-driven fix honest rather than a green test that proves nothing.
+(3) **The same lint rule bit twice, and I anticipated it the second time.**
+Exporting a helper from a component file trips `react-refresh/only-export-components`
+(hit first with `thinking-labels.ts` in B1). For B7 I pre-emptively put the parser
+in its own pure module (`complexity-parse.ts`) instead of exporting from
+`ContentDisplay.tsx`.
+
+**How solved.** Committed in logical per-bug groups (one concern per commit, staged
+specific files, detailed `git commit -F` messages), each guarded by its own test:
+B3 → B2 → B1 → docs → B4 → B5 → docs → B7. Test suite grew **167 (start) → 191
+(after B1–B3) → 196 (after B4/B5) → 205 (after B7)**; build clean throughout; lint
+0 errors (the 2 pre-existing `App.tsx` exhaustive-deps warnings were left untouched,
+non-blocking). Verified locally: `npm.cmd run test` → **205 passed / 16 files.**
+
+**Interview angle.** ⭐ Two headline stories. **"A gate belongs before the resource
+it guards":** the solution filter was correct code in the wrong place (post-render),
+so it could only roll back a leak the user had already read; moving non-exempt
+reveals behind a pre-display gate — while keeping a visible working state so the UX
+doesn't regress — is a security-vs-UX trade with a clear rationale. **"How I use AI
+review effectively":** the strongest bugs of the day (B4/B5/B7) came *after* a green
+build, from a human eyeballing the running extension — a concrete answer to "how do
+you keep AI-assisted work honest?" Plus a testing-discipline point: a fixture has to
+actually fail against the old code (red-before-green) or the "eval-driven" claim is
+theater. And the standing bug registry itself is a signal — bugs get consolidated,
+each bound to a guard, so they can't silently regress (which is how they reached use
+in the first place).
+
+**Caveats (not overclaimed).** B5 is **perceived-performance only** — a proof-of-life
+counter, not a real progress bar (the model's progress is unknowable); the gate is
+unchanged. The 85.7% → 100% catch-rate move is on the **labeled eval fixtures**
+(including the newly-added cases), not a live-traffic measurement. B6 and B8 are
+**designed/deferred, not built.** Nothing has been pushed or merged — the branch is
+8 commits ahead of origin, awaiting the developer's review.
+
+**Commits** (all on `feature/guardrail-hardening`, off `0edfd69`, local-only):
+`c56d506` (B3 folded-conditional filter), `8969d16` (B2 direct-answer chat prompt),
+`157dac0` (B1 pre-display gate — `ThinkingIndicator.tsx`/`thinking-labels.ts`/
+`leetsage-dot-pulse` + `App.tsx` wiring + `predisplay-gate.test.ts`), `903831e`
+(docs: B1/B2/B3 → fixed, spec added to the index), `da1e0c2` (B4 code-aware chat +
+`buildChatData` + `chat-code.test.ts`), `abf341f` (B5 elapsed-timer placeholder),
+`e9241d3` (docs: B4/B5 → fixed, logged B6/B7/B8), `f6d2a5a` (B7 balanced-paren
+`complexity-parse.ts` + tests).
+
 ---
 
 ## Next up (see [LEARNING_ROADMAP.md](./LEARNING_ROADMAP.md))

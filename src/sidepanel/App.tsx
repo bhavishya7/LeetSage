@@ -8,7 +8,7 @@ import type { ProblemContext, ProgressState, LearningContent, ActionType, UserSe
 import { loadProgress, trackAction, appendContent, clearProgress } from '../services/progress-tracker';
 import { getSettings, saveSettings } from '../services/storage';
 import { streamLLMRequest } from '../services/llm-service';
-import { filterResponse } from '../services/solution-filter';
+import { filterResponse, isSolutionExemptAction } from '../services/solution-filter';
 import { checkRateLimit, recordRequest, getUsageToday } from '../services/rate-limiter';
 import { recordMetric } from '../services/metrics-store';
 import { extractCurrentCode } from '../services/code-extractor';
@@ -233,6 +233,15 @@ const App: React.FC = () => {
       setUsageCount(usage.count);
 
       let fullContent = '';
+      // B1 pre-display gate: for NON-EXEMPT actions the guardrail (filterResponse)
+      // must run BEFORE any model content is shown, so a leak is never briefly
+      // visible. We accumulate tokens in `fullContent` but do NOT render them
+      // mid-stream; the card shows an animated "thinking" placeholder (driven by
+      // an empty `content` + streamingId in ContentDisplay) until we commit the
+      // filtered result below. EXEMPT actions (solutions allowed, filter bypassed)
+      // keep streaming live for responsive UX.
+      // See .kiro/specs/leetsage-guardrail-hardening (B1).
+      const streamLive = isSolutionExemptAction(actionType);
       // Runtime metrics: wall-clock latency around the call + token usage if the
       // stream surfaces it. Recorded best-effort after the stream (see below).
       const startedAt = performance.now();
@@ -245,11 +254,15 @@ const App: React.FC = () => {
         onUsage: (u) => { capturedUsage = u; },
       })) {
         fullContent += chunk;
-        // For structured actions, hide the trailing data block while streaming
-        // so the raw JSON never flashes in the card (§6.2: stream the prose,
-        // finalize the data block once complete).
-        const display = stripDataBlockForDisplay(fullContent, actionType);
-        setLearningContent(prev => prev.map(c => c.id === contentId ? { ...c, content: display } : c));
+        // Only exempt actions paint tokens as they arrive. For exempt structured
+        // actions, hide the trailing data block while streaming so the raw JSON
+        // never flashes in the card (§6.2: stream the prose, finalize the data
+        // block once complete). Non-exempt actions render nothing here — the
+        // placeholder holds until the filtered commit.
+        if (streamLive) {
+          const display = stripDataBlockForDisplay(fullContent, actionType);
+          setLearningContent(prev => prev.map(c => c.id === contentId ? { ...c, content: display } : c));
+        }
       }
       // Record runtime metrics (best-effort — never let a metrics write break the
       // response or the rate-limit accounting; design R7).
@@ -296,6 +309,27 @@ const App: React.FC = () => {
       return;
     }
 
+    // B4: free-form chat used to be blind to the editor, so "what is my code's
+    // time complexity?" got "you didn't include your code". Read the current
+    // editor code and send it along (when non-empty) so chat can answer about
+    // the user's own work — like a tutor who can see their screen. Chat stays
+    // NON-EXEMPT (filtered): the model may analyze/quote short pieces, but a
+    // full-solution dump is still caught by filterResponse below.
+    // See .kiro/specs/leetsage-guardrail-hardening (B4).
+    let userCode: string | undefined;
+    let codeLanguage: string | undefined;
+    {
+      const tabId = await getActiveLeetCodeTabId();
+      if (tabId != null) {
+        const extracted = await extractCurrentCode(tabId);
+        if (extracted && extracted.code.trim().length > 0) {
+          userCode = extracted.code;
+          codeLanguage = extracted.language;
+        }
+        setHasCode(!!extracted && extracted.code.trim().length > 20);
+      }
+    }
+
     // User bubble
     const userMsg: LearningContent = {
       id: generateId(), type: 'CHAT_MESSAGE', actionType: 'CHECK_APPROACH', content: q,
@@ -321,11 +355,14 @@ const App: React.FC = () => {
         problemContext, actionType: 'EXPLAIN_CONCEPT', systemPrompt: '', userMessage: '',
         apiKey: settings.apiConfig.apiKey, model: settings.apiConfig.model,
         maxTokens: settings.guardrails.maxTokens, timeoutMs: settings.guardrails.requestTimeoutMs,
-        userQuery: q,
+        userQuery: q, userCode, codeLanguage,
         onUsage: (u) => { capturedUsage = u; },
       })) {
         full += chunk;
-        setLearningContent(prev => prev.map(c => c.id === respId ? { ...c, content: full } : c));
+        // B1: free-form chat is a NON-EXEMPT path (routed through filterResponse
+        // below), so its tokens are withheld mid-stream too — the card shows the
+        // "Answering…" placeholder until the filtered reveal. We only accumulate
+        // here. See .kiro/specs/leetsage-guardrail-hardening (B1, R2.4).
       }
       // Runtime metrics (best-effort; design R7).
       void recordMetric({
