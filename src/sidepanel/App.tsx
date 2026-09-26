@@ -15,6 +15,9 @@ import { extractCurrentCode } from '../services/code-extractor';
 import { parseStructuredResponse, stripDataBlockForDisplay } from '../services/structured-parser';
 import { buildSessionDigest, extractSessionFacts, buildRecordProjection } from '../services/session-digest';
 import { saveAttempt, slugFromUrl } from '../services/progress-records';
+import { routeMessage } from '../services/intent-router';
+import ConfirmAffordance from '../components/ConfirmAffordance';
+import { PLACEHOLDER_EXAMPLES, TRY_ASKING_CHIPS } from '../components/discovery-prompts';
 
 function generateId(): string { return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`; }
 
@@ -51,6 +54,16 @@ const App: React.FC = () => {
   const [usageCount, setUsageCount] = useState(0);
   const [chatInput, setChatInput] = useState('');
   const [savedReportIds, setSavedReportIds] = useState<Set<string>>(new Set());
+  // Chat intent routing: a pending confirm affordance (exempt guardrail OR the
+  // borderline `ask` outcome). `query` is the original message so "Just answer"
+  // can fall through to chat with it. See .kiro/specs/leetsage-chat-intent-routing.
+  const [pendingConfirm, setPendingConfirm] = useState<{ action: ActionType; reason: 'exempt' | 'borderline'; query: string } | null>(null);
+  // Discovery (R8): rotating-placeholder index + a dismissible "Try asking…" row.
+  const [placeholderIdx, setPlaceholderIdx] = useState(0);
+  const [showTryChips, setShowTryChips] = useState(true);
+  // "Reset this problem" is destructive (wipes the session's history +
+  // progress), so it's a two-step confirm rather than a one-tap action.
+  const [confirmReset, setConfirmReset] = useState(false);
   const stuckTimerRef = React.useRef<StuckTimer | null>(null);
 
   // Always-fresh mirror of learningContent. handleActionClick is a useCallback
@@ -173,6 +186,18 @@ const App: React.FC = () => {
       });
     }
   }, [problemContext?.url, progress?.hintLevel]);
+
+  // Discovery (R8): cycle the placeholder examples so users learn the intents
+  // that lost their buttons. Purely presentational — no API call. Pauses while
+  // the user is typing (a non-empty input keeps a static placeholder). A calm
+  // 5s cadence so each suggestion is comfortably readable.
+  useEffect(() => {
+    if (chatInput.trim()) return;
+    const id = setInterval(() => {
+      setPlaceholderIdx(i => (i + 1) % PLACEHOLDER_EXAMPLES.length);
+    }, 5000);
+    return () => clearInterval(id);
+  }, [chatInput]);
 
   const handleActionClick = useCallback(async (actionType: ActionType, userApproach?: string) => {
     if (!problemContext || !settings?.apiConfig.apiKey) return;
@@ -373,6 +398,7 @@ const App: React.FC = () => {
     if (!problemContext) return;
     await clearProgress(problemContext.url);
     setProgress(null); setLearningContent([]);
+    setConfirmReset(false);
   }, [problemContext]);
 
   // Persist a generated report to "My Progress" as a ProblemRecord attempt.
@@ -430,11 +456,70 @@ const App: React.FC = () => {
 
   const canInteract = apiKeyConfigured && !!problemContext && !isLoading;
 
+  // Chat intent routing (design §7): the chat box is a smart entry point. Before
+  // sending a message to the free-form chat path, run the PURE pipeline
+  // (classify → resolveOverlap → route) and interpret its effect:
+  //   - dispatch → run the matched action, exactly like pressing its button (R7).
+  //   - confirm  → surface the confirm affordance (exempt guardrail OR borderline
+  //                ask). "Yes" → the action; "Just answer" → chat.
+  //   - chat     → the existing free-form chat path, unchanged.
+  // The router is a PRE-STEP only: filterResponse, the pre-display gate, and
+  // getChatSystemPrompt are untouched — routing sits in front of them.
   const submitChat = () => {
-    if (!chatInput.trim()) return;
-    handleChatSubmit(chatInput);
-    setChatInput('');
+    const q = chatInput.trim();
+    if (!q) return;
+    // A new submission supersedes any stale confirm prompt.
+    setPendingConfirm(null);
+
+    // Context for classification: does the editor currently have code? We reuse
+    // the already-loaded problem context; hasCode is best-effort from what chat
+    // will read anyway. We don't block the classify on an async editor read —
+    // the routed action re-reads the live code itself (handleActionClick), so a
+    // false "no code" here at worst under-sharpens (falls to chat/ask), never
+    // misroutes into an exempt action silently.
+    const effect = routeMessage(q, { hasCode: !!problemContext });
+
+    switch (effect.kind) {
+      case 'dispatch':
+        // Non-exempt route: fire the action now (identical to a button press).
+        // It still flows through filterResponse + the pre-display gate.
+        handleActionClick(effect.action);
+        setChatInput('');
+        return;
+      case 'confirm':
+        // Exempt route OR borderline ask: never silent. Ask first. `reason`
+        // drives the affordance's copy + emphasis (exempt = louder heads-up).
+        setPendingConfirm({ action: effect.action, reason: effect.reason, query: q });
+        return;
+      case 'chat':
+        handleChatSubmit(q);
+        setChatInput('');
+        return;
+    }
   };
+
+  // Confirm affordance — "Yes": run the matched action like a button press, then
+  // clear the input + prompt.
+  const confirmRoutedAction = () => {
+    if (!pendingConfirm) return;
+    const { action } = pendingConfirm;
+    setPendingConfirm(null);
+    setChatInput('');
+    handleActionClick(action);
+  };
+
+  // Confirm affordance — "Just answer": fall through to free-form chat with the
+  // original message (the deliberate-act guardrail: a solution-bearing action is
+  // never reached without the explicit "Yes" tap).
+  const dismissRoutedAction = () => {
+    if (!pendingConfirm) return;
+    const { query } = pendingConfirm;
+    setPendingConfirm(null);
+    setChatInput('');
+    handleChatSubmit(query);
+  };
+
+  const currentPlaceholder = canInteract ? PLACEHOLDER_EXAMPLES[placeholderIdx] : 'Configure your API key first';
 
   return (
     <div className={`${isDark ? 'dark' : ''} flex flex-col h-screen bg-neutral-50 dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 text-sm`}>
@@ -502,16 +587,54 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* Chat intent routing: confirm affordance for an exempt-action match or a
+          borderline `ask`. Reused for both — keyed on { prompt, action }. */}
+      {pendingConfirm && (
+        <ConfirmAffordance
+          reason={pendingConfirm.reason}
+          action={pendingConfirm.action}
+          onConfirm={confirmRoutedAction}
+          onDismiss={dismissRoutedAction}
+        />
+      )}
+
       {/* Bottom input bar: quick-command chips + free-form text input */}
       <div className="shrink-0 border-t border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2 space-y-2">
         <QuickActions progress={progress} disabled={!canInteract} isLoading={isLoading} onAction={handleActionClick} />
+
+        {/* Discovery (R8): dismissible "Try asking…" chips teach the intents that
+            no longer have buttons. Tapping a chip only FILLS the input (no API
+            call); the user still presses Send. */}
+        {canInteract && showTryChips && learningContent.length === 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] text-neutral-400 shrink-0">Try asking:</span>
+            {TRY_ASKING_CHIPS.map(chip => (
+              <button
+                key={chip}
+                onClick={() => setChatInput(chip)}
+                className="text-[11px] px-2 py-0.5 rounded-full border border-neutral-300 dark:border-neutral-600 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 hover:border-blue-400 dark:hover:border-blue-400 transition-colors"
+              >
+                {chip}
+              </button>
+            ))}
+            <button
+              onClick={() => setShowTryChips(false)}
+              aria-label="Dismiss suggestions"
+              title="Dismiss suggestions"
+              className="ml-auto text-[11px] text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 shrink-0"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         <div className="flex items-center gap-2">
           <input
             value={chatInput}
             onChange={e => setChatInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitChat(); } }}
             disabled={!canInteract}
-            placeholder={canInteract ? 'Ask a question…' : 'Configure your API key first'}
+            placeholder={currentPlaceholder}
             className="flex-1 text-xs bg-neutral-100 dark:bg-neutral-700 border border-neutral-300 dark:border-neutral-600 rounded-full px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-50"
           />
           <button
@@ -523,9 +646,21 @@ const App: React.FC = () => {
           </button>
         </div>
         {progress && learningContent.length > 0 && (
-          <button onClick={handleReset} className="w-full text-[11px] text-neutral-400 hover:text-red-500 transition-colors text-center">
-            Reset this problem
-          </button>
+          confirmReset ? (
+            <div className="flex items-center justify-center gap-2 text-[11px]">
+              <span className="text-neutral-500 dark:text-neutral-400">Reset this problem? This clears its history.</span>
+              <button onClick={handleReset} className="px-2 py-0.5 rounded bg-red-500 text-white hover:bg-red-600 transition-colors font-medium">
+                Reset
+              </button>
+              <button onClick={() => setConfirmReset(false)} className="px-2 py-0.5 rounded border border-neutral-300 dark:border-neutral-600 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors">
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button onClick={() => setConfirmReset(true)} className="w-full text-[11px] text-neutral-400 hover:text-red-500 transition-colors text-center">
+              Reset this problem
+            </button>
+          )
         )}
       </div>
       </>
