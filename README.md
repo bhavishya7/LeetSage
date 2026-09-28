@@ -10,15 +10,16 @@ It runs on your own free Google Gemini API key (bring-your-own-key), so there's 
 
 ## What it does
 
-Coaching actions, all grounded in the specific problem you're on:
+Coaching actions, all grounded in the specific problem you're on. Four one-tap buttons cover the high-value intents:
 
 - **💡 Hint** — progressive, 3 levels (conceptual → approach → implementation), never a full solution
-- **🧩 Break down** — decomposes the problem into logical sub-steps
 - **🔬 Analyze my code** — reads your current editor code and gives feedback on Approach, Efficiency (with an operation-by-operation time/space breakdown), and Code Style — *before* you submit
-- **🧠 Understand solution** — after you've solved it, explains *why* your solution works: real-world analogy, key insight, why each part is necessary, and complexity
-- **🔢 Examples**, **📚 Concept**, **⏱️ Complexity hint**, **🔍 Pattern recognition** (secondary actions)
-- **Free-form chat** — ask your own question about the problem
-- Per-problem **history** that persists across sessions, a **dark/light** theme, and **free-tier guardrails** (rate limits, token caps, a usage counter, and a kill switch — all adjustable)
+- **🧠 Understand solution** — explains *why* the optimal solution works: real-world analogy, key insight, why each part is necessary, and complexity
+- **📝 Generate report** — a study-note / progress report you can save to your notes
+
+Plus **free-form chat that routes**: just type what you want. LeetSage classifies your message and, on a confident match, runs the right action for you — "break this down into steps", "what pattern is this?", "give me another example", "what's the time complexity?" reach the breakdown / pattern / examples / complexity coaching that no longer needs its own button. Anything solution-bearing asks you to confirm first ("Did you want to understand the solution? — Yes / Just answer"), so a solution is never revealed by phrasing alone. Ambiguous or general questions fall through to a direct, code-aware chat answer.
+
+Also: per-problem **history** that persists across sessions, a **dark/light** theme, and **free-tier guardrails** (rate limits, token caps, a usage counter, and a kill switch — all adjustable).
 
 A solution filter keeps responses from spelling out complete answers, preserving the learning-first philosophy.
 
