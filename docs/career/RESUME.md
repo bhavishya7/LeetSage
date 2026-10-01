@@ -122,8 +122,10 @@ Pick 2–4 depending on space. Swap in real numbers as soon as you have them
   validated a stored URL *before* a planned link feature could weaponize it.
   Round-trip-verified against a real export (re-import is a proven no-op).
 - Made and documented core **AI system-design tradeoffs** (bring-your-own-key vs.
-  managed backend; client-only vs. server) with a written decision log and an
-  articulated scaling path.
+  managed backend; client-only vs. server; **constraining the model menu to two
+  free-tier models** rather than exposing paid/power-user models — a deliberate
+  "keep it free" product decision weighed against the API's actual capabilities)
+  with a written decision log and an articulated scaling path.
 - Built a **labeled eval suite** for the AI safety guardrail — scoring the
   deterministic solution-filter on a hand-labeled dataset as a release gate
   (**catch rate / false-positive rate / precision**), plus an offline

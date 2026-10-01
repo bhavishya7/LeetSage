@@ -271,6 +271,84 @@ volume). See [DEV_JOURNAL.md](./DEV_JOURNAL.md) (2026-09-23).
 
 ---
 
+### Q5b. "Why only offer two models — the two *cheapest*? Why not let power users pick a better model, or detect what their key unlocks?" ⭐ product-judgment
+
+> This is a product-vs-engineering judgment question. It attracts "did you think
+> about your users?" and "do you know the API?" at the same time. Lead with the
+> *why*, then show you understood the counter-argument well enough to reject it on
+> purpose — that's what makes it a defensible decision rather than a limitation.
+
+**Short answer.** It's a deliberate product decision that falls out of the one
+identity constraint: LeetSage is **free, bring-your-own-key, no backend**. I expose
+exactly the two cheapest Gemini models (`flash-lite` as the default, `flash` as the
+step-up) because they sit inside Google's **free tier**, so every user can run the
+tool at zero cost with no billing attached. Offering pricier models would quietly
+break the "it's free" promise — some calls would start billing the user's Google
+account — for a use case where a bigger model doesn't make the *coaching* better. A
+hint, a problem breakdown, a nudge toward the right pattern — Flash-Lite does those
+well; a frontier model doesn't make a *hint* more pedagogically useful, it just
+costs more and runs slower. So the expensive models would add cost and latency to
+serve a tiny minority, against the product's whole reason for existing.
+
+**The counter-argument, stated fairly (so I can show I rejected it on purpose).**
+"A power user with API billing enabled has access to stronger models and higher
+rate limits — why not detect that and let them opt in?" It's a reasonable instinct,
+and parts of it are even technically feasible. I actually dug into it:
+- **The subscription confusion I had to clear up first.** Consumer Gemini
+  subscriptions (the AI Plus/Pro/Ultra tiers) upgrade the *Gemini app*, **not** the
+  API. My extension uses the API, so a consumer subscription is irrelevant to it.
+  The real lever is **API billing** — a user links a billing account to their Google
+  Cloud project, and the **same API key** then gets higher limits and paid-only
+  models. There's no separate "premium token" to paste and detect; it's the same
+  credential with billing attached.
+- **What's actually detectable, and what isn't.** This is the sharp technical part.
+  Models *are* discoverable: the Gemini API has a list-models endpoint
+  (`GET /v1beta/openai/models` on the OpenAI-compatible base URL I already use), so
+  I genuinely *could* query a key and show the models it can call, including paid
+  ones. But **rate limits / tier are NOT reliably queryable** — Google doesn't
+  publish a per-key "you are Tier 2, 1000 req/day" value you can read; the docs
+  direct you to check AI Studio, and the real limit depends on model + project +
+  billing + request path + account standing. So I could only learn a user's limit
+  *reactively*, by catching a `429`. "Detect their models" is possible; "detect
+  their limits and offer higher caps" basically isn't.
+
+**Why I still said no (the judgment).** Even granting the feasible half, it's the
+wrong call for *this* product:
+1. **It muddies the core promise.** "Free, BYOK" is the headline. The moment some
+   models bill the user, I have to caveat every model choice with "this may charge
+   your account," and the clean story gets murky.
+2. **Low value, real complexity.** It serves the rare billed-key user, and in return
+   my `GeminiModel` type stops being a safe compile-time union (it'd become an
+   arbitrary string), my hardcoded per-model **cost table breaks** for models I've
+   never priced (and Gemini's lineup churns constantly — new Flash/Pro tiers landed
+   repeatedly through 2026, with intro discounts), and my 200/day rate limiter — a
+   *free-tier* assumption — is wrong for a paid user whose real limit I can't even
+   read. That's a lot of fragility to maintain for a few users.
+3. **It doesn't serve the mission.** The product teaches; the two cheap models teach
+   fine. Spending complexity budget on frontier-model access is optimizing the thing
+   that doesn't move the learning outcome.
+
+**What I'd do if the context changed.** If this became a paid or team product (which
+*forces* a backend — see Q2), the calculus flips: a backend can broker keys, enforce
+per-user quota server-side, cache responses, and route models by task — at which
+point dynamic model discovery via the list-models endpoint becomes worth building,
+and "unknown price → show as estimate/omit" is the graceful degradation. I'd *still*
+never build limit-detection, because the API doesn't support it; I'd react to 429s.
+The one piece I'd consider even in the free version, purely for robustness, is
+querying the models endpoint instead of hardcoding names — because a hardcoded model
+ID is already fragile (a stale `gemini-2.5-*` name 404'd on me once; see Q7). But I'd
+keep the *free two* as the default and recommended path regardless.
+
+**Signal.** Product judgment anchored to a single identity constraint; knowing the
+difference between "technically possible" and "worth building"; genuinely
+understanding the API (app-subscription vs. API-billing, the list-models endpoint,
+the un-queryable rate limits) rather than hand-waving; naming the type-system and
+pricing-table fragility a dynamic model list would introduce; and treating "keep it
+free" as a defended decision with a stated trigger for revisiting it. Pair with
+**Q2** (no-backend scaling) and **Q5/Q5a** (cost control + measurement).
+
+---
+
 ### Q6. "Tell me about a hard bug." (Manifest V3 depth)
 
 **Short answer.** MV3 replaced persistent background pages with service workers
@@ -1059,9 +1137,10 @@ state live? · Walk me through the progress-tracking data model and its tradeoff
 
 **AI-specific:** How do you stop it revealing solutions? · How do you *evaluate*
 that guardrail, and what did the eval find? (→ Q3a). · Are you exposed to prompt
-injection? · How do you control cost? · Tell me about an architecture decision you
-made and why (→ structured output, Q8). · How do you get reliable structured data
-out of a non-deterministic model while still streaming?
+injection? · How do you control cost? · Why only two models, and the two cheapest —
+why not let power users pick a better one? (→ Q5b). · Tell me about an architecture
+decision you made and why (→ structured output, Q8). · How do you get reliable
+structured data out of a non-deterministic model while still streaming?
 
 **Working with agents:** How do you work effectively with coding agents? · Tell me
 about a time you constrained or debugged an agent's behavior. · How do you keep
