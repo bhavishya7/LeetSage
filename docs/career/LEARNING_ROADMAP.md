@@ -269,8 +269,10 @@ match. (Already prototyped and reverted; documented in project history.)
 **Why.** Removes the "reads all your browsing" warning; strengthens the
 security-minded story.
 **Interview payoff.** Concrete least-privilege example.
-**Effort:** Low. **Depends on:** ⚠️ do the progress-tracking export (#5) first to
-avoid losing stored data during the required remove/re-add.
+**Effort:** Low. **Depends on:** ⚠️ progress export-to-file — ✅ **now satisfied**
+(shipped 2026-09-27, #6b), so the required remove/re-add can no longer lose stored
+data (export a JSON backup first, re-import after). This is the next feature to pick
+up.
 
 ---
 
@@ -322,17 +324,60 @@ because it's inferred, not verified; complexity is reported as optimal only if
 `solvedOptimally`; the model owns judgments (patterns/complexity/narrative) while
 the app owns facts (date/title/difficulty/language — e.g. the model-written date
 was removed and the app timestamps the attempt).
+**Export + import — DONE (2026-09-27, #6b below).** Export-to-file (the item that
+had to precede the permission-scoping change #4) shipped: a Markdown study archive +
+a versioned JSON backup, plus a security-hardened import pipeline. See #6b.
 **Phase D — designed, NOT built.** Auto-save on an Accepted LeetCode submission, so
 an attempt's `outcome` is *verified* rather than inferred (unblocks showing a
-trustworthy attempt count). Also still ahead: **export-to-file** (only clipboard
-"Copy all" exists today) — and that export is the item that must precede the
-permission-scoping change (#4). No unit tests on the new pure helpers yet (pairs
+trustworthy attempt count). No unit tests on the Phase B/C pure helpers yet (pairs
 with #1/#2). No write-lock on the read-modify-write (single-user local store).
 **Interview payoff.** Real system-design substance (schema, index/summary
 projection, event-log `attempts[]`, migration, deterministic analytics pipeline,
 the backend boundary) — plus a strong "honest presentation of inferred data" design
 story. See [DEV_JOURNAL.md](./DEV_JOURNAL.md) (2026-09-04) and
 [INTERVIEW_PREP.md](./INTERVIEW_PREP.md) Q9. **Effort:** Medium (B) → Higher (C).
+
+### 6b. Progress export + import (study archive + backup/restore)  ✅ DONE (2026-09-27)
+**Spec:** `leetsage-progress-export-import` (full trilogy). **Skill:** untrusted-input
+hardening, trust-boundary design, idempotent/CRDT-lite merge, defense-in-depth.
+**What shipped.** Export-to-file (the item that had to land *before* the
+permission-scoping change #4, since that change wipes `chrome.storage.local`) plus
+import, on branch `feature/progress-export-import` (6 commits `7f38955`…`56a3c23`
+off spec `4e943c2`, then main merged in `220c4d1`; **local — not pushed**). **Export:**
+a combined **Markdown** study archive (insights summary from `computeInsights` — same
+source as the Insights panel, so doc and UI can't diverge — + per-problem detail with
+the attempts timeline) and a portable **JSON** backup (versioned envelope; the derived
+`progress_index` is NOT exported, it's rebuilt on import). Download is a Blob
+`<a download>` in the side-panel DOM — verified, so **no `chrome.downloads`
+permission** (keeps the surface minimal ahead of #4). **Import:** a security-hardened
+untrusted-file → privileged-storage pipeline whose governing rule is **reconstruct,
+don't validate-in-place** — `sanitizeRecord` builds a fresh record by field-level
+allowlist (never spreads the untrusted object), structurally defeating unknown-field
+injection, prototype pollution (prototype-safe `readProp`), and type confusion at
+once; every derived field (`bestAttemptIndex`, the whole index) is recomputed; the
+merge is **idempotent newer-wins-per-slug** (CRDT-lite last-writer-wins, so re-import
+is a no-op); the write is atomic + quota-fail-closed. New mostly-pure module
+`src/services/progress-io.ts`; storage edge `getAllRecords` + `writeImportedRecords`
+in `progress-records.ts`; a title-bar + toolbar UI in `ProgressView.tsx`. Test suite
+**234 → 239 → 246 →** (post-merge) **277**; build clean; lint 0.
+**The payoff (interview stories).** A security story (reconstruct-don't-validate as
+an allowlist that defeats three attack classes at once — INTERVIEW_PREP **Q12**) and
+three workflow lessons: **real-data testing + idempotency** (a round-trip test on the
+real 13-problem export caught a double-escaping bug clean synthetic fixtures missed;
+the fix *shrank* the transform rather than adding escaping), **platform-enforced
+beats discipline-enforced** (moved no-code-execution into a manifest CSP), and
+**validate before the dangerous consumer exists** (validated the `url` now so a future
+"open on LeetCode" link can't carry a `javascript:` payload) — the last two in the
+"safety guarantee" workflow Q&A. See [DEV_JOURNAL.md](./DEV_JOURNAL.md) (2026-09-27)
+and [INTERVIEW_PREP.md](./INTERVIEW_PREP.md) (Q12 + the two new workflow Q&As).
+**Why it mattered.** Backup/restore de-risks the scope-permissions change (#4 — now
+unblocked) and addresses progress-tracking's single-browser limitation.
+**Deferred (documented, not built):** the clickable "open on LeetCode" link itself
+(only its `url` validation shipped); **per-attempt merge** (v1 is whole-record);
+**Markdown import** (JSON is the round-trip format); auto-saved report; cloud sync;
+and marginal hardenings judged overkill for a local no-backend BYOK tool
+(Unicode/homoglyph normalization, signing/checksumming/encryption, import
+rate-limiting). **Effort:** ~~Medium~~ done.
 
 ### 7. Prompt-injection hardening  ✅ DONE (2026-09-21)
 **Skill:** LLM security (OWASP #1 risk), structural prompt separation.
@@ -458,9 +503,19 @@ is exactly the GenAI system-design interview. Rehearse it either way — it's in
     placeholder + chips) re-surface the five cut actions. Also fixed an adjacent
     data-loss bug (silent Reset → two-step confirm) and logged **B9**
     (model-generated headers can hallucinate — deferred). Tests **205 → 236**.
+11. ~~**Progress export + import** (#6b)~~ — **DONE (2026-09-27)** on branch
+    `feature/progress-export-import` (6 commits `7f38955`…`56a3c23` off spec
+    `4e943c2`, then main merged in `220c4d1`; local — not pushed): a Markdown study
+    archive + a versioned JSON backup, and a security-hardened untrusted-file →
+    storage import pipeline (reconstruct-don't-validate-in-place, idempotent
+    newer-wins merge, platform-enforced manifest CSP, slug-keyed URL validation),
+    round-trip-verified against the real 13-problem export. Unblocks the
+    scope-permissions change (#4). Tests **236 → 246 →** (post-merge) **277**.
     **Now next:** the remaining Tier-1.5 eval follow-up (#3a — real captured cases +
-    a validated judge), then progress-tracking Phase D + export-to-file, then
-    **cheatsheet / RAG** (#8), then Tier 3 stretch items. **B8** still deferred.
+    a validated judge) and/or **scope extension permissions** (#4 — now unblocked by
+    export), then progress-tracking Phase D (verified submissions), then
+    **cheatsheet / RAG** (#8), then Tier 3 stretch items. **B8** still deferred;
+    the "open on LeetCode" link is a documented future (its URL is already validated).
 
 At each step, backfill numbers into [RESUME.md](./RESUME.md) and new Q&A into
 [INTERVIEW_PREP.md](./INTERVIEW_PREP.md). The docs are living — grow them with the code.

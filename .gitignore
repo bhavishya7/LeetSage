@@ -26,3 +26,7 @@ dist-ssr
 
 # Kiro local machine settings (MCP config with machine-specific paths)
 .kiro/settings/
+
+# Exported progress files used for local verification (personal study data —
+# not source). Kept on disk, never committed.
+.kiro/specs/leetsage-progress-export-import/Downloads/

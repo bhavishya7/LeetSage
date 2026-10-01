@@ -552,6 +552,51 @@ that caught the confirm banner's problems and an adjacent data-loss bug).
 
 ---
 
+### Q12. "You let users import a file into the extension's storage. How do you stop a malicious file from doing damage?" ⭐ security
+
+> Lead with this for security, input-validation, or "untrusted input" prompts. It's
+> a clean threat-model story with a single memorable principle.
+
+**Short answer.** The import is the one place an **untrusted file** flows into
+**privileged, persistent storage**, so I treated it as a trust boundary and spent
+the design budget there. The governing rule is **reconstruct, don't
+validate-in-place**: I never persist the parsed object. For each record I build a
+brand-new trusted object by copying only the fields I explicitly know about, each
+through its own sanitizer. Anything I didn't allow simply doesn't survive — it's an
+**allowlist, not a denylist**.
+
+**Why that one principle is load-bearing.** Reconstruction defeats three classes of
+attack *at once*, without me having to enumerate them: **unknown-field injection**
+(an extra field never gets copied, so it can't ride along into storage),
+**prototype pollution** (I never spread the object, and my property reader refuses
+`__proto__`/`constructor`/`prototype` and uses `Object.prototype.hasOwnProperty.call`
+so a hostile own `hasOwnProperty` can't lie), and **type confusion** (every field is
+coerced/validated to its expected shape — enums checked against a vocabulary, numbers
+forced finite and bounded, timestamps range-checked). A denylist would have to
+predict every bad input; an allowlist only has to know the good shape.
+
+**The rest of the pipeline (defense-in-depth).** A size gate before parsing (DoS),
+`JSON.parse` in a try/catch (never `eval`), an envelope-format gate (a foreign file
+is rejected with a friendly message), a global attempts cap so `N × M` can't evade
+the per-record cap, **every derived field recomputed** (the best-attempt index, the
+whole storage index) rather than trusted from the file, and the write itself is
+atomic with a quota check that fails closed. I also validated the stored `url` to the
+LeetCode problem shape even though nothing renders it as a link *today* — because a
+planned "open on LeetCode" link would otherwise turn an unvalidated `javascript:` url
+into a live vector the day it ships. And strings are HTML-neutralized as
+defense-in-depth: I verified the renderer is already XSS-safe (React JSX, no
+`dangerouslySetInnerHTML`/`innerHTML` anywhere), so the sanitizer is a second layer,
+not the only one.
+
+**Signal.** Recognizing a trust boundary and designing to it; a single structural
+principle (reconstruct over validate) that defeats a whole class of attacks instead
+of a brittle list of patches; defense-in-depth with the derived-field recompute and
+atomic/fail-closed write; and validating a field *before* it has a dangerous consumer.
+Pair with **Q4** (prompt injection — the other untrusted-input boundary) and the
+"platform-enforced beats discipline-enforced" workflow answer below (the manifest CSP).
+
+---
+
 ## General 2026 AI-engineering questions (use LeetSage as your example)
 
 These come up in AI/LLM interviews regardless of the project. For each, the goal
@@ -927,6 +972,55 @@ output every session.
 
 **Signal.** Pragmatic toolchain awareness; establishing a reliable verify-then-clean-up
 ritual instead of trusting flaky terminal output.
+
+### "Tell me about a bug your tests missed that real data caught." ⭐
+
+**Answer.** When I built progress import, my first-pass string sanitizer
+HTML-**escaped** all five entities (`'` → `&#39;`, `&` → `&amp;`, and so on). Every
+synthetic unit test passed, because my fixtures used clean text. Then I wrote a
+**round-trip test that loaded my own real 13-problem export** — and it caught the bug
+immediately: real study notes are full of apostrophes ("element's", "key's"), and
+escaping isn't **idempotent**, so an export → import → export → import cycle
+progressively double-escaped (`element's` → `element&#39;s` → `element&amp;#39;s`),
+corrupting legit prose and showing literal entities in the UI. Import is a transform
+that can run repeatedly on its own output, so **idempotency is a first-class
+correctness property** for it — and that's exactly the property clean synthetic
+inputs don't exercise. The fix was telling: I **reduced scope instead of adding more
+escaping.** Since I'd already verified the renderer is XSS-safe (React JSX, no
+`innerHTML`), the importer only needs to stop HTML *tags* from forming — so I strip
+only the tag-forming `<`/`>`, which is idempotent and lossless for apostrophes and
+ampersands. Over-sanitizing *was* the bug; the minimal transform was both
+safety-equivalent and idempotent. I documented the one honest trade: a literal `>` in
+prose ("timestamp > mid") loses that char — acceptable and safe.
+
+**Signal.** Round-trip / property tests against real data beat more unit tests with
+convenient inputs; I know to look for idempotency on any re-runnable transform; and
+my instinct for a sanitizer bug was to make the transform *smaller and provably
+safe*, not to pile on more escaping.
+
+### "When you add a safety guarantee, how do you make it as strong as possible — and when do you validate a field before it's even used?" ⭐
+
+**Answer.** Two habits, both from the same import work. First, **platform-enforced
+beats discipline-enforced.** My code never evals or executes file content — but
+that's a promise I'm making. I moved it into an explicit manifest **CSP**
+(`script-src 'self'; object-src 'self'; base-uri 'self'`), so now the *browser*
+forbids script injection on the extension page even if a future bug introduces a
+sink. When a guarantee can move from "we promise we never do X" to "the platform
+forbids X," that's strictly stronger, and it costs almost nothing. Second,
+**validate a field before it has a dangerous consumer.** The imported record carries
+a `url` that nothing renders as a link today — so an unvalidated url is harmless
+*right now*. I was going to defer validating it, but I realized a planned "open on
+LeetCode from My Progress" link would silently turn an unvalidated
+`javascript:`/off-domain url into a live clickjack/XSS vector the day it ships. So I
+validated it now — it must be an `https://leetcode.com/problems/<slug>/…` url matching
+the record's own slug, else it's rebuilt from the trusted slug — closing the hole
+*before* the consumer that would weaponize it exists.
+
+**Signal.** I reach for structural, platform-level enforcement over convention when
+it's available; and I think about new ingress paths (an import) *and* anticipated
+egress paths (a future link) when deciding what to validate — paying a cheap check
+now to avoid a scramble later. Pair with **Q12** (the import threat model) and
+**Q4** (prompt injection).
 
 ---
 

@@ -1,8 +1,13 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import type { ProblemIndexEntry, ProblemRecord } from '../types';
-import { getProgressIndex, getRecord, deleteRecord } from '../services/progress-records';
+import {
+  getProgressIndex, getRecord, deleteRecord, getAllRecords, writeImportedRecords,
+} from '../services/progress-records';
 import { computeInsights } from '../services/progress-analytics';
 import type { ProgressInsights } from '../services/progress-analytics';
+import {
+  buildProgressReportMarkdown, serializeProgressExport, parseImport, mergeRecords,
+} from '../services/progress-io';
 
 interface ProgressViewProps { onClose: () => void; }
 
@@ -36,6 +41,39 @@ const PatternChips: React.FC<{ patterns: string[] }> = ({ patterns }) => (
       <span key={p} className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-300">{p}</span>
     ))}
   </div>
+);
+
+/**
+ * A compact, equal-weight toolbar button (icon + label in a bordered pill).
+ * Gives the export/import actions a clear tappable affordance so they read as
+ * actions instead of faint metadata links, and keeps them visually consistent.
+ */
+const ToolbarButton: React.FC<{
+  onClick: () => void;
+  title: string;
+  icon: string;
+  label: string;
+  /** Trailing ▾ caret for menu triggers. */
+  caret?: boolean;
+  /** Success/active styling (e.g. "Copied"). */
+  active?: boolean;
+  ariaHasPopup?: boolean;
+  ariaExpanded?: boolean;
+}> = ({ onClick, title, icon, label, caret, active, ariaHasPopup, ariaExpanded }) => (
+  <button
+    onClick={onClick}
+    title={title}
+    aria-haspopup={ariaHasPopup ? 'menu' : undefined}
+    aria-expanded={ariaHasPopup ? ariaExpanded : undefined}
+    className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border text-[11px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50
+      ${active
+        ? 'border-green-500/40 text-green-600 dark:text-green-400 bg-green-500/5'
+        : 'border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-600'}`}
+  >
+    <span aria-hidden="true">{icon}</span>
+    <span>{label}</span>
+    {caret && <span aria-hidden="true" className="text-[9px] opacity-70">▾</span>}
+  </button>
 );
 
 /** Minimum saved problems before insights are meaningful enough to show. */
@@ -133,17 +171,31 @@ const RecordDetail: React.FC<{ record: ProblemRecord; onBack: () => void; onDele
   );
 };
 
-/** Concatenates every saved record's note into one Markdown document. */
-function buildAllNotesMarkdown(records: ProblemRecord[]): string {
-  return records
-    .slice()
-    .sort((a, b) => b.lastUpdatedAt - a.lastUpdatedAt)
-    .map(r => {
-      const header = `# ${r.title} (${r.difficulty})`;
-      const meta = `_Patterns: ${r.patterns.join(', ') || 'none'} · ${r.attempts.length} attempt${r.attempts.length === 1 ? '' : 's'}_`;
-      return `${header}\n${meta}\n\n${r.notes || '(no note saved)'}`;
-    })
-    .join('\n\n---\n\n');
+/**
+ * Triggers a client-side file download (R4.1). The side panel is a full DOM
+ * document (not the DOM-less service worker), so the Blob + object-URL +
+ * temporary <a download> click works here exactly like on a web page — no
+ * `chrome.downloads` API and no "downloads" permission needed. (Verified: the
+ * createObjectURL/anchor limitation is specific to the background worker, which
+ * lacks a document; keeping the permission set minimal matters for the upcoming
+ * scope-permissions work.)
+ */
+function downloadFile(filename: string, contents: string, mime: string): void {
+  const blob = new Blob([contents], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoke on the next tick so the click has consumed the URL.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/** Date-stamped export filename, e.g. leetsage-progress-2026-09-27.json (R1.4/R2.3). */
+function exportFilename(ext: 'md' | 'json'): string {
+  return `leetsage-progress-${new Date().toISOString().slice(0, 10)}.${ext}`;
 }
 
 const ProgressView: React.FC<ProgressViewProps> = ({ onClose }) => {
@@ -152,6 +204,10 @@ const ProgressView: React.FC<ProgressViewProps> = ({ onClose }) => {
   const [selected, setSelected] = useState<ProblemRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [copiedAll, setCopiedAll] = useState(false);
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const [importMsg, setImportMsg] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const downloadMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     (async () => {
@@ -182,10 +238,85 @@ const ProgressView: React.FC<ProgressViewProps> = ({ onClose }) => {
 
   const handleCopyAll = async () => {
     try {
-      await navigator.clipboard.writeText(buildAllNotesMarkdown(records));
+      await navigator.clipboard.writeText(buildProgressReportMarkdown(records));
       setCopiedAll(true);
       setTimeout(() => setCopiedAll(false), 1500);
     } catch { /* clipboard can fail if unfocused; ignore */ }
+  };
+
+  // Close the download menu on an outside click.
+  useEffect(() => {
+    if (!downloadOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (downloadMenuRef.current && !downloadMenuRef.current.contains(e.target as Node)) {
+        setDownloadOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setDownloadOpen(false); };
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [downloadOpen]);
+
+  const handleDownloadMarkdown = () => {
+    downloadFile(exportFilename('md'), buildProgressReportMarkdown(records), 'text/markdown');
+    setDownloadOpen(false);
+  };
+
+  const handleDownloadJson = () => {
+    downloadFile(exportFilename('json'), serializeProgressExport(records), 'application/json');
+    setDownloadOpen(false);
+  };
+
+  /** Reads the picked file, runs the pure import pipeline, then writes atomically. */
+  const handleImportFile = async (file: File) => {
+    setImportMsg(null);
+    let text: string;
+    try {
+      text = await file.text();
+    } catch {
+      setImportMsg({ kind: 'error', text: 'Could not read that file.' });
+      return;
+    }
+
+    const result = parseImport(text);
+    if (result.error) {
+      // Hard fail — storage untouched (R5.5.1).
+      setImportMsg({ kind: 'error', text: result.error });
+      return;
+    }
+
+    // Merge against the current full record set (newer-wins), then write once.
+    const existing = await getAllRecords();
+    const { merged, summary } = mergeRecords(existing, result.records);
+    const write = await writeImportedRecords(merged, existing.map(r => r.slug));
+    if (!write.ok) {
+      setImportMsg({ kind: 'error', text: write.error ?? 'Import failed; nothing was changed.' });
+      return;
+    }
+
+    // Refresh the view from storage (R3.4).
+    const idx = await getProgressIndex();
+    idx.sort((a, b) => b.lastUpdatedAt - a.lastUpdatedAt);
+    setIndex(idx);
+    setRecords(await getAllRecords());
+    setSelected(null);
+
+    const skippedNote = result.skipped > 0 ? ` (${result.skipped} record${result.skipped === 1 ? '' : 's'} in the file were invalid and ignored)` : '';
+    setImportMsg({
+      kind: 'ok',
+      text: `Imported: ${summary.added} added, ${summary.updated} updated, ${summary.skipped} unchanged${skippedNote}.`,
+    });
+  };
+
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Reset so picking the same file again re-fires the change event.
+    e.target.value = '';
+    if (file) void handleImportFile(file);
   };
 
   // Full-panel screen (not a modal): fills the whole side panel below the app
@@ -193,6 +324,8 @@ const ProgressView: React.FC<ProgressViewProps> = ({ onClose }) => {
   // floating over faintly-visible content — which looked off in a narrow panel.
   return (
     <div className="flex-1 min-w-0 flex flex-col bg-neutral-50 dark:bg-neutral-900 overflow-hidden">
+      {/* Row 1 — identity + close only. Keeping the title bar uncluttered (the
+          data actions live in the toolbar below) is what un-crowds the top. */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-200 dark:border-neutral-700 shrink-0">
         <div className="flex items-baseline gap-1.5">
           <span className="text-sm">📈</span>
@@ -201,19 +334,91 @@ const ProgressView: React.FC<ProgressViewProps> = ({ onClose }) => {
             <span className="text-[11px] text-neutral-400 leading-none">({index.length})</span>
           )}
         </div>
-        <div className="flex items-center gap-2.5">
-          {!loading && !selected && index.length > 0 && (
-            <button
-              onClick={handleCopyAll}
-              title="Copy all saved notes as one Markdown document"
-              className={`text-[11px] transition-colors ${copiedAll ? 'text-green-600 dark:text-green-400' : 'text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200'}`}
-            >
-              {copiedAll ? '✓ Copied all' : '⧉ Copy all'}
-            </button>
-          )}
-          <button onClick={onClose} className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200" aria-label="Close My Progress" title="Back to coaching">✕</button>
-        </div>
+        <button
+          onClick={onClose}
+          className="w-7 h-7 flex items-center justify-center rounded-md text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-200/60 dark:hover:bg-neutral-700/60 transition-colors"
+          aria-label="Close My Progress"
+          title="Back to coaching"
+        >
+          ✕
+        </button>
       </div>
+
+      {/* Row 2 — data toolbar. Equal-weight bordered pill buttons so the
+          export/import actions read as actions (not metadata) and have room to
+          breathe. Shown on the list screen; the file input is always mounted. */}
+      {!loading && !selected && (
+        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-neutral-200 dark:border-neutral-700 shrink-0">
+          {index.length > 0 && (
+            <>
+              <ToolbarButton
+                onClick={handleCopyAll}
+                title="Copy all saved notes to the clipboard as one Markdown document"
+                active={copiedAll}
+                icon={copiedAll ? '✓' : '⧉'}
+                label={copiedAll ? 'Copied' : 'Copy all'}
+              />
+
+              {/* Download ▾ menu — Markdown (study archive) / JSON (backup) */}
+              <div className="relative" ref={downloadMenuRef}>
+                <ToolbarButton
+                  onClick={() => setDownloadOpen(v => !v)}
+                  title="Download your progress as a file"
+                  icon="⬇"
+                  label="Download"
+                  caret
+                  ariaHasPopup
+                  ariaExpanded={downloadOpen}
+                />
+                {downloadOpen && (
+                  <div
+                    role="menu"
+                    className="absolute left-0 mt-1 z-10 min-w-[13rem] rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 shadow-lg py-1 text-[12px]"
+                  >
+                    <button role="menuitem" onClick={handleDownloadMarkdown} className="w-full text-left px-3 py-2 hover:bg-neutral-100 dark:hover:bg-neutral-700 flex flex-col">
+                      <span className="font-medium">📄 Markdown</span>
+                      <span className="text-[10px] text-neutral-400">Readable study report (.md)</span>
+                    </button>
+                    <button role="menuitem" onClick={handleDownloadJson} className="w-full text-left px-3 py-2 hover:bg-neutral-100 dark:hover:bg-neutral-700 flex flex-col">
+                      <span className="font-medium">🗄 JSON</span>
+                      <span className="text-[10px] text-neutral-400">Backup to restore / move (.json)</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+          <ToolbarButton
+            onClick={() => fileInputRef.current?.click()}
+            title="Import a previously-exported LeetSage JSON backup"
+            icon="⬆"
+            label="Import"
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            onChange={onFileChange}
+            className="hidden"
+            aria-hidden="true"
+          />
+        </div>
+      )}
+
+      {/* Import feedback (R6.2) — success counts or a specific rejection reason. */}
+      {importMsg && !selected && (
+        <div
+          className={`px-3 py-1.5 text-[11px] border-b flex items-center justify-between gap-2 shrink-0 ${
+            importMsg.kind === 'ok'
+              ? 'bg-green-500/10 text-green-700 dark:text-green-300 border-green-500/20'
+              : 'bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/20'
+          }`}
+          role="status"
+        >
+          <span className="break-words">{importMsg.kind === 'ok' ? '✓ ' : '⚠ '}{importMsg.text}</span>
+          <button onClick={() => setImportMsg(null)} className="shrink-0 opacity-60 hover:opacity-100" aria-label="Dismiss">✕</button>
+        </div>
+      )}
 
       <div className="flex-1 p-3 overflow-y-auto">
         {loading ? (
