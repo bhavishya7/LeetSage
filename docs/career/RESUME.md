@@ -113,6 +113,14 @@ Pick 2–4 depending on space. Swap in real numbers as soon as you have them
   storage — measuring **p50 ~1.6 s / p95 ~3.0 s latency and ~1,459 tokens (~$0.00025)
   per request** (self-collected, single model) to reason about latency and cost with
   numbers, not adjectives.
+- **Hardened an untrusted-file import** into the extension's persistent storage with
+  a **reconstruct-don't-validate-in-place** pipeline — building fresh records by
+  field-level allowlist (defeating unknown-field injection, **prototype pollution**,
+  and type confusion in one move), recomputing every derived field, and finishing
+  with an **idempotent newer-wins merge** and an atomic, quota-fail-closed write;
+  moved the no-code-execution guarantee into a **platform-enforced manifest CSP** and
+  validated a stored URL *before* a planned link feature could weaponize it.
+  Round-trip-verified against a real export (re-import is a proven no-op).
 - Made and documented core **AI system-design tradeoffs** (bring-your-own-key vs.
   managed backend; client-only vs. server) with a written decision log and an
   articulated scaling path.
@@ -148,7 +156,8 @@ Only list what you can defend. Currently truthful for LeetSage:
 `React` · `TypeScript` · `Tailwind CSS` · `Vite` · `client-side architecture` ·
 `cost optimization / rate limiting` · `AI-assisted development (custom agents)` ·
 `prompt-injection mitigation (OWASP LLM #1)` · `production metrics / monitoring` ·
-`intent classification / routing`
+`intent classification / routing` · `input validation / untrusted-input hardening` ·
+`Content Security Policy (CSP)`
 
 Add once built: `RAG`.
 
@@ -193,7 +202,13 @@ the authored set (plus a validated, non-mock LLM-as-judge).
 > and **runtime metrics shipped** (2026-09-23 — per-request latency/tokens/cost
 > instrumented client-side, aggregated with pure p50/p95 math; test suite 149 → 167;
 > on the `feature/metrics` branch, not yet pushed) closing the "quantified impact"
-> gap. See
+> gap; and most recently **progress export + import shipped** (2026-09-27 — a
+> Markdown study archive + a versioned JSON backup, and a security-hardened
+> untrusted-file → storage import pipeline: reconstruct-don't-validate-in-place,
+> idempotent newer-wins merge, platform-enforced manifest CSP, slug-keyed URL
+> validation; round-trip-verified against a real 13-problem export; test suite
+> 236 → 277 after merging main; on the `feature/progress-export-import` branch, not
+> yet pushed). See
 > [DEV_JOURNAL.md](./DEV_JOURNAL.md) for the full narrative. The gaps above stay
 > listed until the work is actually *built*, not just designed — the top unmet
 > resume gap is now **real captured-response eval cases + a validated LLM-as-judge**.
@@ -214,10 +229,12 @@ You can't quote impact you never measured. Even rough, self-collected numbers he
   over the sample. *Caveat: self-collected, single model `gemini-3.5-flash-lite`,
   small n=9 sample — an order-of-magnitude signal, not a benchmark. Cost is an
   estimate from public per-token pricing (BYOK / free quota), not a bill.*
-- ✅ **236 automated tests** across the pure modules + the guardrail eval (167 at
+- ✅ **277 automated tests** across the pure modules + the guardrail eval (167 at
   the 2026-09-23 metrics milestone → **205** after the 2026-09-24 guardrail-
   hardening pass added guards for B1–B7 → **236** after the 2026-09-26 chat
-  intent-routing pass added the labeled router golden set).
+  intent-routing pass added the labeled router golden set → **277** after the
+  2026-09-27 progress-export-import pass added functional + security tests, then
+  merged main).
 
 **Still to capture:**
 

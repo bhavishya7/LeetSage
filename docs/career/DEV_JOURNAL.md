@@ -1282,6 +1282,154 @@ fixes the data-loss bug — `src/components/ConfirmAffordance.tsx`, `src/index.c
 rewrite + specs/README.md row & status + B6 resolved / B9 documented in the
 guardrail-hardening registry).
 
+## 2026-09-27 — Progress export + import: a Markdown archive, a JSON backup, and a hardened untrusted-file → storage pipeline
+
+**What.** Built progress **export + import** end-to-end, then merged main into the
+branch. Export gives two artifacts: a combined **Markdown** study archive (an
+insights summary built from `computeInsights` — the same source the Insights panel
+reads, so the doc and the UI can't diverge — plus full per-problem detail with the
+attempts timeline) and a portable **JSON** backup (a versioned envelope
+`{format, formatVersion, schemaVersion, exportedAt, records}`; the derived
+`progress_index` is deliberately NOT exported — it's rebuilt on import). Import is a
+security-hardened pipeline turning an untrusted file into privileged persistent
+storage: size gate → parse → envelope gate → per-field reconstruction → `migrate()`
+→ newer-wins-per-slug merge → atomic write + index rebuild + quota fail-close. Core
+logic lives in a new mostly-pure module `src/services/progress-io.ts`
+(`buildProgressReportMarkdown`, `serializeProgressExport`, `parseImport`,
+`sanitizeRecord`, `mergeRecords`); the impure storage edge is `getAllRecords` +
+`writeImportedRecords` in `progress-records.ts` (assemble in memory → quota-check
+fail-closed → single atomic `chrome.storage.local.set` → rebuild `progress_index`);
+the UI is a Download ▾ (Markdown/JSON) + Import control in `ProgressView.tsx`, with
+"Copy all" now reusing the report builder. Then main (chat-intent-routing, PR #17)
+was merged in — the only conflict was the additive specs index, resolved by keeping
+both rows; the merged tree was build + test verified. Test arc this session:
+**234 → 239 → 246 →** (post-merge) **277**; build clean throughout; lint 0 errors
+(2 pre-existing `App.tsx` warnings untouched). On branch `feature/progress-export-import`,
+6 commits above spec commit `4e943c2`, main merged in (`220c4d1`). **Local — not
+pushed, no PR.**
+
+**Why.** A pre-launch feature with a concrete forcing function: the upcoming
+scope-permissions change requires removing/re-adding the extension, which wipes
+`chrome.storage.local` — so a backup/restore path has to land *first* so accumulated
+progress isn't lost. It also addresses the single-browser limitation of
+progress-tracking (a JSON file is a portable, manual sync). Import is the dangerous
+direction (untrusted file → privileged persistent storage), so the design budget
+went there. The governing principle is **reconstruct, don't validate-in-place**:
+`sanitizeRecord` builds a brand-new record by explicit field copy and never spreads
+the untrusted object, which structurally defeats unknown-field injection, prototype
+pollution, and type confusion at once — an **allowlist, not a denylist**. `readProp`
+refuses `__proto__`/`constructor`/`prototype` and uses
+`Object.prototype.hasOwnProperty.call` so a hostile own `hasOwnProperty` can't lie;
+derived fields (`bestAttemptIndex`, the whole `progress_index`) are recomputed, never
+trusted from the file; and merge is newer-wins/idempotent (CRDT-lite last-writer-wins)
+so a re-import is a no-op.
+
+**What broke / the hard part.** No dead-end in the pipeline logic — the instructive
+parts were a real bug caught only by real data, a scope-reduction fix, two
+verify-don't-assume checks, a visual-review catch, and a late-added hardening.
+(1) ⭐ **Testing against the user's REAL exported data caught a bug synthetic tests
+missed.** The first-pass sanitizer HTML-**escaped** all five entities
+(`'` → `&#39;`, `&` → `&amp;`, …). That is **not idempotent**: real notes are full
+of apostrophes ("element's", "key's"), so an export → import → export → import cycle
+would progressively double-escape (`element's` → `element&#39;s` →
+`element&amp;#39;s`), corrupting legit prose and showing literal entities in the UI.
+Synthetic fixtures with clean text never exposed it; a round-trip test loading the
+user's actual **13-problem** export did, immediately.
+(2) ⭐ **A wrong assumption corrected by tracing the renderer (R5.1.2).** Confirmed
+the app renders via React JSX (`ContentDisplay.renderContent` builds elements;
+`RecordDetail` shows notes in a `<pre>`) with **no** `dangerouslySetInnerHTML` /
+`innerHTML` anywhere — so raw HTML never executes, and importer sanitization is
+documented **defense-in-depth, not the primary defense**. No latent stored-XSS hole
+to fix.
+(3) ⭐ **A second verify-don't-assume check on download mechanics.** The
+`createObjectURL` + `<a download>` approach works in the side-panel DOM; the
+limitation cited online is specific to the DOM-less background service worker. So
+`chrome.downloads` was avoided entirely — keeping the permission surface minimal
+ahead of the scope-permissions work.
+(4) ⭐ **The visual-review gate did its job.** The first UI pass crammed
+Copy all / Download ▾ / Import as tiny faint text links next to the title + count +
+close in one ~360px row — the user flagged it as crowded and non-obvious.
+(5) **A late hardening added because the user anticipated a future consumer.** The
+`url` field isn't rendered as a link today, so an unvalidated url is harmless now —
+but validating it was initially going to be deferred until the user recognized that
+a planned "open on LeetCode from My Progress" link would weaponize an unvalidated
+`javascript:`/off-domain url. So it was validated **now**, before the dangerous
+consumer exists.
+
+**How solved.**
+(1) The fix was to **reduce scope, not add escaping.** Since the renderer is already
+XSS-safe, the importer only needs to stop HTML *tags* from forming — so
+`neutralizeString` strips only the tag-forming `<`/`>` (idempotent, lossless for
+apostrophes/ampersands) instead of escaping five entities. Over-sanitizing *was* the
+bug; the minimal correct transform is both safety-equivalent and idempotent. Honest
+trade documented in the code: a literal `>` in prose (e.g. "timestamp > mid") loses
+that one char — acceptable and safe.
+(4) Reworked the UI into a **title bar** (identity + close) plus a dedicated
+**toolbar** of equal-weight bordered pill buttons (icon + label, hover +
+focus-visible) — real layout hierarchy instead of a cramped link row.
+(5)/(2)/(3) and three more defense-in-depth hardenings were added in a post-build
+security review and documented back into the spec (R-numbers, design §4b): **#1**
+clearer non-JSON rejection (a cheap first-char pre-check gives a friendly message
+instead of a parser error, R5.5.4); **#2** a global `MAX_TOTAL_ATTEMPTS` cap so
+`N × M` attempts can't evade the per-record cap (R5.2.1); **#3** an explicit manifest
+CSP for extension pages (`script-src 'self'; object-src 'self'; base-uri 'self'`,
+`connect-src` left open for the Gemini endpoint) so the no-code-execution guarantee
+is **platform-enforced**, not discipline-enforced (R5.6); **#5** `url` validation
+keyed to the record's slug, rebuilt deterministically otherwise (R5.4.3).
+Round-trip verified against the user's real 13-problem export — a re-import is a
+proven no-op (0 added / 0 updated / 13 skipped). The git merge of main was previewed
+with `git diff --name-only` (code disjoint; only the additive specs-index conflict
+predicted), merged with `--no-commit` to inspect, resolved additively, and the
+**merged** tree was build + test-verified (**277** tests) before finalizing —
+proving export-import and chat-intent-routing coexist.
+
+**Interview angle.** ⭐ Several distinct stories. **Security engineering:**
+"reconstruct, don't validate-in-place" as an allowlist that structurally defeats
+unknown-field injection, prototype pollution, and type confusion in one move; a
+prototype-pollution-safe property reader; recomputing every derived field instead of
+trusting the file; and an idempotent, order-independent last-writer-wins merge
+(CRDT-lite) so a re-import is a no-op. **Three strong workflow lessons:**
+(a) *real-data testing + idempotency as a first-class correctness property* — a
+round-trip test on the user's actual export caught a double-escaping bug that clean
+synthetic fixtures never would, and the fix was to **shrink** the transform, not add
+more escaping (over-sanitizing was the bug). (b) *Platform-enforced beats
+discipline-enforced* — moving "we never execute file content" from a code convention
+into a manifest CSP means the browser enforces it even if a future bug introduces a
+sink; when a guarantee can move from "we promise we never do X" to "the platform
+forbids X," that's strictly stronger. (c) *Validate a field before it has a dangerous
+consumer* — a new ingress path (import) demands re-checking old assumptions about
+where data comes from, and anticipating a new egress path (a future "open on
+LeetCode" link) is worth a cheap validation now rather than a scramble the day the
+link ships. Plus the recurring **visual-review gate** (first functional UI was a
+cramped link row → title bar + toolbar) and a **git-merge-vs-runtime-data** clarity
+point (a source merge never touches `chrome.storage`; the orthogonal worry was
+resolved by previewing the diff, merging `--no-commit`, and build+test-verifying the
+merged tree).
+
+**Caveats (not overclaimed).** The **"open on LeetCode" link itself is NOT built** —
+only the `url` validation (R5.4.3) that will make it safe when it ships. Still
+deferred from the original spec: auto-generated/continuously-saved report;
+**per-attempt merge** (v1 is whole-record newer-wins); **Markdown import** (JSON is
+the round-trip format); cloud sync. Marginal hardenings considered and **deliberately
+not done** (documented as decisions): Unicode/homoglyph normalization of strings;
+signing/checksumming/encrypting export files; rate-limiting import — all judged
+overkill for a local, no-backend, single-user BYOK tool. **Local — not pushed, no
+PR.**
+
+**Commits** (all on `feature/progress-export-import`, off spec `4e943c2`, local-only):
+`7f38955` (feat(progress-io): export/import core logic + storage wiring —
+`src/services/progress-io.ts`, `getAllRecords`/`writeImportedRecords` in
+`progress-records.ts`), `b0ed3df` (feat(progress-ui): Download ▾ + Import controls in
+`ProgressView.tsx`; "Copy all" reuses the report builder), `6cb3bcb`
+(feat(security): explicit manifest CSP for extension pages — `public/manifest.json`),
+`f1cf926` (test(progress-io): functional + security tests), `56a3c23` (docs(spec):
+mark the spec Built + record the hardening pass — R5.2.1/R5.4.3/R5.5.4/R5.6, design
+§4a/§4b, tasks H1/H2/H3/H5, specs index, top README; `.gitignore` excludes the local
+`Downloads/` fixtures), `220c4d1` (Merge main into
+`feature/progress-export-import` — brings in chat-intent-routing PR #17; additive
+specs-index conflict resolved by keeping both rows; merged tree verified: build
+clean, 277 tests).
+
 ---
 
 ## Next up (see [LEARNING_ROADMAP.md](./LEARNING_ROADMAP.md))
@@ -1327,9 +1475,20 @@ guardrail-hardening registry).
    discovery affordances (rotating placeholder + chips). Also fixed an adjacent
    data-loss bug (silent "Reset this problem" → two-step confirm) and logged **B9**
    (model-generated section headers can hallucinate — deferred). Tests **205 → 236**.
+7. ~~**Progress export + import** — Markdown archive + JSON backup/restore~~ —
+   **DONE (2026-09-27)** on branch `feature/progress-export-import` (6 commits
+   `7f38955`…`56a3c23` off spec `4e943c2`, then main merged in `220c4d1`; local —
+   not pushed): a combined Markdown study archive + a portable versioned JSON backup,
+   and a security-hardened untrusted-file → storage import pipeline
+   ("reconstruct, don't validate-in-place") with an idempotent newer-wins merge,
+   an explicit manifest CSP, and slug-keyed `url` validation. Round-trip verified
+   against the user's real 13-problem export (re-import is a no-op). Unblocks the
+   scope-permissions change (#4). Tests **236 → 246 →** (post-merge) **277**.
    **Next: the deferred eval follow-up** (real captured-Gemini cases + a validated
-   LLM-as-judge), then progress-tracking Phase D (verified submissions) and
-   export-to-file, then cheatsheet / RAG.
+   LLM-as-judge), then **scope extension permissions** (now unblocked by export),
+   then progress-tracking Phase D (verified submissions), then cheatsheet / RAG.
+   Still future: a clickable "open on LeetCode from My Progress" link (its `url`
+   is already validated for safety, but the link itself is not built).
 
 *When each lands, add an entry above (via the project-historian agent) and backfill
 any resulting numbers into [RESUME.md](./RESUME.md).*
