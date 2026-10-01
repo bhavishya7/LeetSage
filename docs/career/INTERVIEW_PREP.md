@@ -495,6 +495,63 @@ gate.
 
 ---
 
+### Q11. "You route free-form chat to actions. How did you build the router — and how do you keep it from becoming a way around your solution guardrail?" ⭐ AI/system-design
+
+> Lead with this for intent-classification, LLM-orchestration, or "how do you design
+> a safe AI feature" prompts. It's the last pre-launch feature and it pairs a clean
+> design story with a sharp safety decision.
+
+**Short answer.** I treated the router as what it is — **a classifier** — and built
+it as a pure `classify → resolveOverlap → route` pipeline where each stage is
+independently testable. A typed question that matches an existing action routes to
+that action; anything ambiguous or multi-part falls through to normal chat. The
+guardrail decision is the interesting part: chat must **never silently route into a
+solution-bearing (filter-exempt) action**, so an exempt match — or any borderline
+case — becomes a **confirm-to-route affordance** ("Reveal the full solution? Yes /
+Just answer"). The user's deliberate tap is what reaches a solution, not clever
+phrasing.
+
+**The design, and why each call.**
+- **Pure pipeline over a tangled dispatcher.** `classify`, `resolveOverlap`, and
+  `route` are pure functions, each unit-tested against a labeled golden set.
+  `route()` stays pure by returning a `RouterEffect` (`dispatch | confirm | chat`)
+  that the React layer interprets — no handlers called from inside the core.
+- **Intents are data, exemptness is derived.** One `IntentDef` per intent in an
+  `INTENT_REGISTRY`; whether an intent is solution-exempt is **derived** from the
+  same `isSolutionExemptAction()` the filter and the pre-display gate use — never
+  stored. One source of truth, so a future exempt action inherits the confirm
+  requirement for free.
+- **A local heuristic classifier behind a seam.** Regex/keyword, zero API calls, so
+  a chat message costs **exactly one** model call (the routed action or chat), never
+  two. The `classify()` seam lets an LLM classifier drop in later with no call-site
+  changes. I explicitly **rejected** vector routing / a fine-tuned router /
+  per-request LLM classification as over-engineered for ~9 client-side intents with
+  no backend.
+- **A three-way resolver with an abstain band.** Not a binary threshold —
+  `route` / `ask` / `chat`, with an explicit "not sure" band (modeled on
+  allow/deny/abstain classifier practice). Precedence is
+  context-sharpening → weight → confidence. Genuine multi-intent falls through to
+  chat, because one call can answer a multi-part question and I never want to fire N
+  actions off one message.
+- **The golden set is the accuracy metric.** A router is a classifier, so its test
+  set doubles as its measurement — seeded with real observed examples across
+  confident-match / overlap / borderline / multi-intent / no-match, plus an explicit
+  test that "just give me the full solution" never silently reaches an exempt action.
+  I tuned the classifier *against that set*, not by hand — narrowing `explain-concept`
+  because it was mis-catching general trivia, and adding "my code's complexity"
+  patterns so `analyze-code` context-sharpens when the editor has code.
+
+**Signal.** Recognizing that "route intent" is a classification problem and building
+it with the discipline of one (pure stages, data-driven config, derived cross-cutting
+facts, a defined tiebreaker *and* an abstain band, a labeled metric); bounding the
+blast radius of a user message to one API call; and — the load-bearing point —
+making the safety property structural: a free-text entry point can't become a bypass
+because reaching a solution-bearing action always requires a deliberate confirm.
+Pair with **Q3** (the guardrail) and the workflow Q&A below (the visual-review gate
+that caught the confirm banner's problems and an adjacent data-loss bug).
+
+---
+
 ## General 2026 AI-engineering questions (use LeetSage as your example)
 
 These come up in AI/LLM interviews regardless of the project. For each, the goal
@@ -654,6 +711,18 @@ durable guards instead of one-off fixes. It's a concrete, honest answer to "how 
 you use AI effectively" — the AI writes fast, the human review is where quality
 enters.
 
+The pattern repeated on my next feature (chat intent-routing), which is the point —
+it's not a one-off. The build was green and the router logic was correct, but
+eyeballing the running extension exposed a cluster of things no assertion covers: my
+**guardrail confirm banner overflowed the panel edge, blended into the background
+(too quiet for an interrupt), and had copy that restated the obvious instead of
+conveying the stakes** — all reworked (a vertical card, an amber "heads-up"
+treatment, stakes-driven copy) only because a human looked. And exercising it
+surfaced a genuine **data-loss bug unrelated to the feature**: "Reset this problem"
+wiped a problem's whole history on a single accidental tap with no warning, now a
+two-step confirm. Same lesson as the B4/B5/B7 catches — the review gate keeps
+catching adjacent bugs a green build hides.
+
 ### "Isn't a passing spec/acceptance-criteria enough? When has 'it meets the spec and compiles' still not been good enough?" ⭐
 
 **Answer.** No — a spec being satisfied is not the same as the UI being *good*, and
@@ -766,9 +835,24 @@ same one that caught the `gemini-2.5-*` model-name 404 — is that a plausible-l
 spec (or an agent's confident summary of one) is not ground truth; the running code
 is, so I check it before I build.
 
+A sharper version showed up while building chat intent-routing. I noticed a
+structured-response section header rendered as "Real-Year Analogy" when the prompt
+specifies "Real-World Analogy," and my first instinct was that the headers are
+hardcoded/deterministic — so the corruption must be a renderer bug worth chasing.
+Before acting on that, I **traced the actual render path** and found the opposite:
+the section headers are **model-generated from prompt instructions**, and the only
+text transform my renderer applies (the n→N/superscript normalization) runs *inside*
+`O(...)` complexity segments, never on heading words. So the corruption is model
+output, not a code bug — which changes the fix entirely (heading canonicalization or
+prompt hardening, not a renderer patch). I logged it as a deferred bug (B9) rather
+than fixing it in a spec that must not touch prompts. The lesson: before assuming
+"this is deterministic, so a wrong value means a code bug," verify *whether it's
+actually deterministic* against the code path.
+
 **Signal.** Treating specs and agent output as fallible; reconciling documentation
 drift toward the source of truth; avoiding accidental duplication/translation
-layers.
+layers; and — the routing example — checking whether a value is even
+deterministic before diagnosing it as a code bug, so effort goes to the real cause.
 
 ### "How do you decide what an LLM should produce versus what your code should own?"
 

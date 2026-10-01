@@ -53,3 +53,19 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .leetsage-dot { animation: none; opacity: 0.6; }
 }
+
+/*
+ * Confirm-affordance entrance (see ConfirmAffordance.tsx). A brief fade + slight
+ * scale/slide so the guardrail prompt visibly "pops" into the conversation
+ * instead of appearing statically — it's an interrupt the user should notice.
+ */
+@keyframes leetsage-pop-in {
+  0%   { opacity: 0; transform: translateY(6px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0)   scale(1); }
+}
+.leetsage-pop-in {
+  animation: leetsage-pop-in 180ms ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .leetsage-pop-in { animation: none; }
+}
