@@ -96,6 +96,13 @@ export async function getRecord(slug: string): Promise<ProblemRecord | null> {
   return raw ? migrate(raw) : null;
 }
 
+/** Loads every full record (migrated). Used by export + import merge. */
+export async function getAllRecords(): Promise<ProblemRecord[]> {
+  const index = await getProgressIndex();
+  const recs = await Promise.all(index.map(e => getRecord(e.slug)));
+  return recs.filter((r): r is ProblemRecord => !!r);
+}
+
 /**
  * Schema migration (design §6). Applied on every read. Ordered, idempotent
  * steps bring an older record up to the current shape; running it on an
@@ -174,6 +181,83 @@ export async function saveAttempt(input: SaveAttemptInput): Promise<ProblemRecor
 export async function deleteRecord(slug: string): Promise<void> {
   await removeKey(recordKey(slug));
   await removeIndexEntry(slug);
+}
+
+// ---- import write-path (design §4 step 7; R3.5/R3.6) ----------------------
+
+/**
+ * Safe storage budget for the whole merged set, in bytes. chrome.storage.local
+ * has a ~10MB (10,485,760) quota; we stay well under it so import fails closed
+ * (R5.2.2) rather than pushing the store over quota and corrupting it.
+ */
+const STORAGE_BUDGET_BYTES = 8 * 1024 * 1024; // 8 MB
+
+/** Rough byte size of a JSON-serializable value (UTF-8 approximation). */
+function approxByteSize(value: unknown): number {
+  const json = JSON.stringify(value);
+  return typeof TextEncoder !== 'undefined' ? new TextEncoder().encode(json).length : json.length;
+}
+
+export interface WriteImportedResult {
+  /** True when the write completed. */
+  ok: boolean;
+  /** Present when we failed closed (e.g. over budget) — nothing was written. */
+  error?: string;
+}
+
+/**
+ * Writes an already-merged record set to storage and REBUILDS the
+ * progress_index from it (R3.6). Atomic w.r.t. existing data (R3.5): everything
+ * is validated/assembled in memory first, a quota check runs, and only then do
+ * we hand the whole payload to a SINGLE chrome.storage.local.set call — Chrome
+ * applies a multi-key set atomically, so a failure can't half-update the store.
+ *
+ * `previousSlugs` are the slugs present BEFORE this write; any that are no
+ * longer in `merged` would be orphaned records — but merge only ever adds/keeps
+ * slugs, so in practice this stays empty. We remove orphans defensively so the
+ * index and record keys can't drift.
+ */
+export async function writeImportedRecords(
+  merged: ProblemRecord[],
+  previousSlugs: string[] = [],
+): Promise<WriteImportedResult> {
+  // Rebuild the index projection from the merged records (never trust a file's).
+  const index = merged.map(toIndexEntry);
+
+  // Assemble the full write payload in memory (validate-all-then-write).
+  const payload: Record<string, unknown> = { [INDEX_KEY]: index };
+  for (const r of merged) payload[recordKey(r.slug)] = r;
+
+  // Quota check — fail closed if the merged set would blow the budget (R5.2.2).
+  const size = approxByteSize(payload);
+  if (size > STORAGE_BUDGET_BYTES) {
+    return {
+      ok: false,
+      error: `Import would exceed the storage budget (${Math.round(size / 1024 / 1024)}MB > ${Math.round(STORAGE_BUDGET_BYTES / 1024 / 1024)}MB). Nothing was changed.`,
+    };
+  }
+
+  // Single atomic multi-key set.
+  await new Promise<void>((resolve, reject) => {
+    chrome.storage.local.set(payload, () => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else resolve();
+    });
+  });
+
+  // Defensively drop any record key that's no longer in the merged set.
+  const mergedSlugs = new Set(merged.map(r => r.slug));
+  const orphans = previousSlugs.filter(s => !mergedSlugs.has(s));
+  if (orphans.length > 0) {
+    await new Promise<void>((resolve, reject) => {
+      chrome.storage.local.remove(orphans.map(recordKey), () => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve();
+      });
+    });
+  }
+
+  return { ok: true };
 }
 
 // ---- pure helpers (unit-test targets) -------------------------------------
