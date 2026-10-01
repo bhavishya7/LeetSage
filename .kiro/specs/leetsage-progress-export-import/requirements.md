@@ -1,6 +1,7 @@
 # LeetSage — Progress Export / Import: Requirements
 
-> **Status: 📐 Planned — not yet built.** A pre-launch feature: download your saved
+> **Status: ✅ Built (branch `feature/progress-export-import`, local — awaiting
+> review).** A pre-launch feature: download your saved
 > progress as a **combined Markdown report** (study archive) and as **portable
 > JSON** (a re-importable backup), and **import** a previously-exported JSON to
 > restore/merge records. Full trilogy (this is substantial because *import* ingests
@@ -110,9 +111,11 @@ This is the single most dangerous surface in the app and is treated accordingly.
 ### R5.2 — Resource exhaustion / DoS
 - **R5.2.1** THE importer SHALL enforce hard caps and reject the whole file if
   exceeded: **max file size** (e.g. a few MB, well under the ~10MB storage quota),
-  **max record count**, **max attempts per record**, and **max length per string
-  field** (with over-long strings truncated or the record skipped — design decides,
-  but bounded either way).
+  **max record count**, **max attempts per record**, a **global max attempts
+  across the whole file** (so N records × M attempts can't evade the per-record
+  cap — hardening #2, added post-build), and **max length per string field**
+  (with over-long strings truncated or the record skipped — design decides, but
+  bounded either way).
 - **R5.2.2** THE importer SHALL never let import push `chrome.storage.local` past its
   quota; if the merged result would exceed a safe budget, it SHALL fail closed with
   a clear message rather than corrupt the store.
@@ -132,6 +135,15 @@ This is the single most dangerous surface in the app and is treated accordingly.
   the file — notably `bestAttemptIndex` (recompute via `computeBestAttemptIndex`) and
   the whole `progress_index`. An out-of-bounds `bestAttemptIndex` in the file SHALL
   never reach storage or a render.
+- **R5.4.3** (hardening #5, added post-build) THE `url` field SHALL be validated to
+  the expected shape — `https://leetcode.com/problems/<slug>/…` with the slug
+  matching the record's own (already strictly validated) slug — and **rebuilt
+  deterministically from the slug otherwise**. The file's `url` is never trusted
+  verbatim. Rationale: the `url` is not rendered as a link today, but a future
+  "open on LeetCode" affordance would turn an unvalidated `javascript:`/off-domain
+  `url` into a live clickjack/redirect/XSS vector; validating now closes that
+  latent hole before the feature can weaponize it (the §4a "a feature can
+  weaponize a latent flaw" principle, applied preemptively).
 
 ### R5.5 — Fail-closed behavior
 - **R5.5.1 (hard fail):** IF `JSON.parse` throws, or the envelope is wrong
@@ -142,6 +154,22 @@ This is the single most dangerous surface in the app and is treated accordingly.
   **skipped and counted** (not abort the whole import) — but a skipped record is never
   written. Report `{added, updated, skipped}`.
 - **R5.5.3** THE importer SHALL NOT `eval`/`Function`/execute any file content.
+- **R5.5.4** (hardening #1, added post-build) WHEN a picked file is clearly not our
+  JSON (does not begin with `{`/`[`, or fails `JSON.parse`), THE importer SHALL
+  return a **specific, friendly** message pointing the user at the `.json` backup
+  they exported — because the picker's `accept=".json"` is only a UI hint and the
+  user can choose any file.
+
+### R5.6 — Platform-enforced no-code-execution (CSP)
+- **R5.6.1** (hardening #3, added post-build) THE extension manifest SHALL declare
+  an explicit `content_security_policy.extension_pages` that disallows inline
+  script and `eval`/remote script (`script-src 'self'; object-src 'self';
+  base-uri 'self'`). This makes the app's "no code execution" guarantee enforced
+  by the browser platform, not merely by code discipline — defense that holds even
+  if a future bug would otherwise introduce an injection sink. (MV3 already forbids
+  inline/eval by default; declaring it makes the intent explicit and auditable.)
+  `connect-src` is intentionally left unrestricted so the BYOK Gemini API calls to
+  `generativelanguage.googleapis.com` keep working.
 
 ### R6 — UI
 - **R6.1** THE export/import controls SHALL live in the **My Progress** header near

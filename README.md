@@ -66,6 +66,7 @@ React 19 · TypeScript 5.8 · Tailwind CSS 4 · Vite 7 · Chrome Extension Manif
 Planned enhancements are documented as specs under [`.kiro/specs/`](.kiro/specs/):
 
 - **Progress tracking & study notes** (`leetsage-progress-tracking`) — a living record of solved problems: approach, best solution, notes, and progress over time
+- **Progress export & import** (`leetsage-progress-export-import`) — download your progress as a combined Markdown report (study archive) or portable JSON backup, and re-import the JSON to restore/merge records across browsers (security-hardened import pipeline)
 - **Language cheatsheets** (`leetsage-cheatsheet`) — static, zero-token Python/Java/C++ references + Big-O chart
 - **Pseudocode playground** (`leetsage-pseudocode-mode`) — a lightweight space to plan your approach and get feedback
 - **Struggle-first hint gating** (`leetsage-phase2-struggle-first`) — deeper hints unlock after you explain your reasoning

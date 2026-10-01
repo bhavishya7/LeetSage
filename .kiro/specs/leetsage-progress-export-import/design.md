@@ -1,6 +1,7 @@
 # LeetSage — Progress Export / Import: Design
 
-> **Status: 📐 Planned — not yet built.** Design for [requirements.md](./requirements.md).
+> **Status: ✅ Built (branch `feature/progress-export-import`, local — awaiting
+> review).** Design for [requirements.md](./requirements.md).
 > Teaching format: **DESIGN** + **📚 SYSTEM-DESIGN LESSON**. Grounds against
 > `ProgressView.tsx` (`buildAllNotesMarkdown`, Copy all), `progress-records.ts`
 > (`getProgressIndex` / `getRecord` / `saveAttempt` / `migrate` / `record_{slug}` +
@@ -158,6 +159,44 @@ latent hole into a live one.
 > (itself filtered). Import introduces attacker-authored content, converting a
 > dormant issue into an exploitable one. New ingress paths demand re-checking old
 > assumptions about where data comes from.
+
+### 4b. Post-build security hardening (follow-up pass)
+
+After the initial build, a security review added four defense-in-depth hardenings
+(all with tests; CSP is manifest-level). They don't change the architecture — they
+tighten the edges the threat model already named.
+
+1. **#1 — Clearer non-JSON rejection (R5.5.4).** A cheap pre-check (first non-space
+   char must be `{`/`[`) and distinct `JSON.parse`-failure message give a friendly,
+   specific error when the user picks the wrong file. The picker's `accept=".json"`
+   is only a hint, so the pipeline — not the picker — is the real gate.
+
+2. **#2 — Global attempts cap (R5.2.1).** Per-record (500) and per-file record
+   (5000) caps alone still permit ~2.5M attempts before the quota check fails
+   closed. A `MAX_TOTAL_ATTEMPTS` (50k) ceiling counts raw declared attempts across
+   the file and rejects a pathological file *early*, before full reconstruction,
+   with a clear message. Belt to the quota-check's suspenders.
+
+3. **#3 — Explicit manifest CSP (R5.6).** `content_security_policy.extension_pages`
+   = `script-src 'self'; object-src 'self'; base-uri 'self'`. The "we never
+   `eval`/execute file content" promise becomes **platform-enforced**, not just a
+   code-discipline convention — it holds even if a future change would otherwise
+   introduce an injection sink. `connect-src` left open so the BYOK Gemini endpoint
+   still works.
+
+4. **#5 — `url` validation (R5.4.3).** `sanitizeUrl(value, slug)` requires
+   `https://leetcode.com/problems/<slug>/…` (host + scheme + path keyed to the
+   record's own validated slug) and otherwise **rebuilds the url from the slug**.
+   `new URL()` parsing rejects `javascript:`/`data:`/relative junk. The url isn't a
+   link today, but this preemptively closes the vector a future "open on LeetCode"
+   link would otherwise open — the §4a lesson applied *before* the feature exists.
+
+> 📚 **SYSTEM-DESIGN LESSON — platform-enforced beats discipline-enforced.** Caps and
+> sanitizers depend on code staying correct; a manifest CSP is enforced by the
+> browser regardless of future code mistakes. When a guarantee can be moved from
+> "we promise we never do X" to "the platform forbids X," that's strictly stronger.
+> And validating a field *before* it has a dangerous consumer (the url) is cheaper
+> than remembering to validate it the day the consumer ships.
 
 ## 5. The download/upload mechanics (the impure edges) *(R4)*
 
