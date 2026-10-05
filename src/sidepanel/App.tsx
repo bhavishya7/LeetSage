@@ -7,7 +7,7 @@ import { StuckTimer } from '../services/stuck-timer';
 import type { ProblemContext, ProgressState, LearningContent, ActionType, UserSettings, StuckSuggestion } from '../types';
 import { loadProgress, trackAction, appendContent, clearProgress } from '../services/progress-tracker';
 import { getSettings, saveSettings } from '../services/storage';
-import { streamLLMRequest } from '../services/llm-service';
+import { streamLLMRequest, sendToolRound, buildChatData } from '../services/llm-service';
 import { filterResponse, isSolutionExemptAction } from '../services/solution-filter';
 import { checkRateLimit, recordRequest, getUsageToday } from '../services/rate-limiter';
 import { recordMetric } from '../services/metrics-store';
@@ -17,7 +17,12 @@ import { buildSessionDigest, extractSessionFacts, buildRecordProjection } from '
 import { saveAttempt, slugFromUrl } from '../services/progress-records';
 import { routeMessage } from '../services/intent-router';
 import ConfirmAffordance from '../components/ConfirmAffordance';
+import UsageReservoir from '../components/UsageReservoir';
 import { PLACEHOLDER_EXAMPLES, TRY_ASKING_CHIPS } from '../components/discovery-prompts';
+import { getChatAgentSystemPrompt, wrapUntrusted, wrapToolResult } from '../services/prompts';
+import { buildConversationWindow } from '../services/chat-window';
+import { toolSpecs, toolLabel, runTool, type ToolContext } from '../services/chat-tools';
+import { runChatAgent } from '../services/chat-agent';
 
 function generateId(): string { return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`; }
 
@@ -52,6 +57,10 @@ const App: React.FC = () => {
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [stuckSuggestion, setStuckSuggestion] = useState<StuckSuggestion | null>(null);
   const [usageCount, setUsageCount] = useState(0);
+  // E9: the agentic chat loop's current PROCESS step label ("Reading your
+  // code…", "Answering…") shown on the streaming card's thinking placeholder.
+  // Process-only (never answer content) — safe to show live. null when idle.
+  const [agentStepLabel, setAgentStepLabel] = useState<string | null>(null);
   const [chatInput, setChatInput] = useState('');
   const [savedReportIds, setSavedReportIds] = useState<Set<string>>(new Set());
   // Chat intent routing: a pending confirm affordance (exempt guardrail OR the
@@ -354,35 +363,80 @@ const App: React.FC = () => {
       timestamp: Date.now(), expanded: true,
     };
     setLearningContent(prev => [...prev, userMsg, respMsg]);
-    setIsLoading(true); setError(null); setStreamingId(respId);
+    setIsLoading(true); setError(null); setStreamingId(respId); setAgentStepLabel(null);
 
     try {
-      const usage = await recordRequest();
-      setUsageCount(usage.count);
-
-      let full = '';
-      const startedAt = performance.now();
-      let capturedUsage: { promptTokens: number; completionTokens: number } | undefined;
-      for await (const chunk of streamLLMRequest({
+      // E9 — the agentic chat path (replaces the single stateless call).
+      //
+      // Build the ONE user turn carrying everything the model needs, all fenced
+      // as untrusted DATA (R5.1): problem + code (buildChatData) + the two memory
+      // layers — the zero-API sessionDigest (long-term "what they did", R3) and a
+      // bounded conversation window (short-term "what was just said", R4), both
+      // read from learningContentRef so they're never the stale useCallback
+      // closure. The live question stays OUTSIDE the fence as the instruction.
+      const digest = buildSessionDigest(learningContentRef.current, progress);
+      const window = buildConversationWindow(learningContentRef.current);
+      const dataBlock = [buildChatData({
         problemContext, actionType: 'EXPLAIN_CONCEPT', systemPrompt: '', userMessage: '',
-        apiKey: settings.apiConfig.apiKey, model: settings.apiConfig.model,
-        maxTokens: settings.guardrails.maxTokens, timeoutMs: settings.guardrails.requestTimeoutMs,
-        userQuery: q, userCode, codeLanguage,
-        onUsage: (u) => { capturedUsage = u; },
-      })) {
-        full += chunk;
-        // B1: free-form chat is a NON-EXEMPT path (routed through filterResponse
-        // below), so its tokens are withheld mid-stream too — the card shows the
-        // "Answering…" placeholder until the filtered reveal. We only accumulate
-        // here. See .kiro/specs/leetsage-guardrail-hardening (B1, R2.4).
-      }
-      // Runtime metrics (best-effort; design R7).
-      void recordMetric({
-        model: settings.apiConfig.model,
-        latencyMs: performance.now() - startedAt,
-        usage: capturedUsage,
-      }).catch(() => { /* metrics are non-critical */ });
-      const { filteredContent } = filterResponse(full, 'EXPLAIN_CONCEPT');
+        apiKey: '', userQuery: q, userCode, codeLanguage,
+      }), digest, window].filter(Boolean).join('\n\n');
+      const initialMessages: Array<Record<string, unknown>> = [
+        { role: 'system', content: getChatAgentSystemPrompt(!!userCode) },
+        { role: 'user', content: wrapUntrusted(dataBlock, `My question: ${q}`) },
+      ];
+
+      // Deps for the bounded loop. recordRound is the honest per-request counter:
+      // called once per network round (tool round or final answer), so a message
+      // that costs N requests counts as N against the 200/day budget (R7.2).
+      const toolContext: ToolContext = { problemContext, getTabId: getActiveLeetCodeTabId };
+      const startedAt = performance.now();
+      let finalUsage: { promptTokens: number; completionTokens: number } | undefined;
+
+      const result = await runChatAgent(initialMessages, {
+        runToolRound: (messages) => sendToolRound({
+          apiKey: settings.apiConfig.apiKey, model: settings.apiConfig.model,
+          maxTokens: settings.guardrails.maxTokens, timeoutMs: settings.guardrails.requestTimeoutMs,
+          messages, tools: toolSpecs(),
+        }),
+        streamFinal: async (messages) => {
+          let full = '';
+          for await (const chunk of streamLLMRequest({
+            problemContext, actionType: 'EXPLAIN_CONCEPT', systemPrompt: '', userMessage: '',
+            apiKey: settings.apiConfig.apiKey, model: settings.apiConfig.model,
+            maxTokens: settings.guardrails.maxTokens, timeoutMs: settings.guardrails.requestTimeoutMs,
+            // Pass the full tool-augmented conversation; pin tool_choice:none so
+            // the terminal answer can't re-request tools (the loop is bounded).
+            messages, toolChoice: 'none',
+            onUsage: (u) => { finalUsage = u; },
+          })) {
+            // B1: non-exempt chat withholds tokens mid-stream; we accumulate and
+            // reveal once after the filter below. Same as the shipped behavior.
+            full += chunk;
+          }
+          return full;
+        },
+        runTool: async (call) => wrapToolResult(call.name, await runTool(call.name, toolContext)),
+        checkBudget: () => checkRateLimit(settings.guardrails),
+        recordRound: async (usage) => {
+          const u = await recordRequest();
+          setUsageCount(u.count);
+          // Best-effort metrics per round (never breaks the response; R7).
+          void recordMetric({
+            model: settings.apiConfig.model,
+            latencyMs: performance.now() - startedAt,
+            usage: usage ?? finalUsage,
+          }).catch(() => { /* metrics are non-critical */ });
+        },
+        onStep: (step) => {
+          setAgentStepLabel(step.kind === 'tool' ? step.label : step.kind === 'answering' ? 'Answering' : 'Thinking');
+        },
+        toolLabel,
+      });
+
+      // Single filtered reveal (B1): the loop's final answer is NON-EXEMPT, so it
+      // passes through filterResponse before anything is shown — a full-solution
+      // answer is still caught, exactly like the shipped chat path.
+      const { filteredContent } = filterResponse(result.answer, 'EXPLAIN_CONCEPT');
       const finalResp = { ...respMsg, content: filteredContent };
       setLearningContent(prev => prev.map(c => c.id === respId ? finalResp : c));
       await appendContent(problemContext.url, userMsg);
@@ -391,8 +445,8 @@ const App: React.FC = () => {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong');
       setLearningContent(prev => prev.filter(c => c.id !== respId));
-    } finally { setIsLoading(false); setStreamingId(null); }
-  }, [problemContext, settings]);
+    } finally { setIsLoading(false); setStreamingId(null); setAgentStepLabel(null); }
+  }, [problemContext, settings, progress]);
 
   const handleReset = useCallback(async () => {
     if (!problemContext) return;
@@ -540,11 +594,6 @@ const App: React.FC = () => {
           )}
         </div>
         <div className="flex items-center gap-2.5 shrink-0">
-          {settings && (
-            <span className="text-[11px] text-neutral-400" title={`AI requests used today (limit ${settings.guardrails.maxRequestsPerDay})`}>
-              {usageCount}/{settings.guardrails.maxRequestsPerDay}
-            </span>
-          )}
           <button onClick={() => setShowProgress(v => !v)} className={`transition-colors ${showProgress ? 'text-blue-500' : 'text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200'}`} aria-label="My Progress" aria-pressed={showProgress} title="My Progress">📈</button>
           <button onClick={toggleTheme} className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 transition-colors" aria-label="Toggle theme" title={isDark ? 'Switch to light' : 'Switch to dark'}>
             {isDark ? '☀️' : '🌙'}
@@ -569,7 +618,7 @@ const App: React.FC = () => {
       )}
 
       {/* Conversation / content stream */}
-      <ContentDisplay content={learningContent} isLoading={isLoading} streamingId={streamingId} onSaveToProgress={handleSaveToProgress} savedReportIds={savedReportIds} />
+      <ContentDisplay content={learningContent} isLoading={isLoading} streamingId={streamingId} onSaveToProgress={handleSaveToProgress} savedReportIds={savedReportIds} agentStepLabel={agentStepLabel ?? undefined} />
 
       {/* Errors + stuck suggestion */}
       {error && (
@@ -645,22 +694,37 @@ const App: React.FC = () => {
             Send
           </button>
         </div>
-        {progress && learningContent.length > 0 && (
-          confirmReset ? (
-            <div className="flex items-center justify-center gap-2 text-[11px]">
-              <span className="text-neutral-500 dark:text-neutral-400">Reset this problem? This clears its history.</span>
-              <button onClick={handleReset} className="px-2 py-0.5 rounded bg-red-500 text-white hover:bg-red-600 transition-colors font-medium">
-                Reset
-              </button>
-              <button onClick={() => setConfirmReset(false)} className="px-2 py-0.5 rounded border border-neutral-300 dark:border-neutral-600 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors">
-                Cancel
-              </button>
+
+        {/* E9: "Daily usage" (left) and "Reset this problem" (right) share ONE
+            row — the usage indicator lives right where requests are spent, and
+            co-locating it with reset avoids a near-empty extra row of whitespace.
+            The draining droplet is the obscured signal (no raw number; the exact
+            count is in Settings); label + green→amber→red tint carry the
+            "running low" cue. See design §6 (R11). */}
+        {settings && (
+          <div className="flex items-center justify-between gap-2 text-[11px]">
+            <div className="flex items-center gap-1.5 text-neutral-400 dark:text-neutral-500 shrink-0" title={`Daily usage (resets at midnight; exact count in Settings)`}>
+              <UsageReservoir used={usageCount} max={settings.guardrails.maxRequestsPerDay} />
+              <span>Daily usage</span>
             </div>
-          ) : (
-            <button onClick={() => setConfirmReset(true)} className="w-full text-[11px] text-neutral-400 hover:text-red-500 transition-colors text-center">
-              Reset this problem
-            </button>
-          )
+            {progress && learningContent.length > 0 && (
+              confirmReset ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-neutral-500 dark:text-neutral-400 hidden sm:inline">Reset? Clears history.</span>
+                  <button onClick={handleReset} className="px-2 py-0.5 rounded bg-red-500 text-white hover:bg-red-600 transition-colors font-medium">
+                    Reset
+                  </button>
+                  <button onClick={() => setConfirmReset(false)} className="px-2 py-0.5 rounded border border-neutral-300 dark:border-neutral-600 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors">
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button onClick={() => setConfirmReset(true)} className="text-neutral-400 hover:text-red-500 transition-colors shrink-0">
+                  Reset this problem
+                </button>
+              )
+            )}
+          </div>
         )}
       </div>
       </>
