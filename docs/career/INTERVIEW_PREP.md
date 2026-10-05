@@ -675,6 +675,83 @@ Pair with **Q4** (prompt injection — the other untrusted-input boundary) and t
 
 ---
 
+### Q13. "Make your chat agentic. How did you add tool-use without blowing your cost budget or your safety guarantee?" ⭐ AI/system-design
+
+> Lead with this for agents, tool-use/function-calling, LLM-orchestration, or
+> "how would you design an agent" prompts. It's the project's clearest agentic-
+> engineering story and pairs naturally with Q5 (cost) and Q3/Q11 (guardrail/router).
+
+**Short answer.** I made chat a **three-tier, cost-aware agent** that sits *in front
+of* my existing intent router rather than replacing it: **Tier 1** routes a
+confident intent to a pre-built action (1 request); **Tier 2** answers context-aware
+with no tools (1 request); **Tier 3** is a **bounded, read-only tool loop** that
+fires *only* when the model needs to fetch a fact it doesn't have (2+ requests). It's
+a client-side TypeScript control loop — **no backend, no agent framework, no vector
+DB** — because the product's constraints (free, BYOK, 200 requests/day, no server)
+don't justify one.
+
+**Why route-first-loop-as-fallback (the design choice).** Three options: (a) replace
+routing wholesale with the loop — throws away shipped, tested routing and makes
+*every* message pay the agent premium; (b) route first, loop as fallback — chosen;
+(c) send everything through the loop — over-engineered and expensive. (b) keeps the
+cheap shipped path for the common case and reserves the agentic machinery for the
+narrow case that actually needs it. It also lowers the stakes on classifier
+accuracy: under-routing falls through *gracefully* into capable chat.
+
+**How I kept cost bounded — the two-axes insight.** Cost is two independent things,
+and conflating them is the trap. **Request count** (my 200/day budget): adding
+conversation memory adds **zero** requests — a chat turn is one request whether it
+carries zero or N prior turns; **only tool rounds add requests.** **Tokens per
+request** (per-call cost + latency): context *does* add input tokens, and an
+unbounded transcript compounds. So I gave chat memory that's **free on the request
+axis and bounded on the token axis**: a long-term layer that **reuses an existing
+zero-API session digest** (built from structured data, not a model summary) and a
+short-term **bounded sliding window** (last 3 turns, char-capped). I explicitly
+rejected a rolling LLM summary because the summary *itself* costs a request — the
+wrong trade. And the loop is **hard-capped at 2 tool rounds** (worst case 3
+requests), a fixed constant, not a user-tunable knob.
+
+**How I kept it honest and counted.** The single most important property is
+**per-round request accounting**: the loop records **exactly one** request per
+network round — each tool round *and* the final answer — so one message that costs
+N requests counts N against the budget, never silently. There's a unit test
+asserting the record-count equals the rounds issued. If the budget runs out
+mid-loop, it degrades gracefully to a final answer instead of erroring.
+
+**How I kept the safety guarantee (the part interviewers probe).** The tools are a
+**read-only, zero-inference allowlist** — three tools that read the editor code, the
+examples, and the constraints — each returning a fact that *already exists* (a DOM
+read or in-memory data), so a tool round makes **no hidden extra model call**. I
+deliberately **dropped a "complexity of my code" tool** that seemed obvious, because
+its only implementation would be a **nested model call inside the tool** — an
+*uncounted* request below my accounting, no longer read-only, and a side door that
+pipes model-generated solution-adjacent content back in. (It's also redundant: that
+question already routes to a Tier-1 action.) That asymmetry — the 3 tools do zero
+inference, a complexity tool would do a whole LLM call — is the whole reason it's
+out. And the loop's **final answer is NON-EXEMPT**: it still clears my deterministic
+solution filter and the pre-display gate before it's shown, exactly like normal
+chat; tool results and both memory layers are fenced as untrusted input. So adding
+tool-use didn't widen the bypass surface.
+
+**The honest caveat I lead with.** Because I pre-load the problem, examples,
+constraints, and the user's code into the prompt, the model almost always answers at
+Tier 2 — **the loop is a rare fallback, not the default path.** I kept it anyway,
+because the bounded-agent machinery (iteration cap + per-round accounting +
+unbypassable guardrail) is the valuable, correct part even when it rarely fires, and
+I'd rather say that plainly than force the loop to run to look impressive. I did
+verify it executes end-to-end live (empty editor → the loop fetches the code → final
+answer → the filter runs on it).
+
+**Signal.** Agentic engineering scaled to real constraints rather than cargo-culted
+from a framework; a precise cost model (**"context ≠ requests; only tool rounds cost
+requests"**); a safety-first tool design (read-only allowlist, a tool *rejected*
+specifically because it would be an uncounted model call, non-exempt final answer
+still filtered); and the maturity to document that the headline feature is a rare
+fallback. Pair with **Q5/Q5a** (cost + measurement), **Q11** (the router it sits in
+front of), and **Q3** (the guardrail it preserves).
+
+---
+
 ## General 2026 AI-engineering questions (use LeetSage as your example)
 
 These come up in AI/LLM interviews regardless of the project. For each, the goal
@@ -739,6 +816,22 @@ conflating threads or losing earlier decisions.
 
 **Signal.** Understanding context *economics*, not just "I wrote some rules" —
 and having built tooling and habits around it.
+
+**Where this paid off most (E9, 2026-10-01).** The biggest feature I've built —
+turning chat into a three-tier agent with a bounded tool loop — I ran as a **full
+spec trilogy with sign-off between phases** (requirements → design → tasks →
+implement). That wasn't ceremony for its own sake: the **requirements phase forced
+every open question into the open before any code existed** — streaming vs.
+non-streaming tool rounds, the round cap (1 vs 2 vs 3–4), the memory-window size,
+whether to make limits Settings knobs or fixed constants, and the form of the usage
+indicator. We resolved each *with* the decision reasoning captured, so when I got to
+implementation there were no architectural surprises mid-build — the hard calls were
+already made and written down. The payoff of spec-driven work isn't the documents,
+it's that the expensive-to-reverse decisions happen while they're still cheap to
+change (a sentence in `requirements.md`, not a refactor).
+
+**Signal (second).** Scaling process rigor to feature complexity, and knowing *why*
+a design-phase gate is worth it — it front-loads the irreversible decisions.
 
 ### "Tell me about a time you had to constrain or debug an AI agent's behavior."
 
@@ -917,6 +1010,28 @@ heuristics against a labeled confusion matrix rather than hand-editing a regex u
 it looks right; and I'll build throwaway tooling to *prove* the red state when the
 test harness hides output.
 
+### "A labeled eval/test set — doesn't it just encode what you already believe? Give me a time it corrected *you*." ⭐
+
+**Answer.** Twice, actually, and the second is the subtle one. The obvious time: my
+guardrail eval scored **62.5% on its first run** and found two real leak paths my
+intuition had missed. The subtler time was on the E9 build, when I expanded the
+router's golden set. I added a follow-up fixture, *"what about the edge case I
+mentioned?"*, and labeled it as expected to **fall through to chat**. The test
+**failed** — the classifier routed it to `GENERATE_EXAMPLES`, because *"edge case"*
+is a generate-examples keyword. My first instinct was "the classifier is wrong," but
+the classifier was **right**: a message literally asking about edge cases is a
+reasonable examples request. The bug was my **label** — I'd written a fixture whose
+wording contradicted my intent. I fixed it by rephrasing the follow-up to be
+keyword-free, so it tests the behavior I actually meant. The lesson: a labeled eval
+doesn't just catch the code's mistakes, it **catches *your* mislabels** — the moment
+your assumption and the data disagree, one of them is wrong and you have to find out
+which, rather than reflexively "fixing" the code to match a bad label.
+
+**Signal.** I treat a labeled set as an independent check on *my own* assumptions,
+not a rubber stamp — including the humility to conclude the test author (me) was
+wrong and the system was right, which is exactly what makes an eval evidence instead
+of theater.
+
 ### "You wrote the tests after the code — with an agent. How do you know they aren't just rubber-stamping the existing behavior?"
 
 **Answer.** This is the real risk of characterization tests (and doubly so when an
@@ -1051,6 +1166,46 @@ output every session.
 **Signal.** Pragmatic toolchain awareness; establishing a reliable verify-then-clean-up
 ritual instead of trusting flaky terminal output.
 
+**Extended by the E9 build (2026-10-01) — don't fight a slow hook through a terminal
+that can't report completion.** My pre-commit hook runs lint+test+build (~40s), and
+the terminal wrapper returns a garbled `-1` without cleanly signalling when a long
+command finishes. Combined, I couldn't tell whether a commit had landed, and my first
+workaround — *backgrounding* `git commit` — made it worse: several zombie processes
+piled up and **fought over git's `index.lock`, blocking the commits**, and I even
+introduced a duplicate-import bug the hook correctly rejected. The fix that worked:
+**verify lint+test+build once up front** (one clean pass — 329 tests, build green),
+then commit the batch of logical commits with `git commit --no-verify` — which the
+repo's own `.husky/pre-commit` explicitly sanctions as the "in a pinch" bypass, with
+**CI as the real gate on push.** The last few commits then took seconds instead of
+40s each. The lesson: pay a slow gate *once*, not per-commit, when the terminal can't
+tell you a command finished — and clean up background processes rather than letting
+them accumulate on a shared resource like the git index.
+
+**Signal.** Knowing a repo's *sanctioned* bypass and its real gate (local hook = fast
+local check, CI = the authority on push), and recognizing that a "clever" workaround
+(backgrounding a committing process) can be worse than the friction it's dodging.
+
+### "You edit files while I have my editor open. What goes wrong, and how do you prevent it?" ⭐
+
+**Answer.** A real one bit me on the E9 build. I rewrote `App.tsx` on disk while the
+user still had that file **open** in their editor. Later the editor's **stale
+in-memory buffer got saved over my changes**, silently **reverting an entire feature
+rewrite** (the chat-submit handler, a header-to-bottom-bar UI move, and the imports) —
+and *only* that one file, because it was the only one open; every other file I'd
+edited survived. Nothing errored; the build was still green on the reverted code. I
+caught it only because the *running extension* still showed the old usage counter
+("3/200") that my change was supposed to replace — i.e. by eyeballing behavior, not
+by trusting the files. The fix was procedural: re-apply the edits, and keep files an
+agent is editing **closed** in the editor (or use Revert File / reopen to keep the
+disk version and discard the buffer). The deeper point: when two writers (an agent on
+disk, a human's editor buffer) touch the same file, last-save-wins can silently clobber
+work, and the compiler won't tell you because the clobbered state still compiles.
+
+**Signal.** Awareness of a concrete agent/human collaboration hazard (disk vs. editor
+buffer, last-writer-wins) and a simple preventive protocol; and — again — catching a
+silent regression by observing *runtime behavior*, not by trusting a green build or
+the file on disk.
+
 ### "Tell me about a bug your tests missed that real data caught." ⭐
 
 **Answer.** When I built progress import, my first-pass string sanitizer
@@ -1114,7 +1269,13 @@ now to avoid a scramble later. Pair with **Q12** (the import threat model) and
   runtime metrics sooner so I could quote latency/cost numbers.
 - **"What are you most proud of?"** The guardrail — turning a fuzzy product promise
   ("don't give the answer") into a concrete, layered, testable mechanism — *and* the
-  eval that measured it and caught two real leaks my intuition had missed.
+  eval that measured it and caught two real leaks my intuition had missed. A close
+  second is the E9 agentic chat (2026-10-01): a three-tier, cost-aware tool loop
+  with per-round request accounting and an unbypassable guardrail, built as a
+  client-side control loop sized to the product's free/BYOK/no-backend constraints
+  rather than reached for off a framework shelf — and I was honest in the docs that
+  the loop is a rare fallback, kept because the bounded-agent machinery is the
+  correct part even when it rarely fires.
 - **"What's the biggest weakness right now?"** No **runtime** metrics yet
   (latency, tokens/request, cost) — I have quality numbers from the guardrail eval
   (catch rate / false-positive rate) but not production numbers, so I can quantify
@@ -1140,15 +1301,21 @@ that guardrail, and what did the eval find? (→ Q3a). · Are you exposed to pro
 injection? · How do you control cost? · Why only two models, and the two cheapest —
 why not let power users pick a better one? (→ Q5b). · Tell me about an architecture
 decision you made and why (→ structured output, Q8). · How do you get reliable
-structured data out of a non-deterministic model while still streaming?
+structured data out of a non-deterministic model while still streaming? · Make your
+chat agentic — how do you add tool-use without blowing the cost budget or the safety
+guarantee? (→ Q13). · What's the difference between "context" and "requests" in your
+cost model, and why does it matter? · Why did you *drop* a tool from your allowlist?
 
 **Working with agents:** How do you work effectively with coding agents? · Tell me
 about a time you constrained or debugged an agent's behavior. · How do you keep
 knowledge from being lost across sessions? · How do you verify an AI-built feature
 actually works, not just compiles? · How do you know agent-written, after-the-fact
-tests aren't just rubber-stamping the code? · How do you avoid building on stale
-assumptions (spec vs. code drift)? · How do you decide what an LLM should produce
-vs. what your code owns? · An LLM feature gives wrong output — how do you debug it?
+tests aren't just rubber-stamping the code? · Give me a time a labeled eval/test set
+corrected *you*, not the code. · How do you avoid building on stale assumptions
+(spec vs. code drift)? · How do you decide what an LLM should produce vs. what your
+code owns? · An LLM feature gives wrong output — how do you debug it? · What goes
+wrong when an agent edits files you have open? · When a slow pre-commit hook fights
+a flaky terminal, how do you still commit safely?
 
 **Depth probes:** Why `chrome.storage.local` and not `sync`? · What breaks if the
 service worker sleeps mid-request? · How do you keep chat history per problem? ·

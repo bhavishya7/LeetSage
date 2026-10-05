@@ -153,6 +153,20 @@ DEV_JOURNAL 2026-09-21. **Design note:** adding model tool-use / function-callin
 later would enlarge the injection blast radius and must be re-analyzed against that
 spec's threat model (§2/§3.4).
 
+**Update (2026-10-01) — tool-use arrived (E9) and the guardrail held.** The E9
+chat enhancement (ADR-009) added the model tool-use the note above flagged. The
+blast radius was contained by design rather than by adding a new layer:
+**tool results fed back to the model are untrusted** and go through
+`wrapToolResult()` (reusing `wrapUntrusted`); the **two memory layers** (session
+digest + chat window) are fenced in the *same* untrusted DATA block; and the
+agentic loop's **final answer is NON-EXEMPT**, so it still clears the deterministic
+output filter + the B1 pre-display gate before display. The read-only tool allowlist
+is itself part of the containment — the 3 tools only *read* existing facts (no
+nested model calls), which is a core reason `getComplexityOfCurrentCode` was
+dropped (it would have been a new, uncounted model call = new injection surface).
+Net: tool-use did not weaken the invariant; the hard output filter remains the
+backstop. See ADR-009 and DEV_JOURNAL 2026-10-01.
+
 ---
 
 ## ADR-005 — Gemini via the OpenAI-compatible endpoint
@@ -233,11 +247,78 @@ citing in interviews.
 
 ---
 
+## ADR-009 — Chat as a three-tier cost-aware agent (route-first, loop-as-fallback)
+
+> Status: **built, pending review** (branch `feature/chat-enhancement`, 2026-10-01;
+> not pushed/merged). Spec:
+> [`.kiro/specs/leetsage-chat-enhancement/`](../../.kiro/specs/leetsage-chat-enhancement/).
+
+**Decision.** Make the chat box a **three-tier agent** that sits *in front of* the
+shipped intent router (left untouched): **Tier 1** route a high-confidence intent to
+a pre-built action (1 request); **Tier 2** answer context-aware with no tools
+(1 request); **Tier 3** a **bounded, read-only agentic tool loop** (2+ requests)
+that fires only when the model needs to fetch a fact it doesn't already have. Build
+it as a **client-side TypeScript control loop** — no backend, no agent framework
+(LangGraph/CrewAI), no vector DB.
+
+**Alternatives considered.**
+- **(a) Replace routing wholesale with the loop** — rejected: throws away shipped,
+  tested routing and makes *every* message pay the agentic premium.
+- **(b) Route first, loop as a fallback** — **chosen.**
+- **(c) Everything through the loop** — rejected: over-engineered and expensive for
+  a 200-request/day BYOK tool.
+
+**Why (the two cost axes).** Cost is two independent things: **request count** (the
+200/day budget) and **tokens per request** (per-call cost + latency). The key
+insight — **"context ≠ requests"**: adding conversation memory adds **zero**
+requests (a turn is 1 request whether it carries 0 or N prior turns); **only tool
+rounds add requests.** So the design is free on the request axis for memory and
+*bounded* on the token axis. This is why memory reuses the **zero-API session
+digest** + a **bounded sliding window** rather than a rolling LLM summary (which
+would itself cost a request — the wrong trade here).
+
+**Key sub-decisions.**
+- **Bounded iteration.** `MAX_TOOL_ROUNDS = 2` (worst case 3 requests), a fixed
+  constant, **not a Settings knob** — keeping usage low is deliberate.
+- **Per-round request accounting** is the load-bearing safety property:
+  `recordRound()` fires **exactly once per network round** (each tool round + the
+  final answer), so one message costing N requests counts N against the budget —
+  never silently burned (unit-tested invariant). A mid-loop budget denial degrades
+  gracefully to a final answer.
+- **Read-only, zero-inference tool allowlist** (3 tools: editor code / examples /
+  constraints) — each reads a fact that already exists, so a tool round makes no
+  hidden extra model call. `getComplexityOfCurrentCode` was **dropped** precisely
+  because its only implementation would be an **uncounted nested LLM call** (not
+  read-only, a guardrail side-door) — and "complexity of my code" already routes to
+  a Tier-1 action.
+- **Guardrails preserved** (see ADR-004's 2026-10-01 update): the loop's non-exempt
+  final answer still runs the filter + pre-display gate; tool results and both
+  memory layers are fenced as untrusted.
+
+**Tradeoff accepted / honesty.** Because the prompt pre-loads problem + examples +
+constraints + the user's code, the model almost always answers at **Tier 2** —
+**the loop is a rare fallback, not the default path.** It was kept (rather than
+forced to fire) because the bounded-agent machinery is the correct, reusable part
+even when it rarely executes; the docs state this plainly rather than overselling an
+"agent." The classifier stays a **local heuristic** — the three-tier shape makes
+high accuracy less critical, since under-routing falls through *gracefully* into
+capable chat.
+
+**What would improve it.** An eval framework for the router/agent (planned E10);
+streaming tool-call deltas (deferred to v1.1 — tool rounds are non-streaming today);
+a richer agent-step trace UI (deferred to E2 — E9 ships only the step-label
+plumbing). Verified before building that the Gemini OpenAI-compatible endpoint
+supports function/tool calling (endpoint-level, not model-gated) — the same
+"verify provider support first" discipline as ADR-005's model-name lesson.
+
+---
+
 ## Cross-cutting themes (the interview headline)
 
 | Theme | Where it shows up | Interview framing |
 |---|---|---|
-| Cost control | BYOK, guardrails, model tiering | "How do you keep LLM costs bounded?" |
+| Cost control | BYOK, guardrails, model tiering, the bounded agent loop (ADR-009) | "How do you keep LLM costs bounded?" |
+| Agentic design under constraints | Three-tier chat, bounded tool loop, per-round accounting (ADR-009) | "How would you build an agent without a framework/backend?" |
 | Safety / output constraints | Multi-layer guardrail, solution-filter | "How do you stop the model doing X?" |
 | Security tradeoffs | BYOK, local key storage | "How do you secure users' keys?" |
 | Non-determinism | Deterministic filter over probabilistic model | "LLM output isn't reliable — how do you handle that?" |

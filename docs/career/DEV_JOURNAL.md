@@ -1430,6 +1430,303 @@ mark the spec Built + record the hardening pass — R5.2.1/R5.4.3/R5.5.4/R5.6, d
 specs-index conflict resolved by keeping both rows; merged tree verified: build
 clean, 277 tests).
 
+## 2026-10-01 — E9: chat as a three-tier cost-aware agent (bounded tool loop + two-layer memory)
+
+> The biggest chat rework: the chat box becomes a **three-tier, cost-aware agent**
+> that sits *in front of* the already-shipped intent router (which is left
+> completely untouched). Full trilogy
+> ([`.kiro/specs/leetsage-chat-enhancement/`](../../.kiro/specs/leetsage-chat-enhancement/))
+> written with sign-off between phases. On branch `feature/chat-enhancement`
+> (off `main`@`72da4ed` via `3579817`), six commits — **built, pending review;
+> NOT pushed, no PR, not merged; CI hasn't run yet.** Test suite **277 → 329**
+> (24 files); build clean.
+
+**What.** Turned the free-text chat into a **three-tier router-then-agent**:
+- **Tier 1 (route)** — a high-confidence intent match dispatches a pre-built action
+  = **1 request** (the shipped `chat-intent-routing` path, unchanged).
+- **Tier 2 (context chat)** — no strong match → a context-aware answer with **no
+  tools** = **1 request**.
+- **Tier 3 (agentic tool loop)** — fires **only** when the model decides it needs to
+  fetch data = **2+ requests** (bounded).
+Plus **two-layer conversation memory** (chat was fully stateless before), a
+**read-only tool allowlist**, **per-round request accounting**, a **live
+agent-step trace** on the Thinking placeholder, and an **obscured usage indicator**
+(the header `X/200` becomes a draining water-droplet; the exact count moves to
+Settings). New modules: `src/services/{chat-window,chat-tools,chat-agent}.ts`,
+`src/components/{UsageReservoir.tsx,usage-band.ts}`; new tests
+`chat-window/chat-tools/chat-agent/chat-fencing/llm-tool-round.test.ts` +
+`components/__tests__/usage-reservoir.test.ts`.
+
+**Why.** Chat was the weakest surface: stateless (no memory of prior turns or the
+session), and it could only ever answer from whatever the prompt happened to
+pre-load. E9 makes it conversational *and* able to fetch a missing fact — without
+abandoning the shipped router or blowing the 200-request/day BYOK budget. The whole
+design is a **cost-shaped** adoption of the agentic pattern rather than a wholesale
+framework.
+
+**The headline design call — "route-first, loop-as-fallback" (option b).** Three
+options were on the table:
+- **(a)** Replace routing wholesale with the loop — throws away shipped, tested
+  routing and makes *every* message pay the agent premium.
+- **(b)** Route first, loop as a fallback — **chosen.**
+- **(c)** Send everything through the loop — over-engineered and expensive.
+The interview framing: *"I scaled the agentic pattern to fit the product's
+constraints instead of adopting a framework wholesale — a client-side TypeScript
+control loop, no backend, no LangGraph/CrewAI/vector-DB."* The three-tier shape also
+**lowers the stakes on classifier accuracy**: under-routing falls through
+*gracefully* into capable chat, so the bias stays "route only when confident."
+
+**The two cost axes (the insight the whole design turns on).** Cost here is **two
+independent things**, and conflating them is the trap:
+1. **Request count** (the 200/day budget) — adding conversation context adds
+   **zero** requests; a chat turn is 1 request whether it carries 0 or N prior
+   turns. **Only the tool loop adds requests** (one per round). *"Context ≠
+   requests."*
+2. **Tokens per request** (per-call cost + latency) — context **does** add input
+   tokens, and an unbounded transcript compounds every turn.
+So memory was designed to be free on axis 1 and *bounded* on axis 2. Alternatives
+recorded in the design: **(A)** full transcript — rejected (grows linearly);
+**(B)** bounded window + flat digest — **chosen**; **(C)** a rolling LLM summary —
+rejected, because the summary *itself* costs a request (wrong trade for a
+BYOK/200-a-day tool). The lesson: **pick the cheap, already-tested path (reuse the
+zero-cost digest) over the obvious-but-expensive one (summarize with the model).**
+
+**Two-layer memory.**
+- **Long-term "what the user has done"** = reuse the existing **zero-API**
+  `buildSessionDigest()` (`session-digest.ts`), which reads structured `data` off
+  `learningContentRef` — it does **not** ask the model to summarize. It was only
+  feeding `GENERATE_REPORT`; E9 threads it into chat too. This is the answer to
+  "should chat know they used 3 hints?" — yes, and the mechanism already existed.
+- **Short-term "what was just said"** = a new **pure, bounded sliding window**
+  (`chat-window.ts`): the last 3 chat turns (`WINDOW_TURNS=3`), char-capped
+  (`WINDOW_CHAR_BUDGET=2500`), newest-first, reading **only** `CHAT_MESSAGE` turns
+  (not action cards — the digest already covers those). The full transcript was
+  rejected (it grows per turn and inflates every request).
+- `progress.hintLevel` stays authoritative for hint **depth**; the digest only
+  *reports* usage and never becomes a second counter.
+
+**The bounded tool loop (`chat-agent.ts`) — pure + deps-injected** (unit-testable
+with no React/chrome/network).
+- **`MAX_TOOL_ROUNDS = 2`** — worst case 3 requests (2 tool rounds + 1 final
+  answer). A **fixed constant, not a Settings knob** — keeping usage low was the
+  explicit intent. (1 vs 2 vs the roadmap's 3–4 was discussed; 1 can't do a two-step
+  fetch, 2 covers essentially every real case.)
+- **Per-round request accounting is the single most important safety property.**
+  `deps.recordRound()` is called **exactly once per network round** (each tool round
+  *and* the final answer), so one message that costs N requests counts **N** against
+  the 200/day budget — never silently burned. There is a unit test asserting
+  `recordRound` call-count === network rounds issued. This is the honest-cost core.
+- A **budget pre-check before each round** (`checkRateLimit`); if denied mid-loop it
+  **degrades gracefully to a final answer**. `stoppedReason: 'answered' | 'cap' |
+  'budget'`.
+
+**The read-only tool allowlist (`chat-tools.ts`) — three zero-API read tools:**
+`getEditorCode` (Monaco MAIN-world read via `extractCurrentCode`),
+`getProblemExamples`, `getProblemConstraints`. Each returns a fact that **already
+exists** (a DOM read or in-memory `problemContext`), so a tool round makes **no
+hidden extra API call**. `runTool()` **rejects an unknown tool** (returns an error
+string, never executes off-list), **catches a failed read gracefully** ("couldn't
+read X", so the model answers with what it has), and **caps every result**
+(`TOOL_RESULT_CHAR_CAP=1500`).
+
+**The deliberately-dropped tool — `getComplexityOfCurrentCode` (worth understanding
+in full).** Dropped on purpose, for three reasons in order of weight:
+1. **It's already a first-class Tier-1 intent.** "Complexity of my code" routes to
+   `analyze-code → CHECK_APPROACH` (weight 30, `requiresCodeContext`) *before* the
+   loop is ever reached.
+2. **The model can just call `getEditorCode`** and reason about complexity itself.
+3. **The decisive asymmetry.** Unlike the 3 read tools (which do **0** inference —
+   they read a stored fact), a complexity tool has **no stored fact to read** — it
+   would have to make its **own nested Gemini call**. That is (i) an **uncounted**
+   request happening *below* the loop's accounting, (ii) no longer "read-only", and
+   (iii) a side door that routes model-generated, solution-adjacent content back in
+   (more guardrail surface). The 3 read tools do 0 API calls inside the tool; a
+   complexity tool would do 1 whole LLM call inside the tool.
+Also recorded: real **gaps that are NOT missing tools** — "did my code pass the
+tests?" (not DOM-readable until Progress Phase D) and "give me the editorial
+solution" (against the guardrail by design).
+
+**Guardrails preserved end-to-end** (the teach-never-solve identity is
+non-negotiable). The loop's **final answer is NON-EXEMPT** → it still passes
+`filterResponse` + the B1 pre-display gate (hide-then-reveal), exactly like the
+shipped chat path. **Tool results fed back are untrusted** → fenced via a new
+`wrapToolResult()` that reuses `wrapUntrusted`. **Both memory layers (digest +
+window) are untrusted** → fenced inside **one** `wrapUntrusted` DATA block, with the
+live question as the only instruction outside it. The router / filter /
+confirm-affordance are all **untouched** — the loop sits in front of them. A
+`chat-fencing.test.ts` asserts digest + window + tool-results all carry the
+untrusted markers.
+
+**Streaming decision.** Tool-call rounds run **non-streaming** (the Gemini
+OpenAI-compatible endpoint returns `tool_calls` on the plain completion; parsing
+tool-call deltas off a stream is deferred to v1.1). Only the **final answer**
+streams, via the existing `streamLLMRequest` with `tool_choice:'none'` so it can't
+re-request tools. New `sendToolRound()` in `llm-service.ts`; `streamLLMRequest`
+gained optional `request.messages` (send a full tool-augmented conversation
+verbatim) + `request.toolChoice` — backward-compatible, existing call paths
+unchanged.
+
+**Hard pre-build gate (verify-provider-support discipline).** *Before* designing the
+loop, I verified against the **official docs** (ai.google.dev/gemini-api/docs/openai)
+that the Gemini OpenAI-compatible endpoint (`.../v1beta/openai/chat/completions`)
+**supports function/tool calling** (standard OpenAI `tools` + `tool_choice:"auto"`
+shape); tool support is **endpoint-level, not model-gated**, and
+`gemini-3.5-flash-lite`/`-flash` are current (not the deprecated 2.5). This is the
+same lesson as the stale-model-name 404 loop — **verify provider feature support
+before building on it.**
+
+**What broke / the hard part.** No dead-end in the loop logic itself; the
+instructive parts were two real bugs surfaced by *exercising* the built extension,
+one honest-reframing finding, a long UI iteration, and an operational
+commit/terminal mess:
+
+(1) ⭐ **Option D — the user's OWN code was being guardrailed as the withheld
+solution.** Asking chat "what have I typed so far?" made the model **reproduce the
+whole editor file**, which the NON-EXEMPT chat filter (`filterResponse`) flagged as
+a "complete function implementation" and **blocked** — i.e. the user's own code was
+treated as if it were the solution we withhold. This is a pre-existing tension from
+the shipped **B4** (code-aware chat kept non-exempt) that E9 made visible. Options:
+(A) leave it / document; (B) detect + skip-filter the user's own code; (C)
+context-aware filtering that knows the user's code; **(D) fix at the PROMPT**
+(chosen, user-confirmed). A shared **`OWN_CODE_REFERENCE_RULE`** in *both*
+`getChatSystemPrompt` and `getChatAgentSystemPrompt` tells the model to refer to
+specific lines / short excerpts rather than reprint the whole file. The reasoning:
+**the filter is correct and must not be weakened**; the real problem was the model
+dumping the whole file (both filter-tripping *and* useless — the user can already
+see their own editor). Verified live: chat now describes the user's own code
+accurately (naming their variables, giving complexity) without tripping the filter;
+the filter stays the hard backstop. Honest caveat: LLM output isn't deterministic,
+so if it occasionally still over-quotes and trips the filter, that's the **filter
+correctly doing its backstop job** — the prompt makes it rare, not impossible.
+
+(2) ⭐ **The loop is a rare fallback — and I kept it anyway, honestly.** Because
+`handleChatSubmit` pre-loads the problem + examples + constraints + the user's editor
+code into the prompt, and the 3 read tools fetch exactly those things, the model
+**almost never needs a tool** — it answers directly at Tier 2 (1 request). The loop
+fires only in the narrow case where data genuinely isn't in the prompt (e.g. an
+empty editor at submit, then a question about their code). Tested live: a "does my
+code handle X" question got a great answer via **Tier-1 `EXPLAIN_CONCEPT` routing**
+(never reached the loop); the loop was only *forced* to fire with an empty editor.
+Three responses were considered — **(1)** keep the loop as a bounded correctness
+fallback (**chosen**); **(2)** stop pre-loading code so the loop fires (rejected —
+costs an extra request per code question, the exact cost we avoid); **(3)** add a
+genuinely-new-data tool (rejected — bigger scope, e.g. editorial hints). The honest
+interview framing: *"the agentic machinery — bounded loop + per-round accounting +
+unbypassable guardrail — is the valuable, correct part even when it rarely fires;
+the docs say plainly it's a fallback, not the default path."* The loop **was**
+verified end-to-end live (empty editor → `getEditorCode` → final answer → the filter
+even ran on its output).
+
+(3) ⭐ **The obscured usage indicator (R11) iterated hard off visual review.** The
+requirement: replace the header raw `X/200` with a **non-numeric** signal, keep the
+green→amber→red "running low" cue, and move the exact count to Settings — because one
+message can now cost 2–3 requests via the loop, so a raw countdown would be
+confusing/pressuring. The iteration (every step from eyeballing the *built*
+extension): beaker/reservoir SVG → read as an unreadable "blue box" at header size →
+switched to a **water droplet** that drains bottom-up (reads as "water" even tiny) →
+resized to the icon row → user noted the header was cluttered and the droplet's
+meaning wasn't immediate → **moved it from the header to the bottom input bar with a
+"Daily usage" label** (now reads as a budget where requests are actually spent) →
+merged the "Daily usage" row and "Reset this problem" into **one `justify-between`
+row** to kill dead whitespace. Pure band/fill math was split into `usage-band.ts` so
+the component file exports only a component (the `react-refresh` lint rule). An exact
+"Requests today: X/max (resets at midnight)" line was added to Settings → session
+stats (`StatsPanel`). **The lesson:** the requirement said "obscured," but a bare
+glyph was *too* obscure (no idea it's a request budget) — the honest fix was
+**placement + a label, not a cleverer glyph.** There's a line between "no pressuring
+countdown" and "no idea what this is."
+
+(4) **The commit / hook / terminal friction (operational, captured candidly).** The
+PowerShell wrapper returns a garbled `-1` and doesn't cleanly report when a long
+command finishes; the pre-commit hook runs lint+test+build (~40s). Combined, I
+couldn't tell if commits landed — and my workaround (backgrounding `git commit`)
+spawned several **zombie processes that fought over `index.lock` and blocked the
+commits**, plus I introduced a real **duplicate-import bug** the hook correctly
+rejected. The fix that worked: **verify lint+test+build once up front** (all green:
+329 tests, clean build), then commit the grouped commits with `git commit
+--no-verify` — explicitly sanctioned by the repo's own `.husky/pre-commit` as the
+"in a pinch" bypass, with CI as the real gate on push. The last 3 commits then took
+seconds. Lesson for this environment: **don't pay the 40s hook per commit through a
+terminal that can't report completion — verify once, `--no-verify` the batch, let CI
+gate on push**; and clean up background processes so they don't fight over a shared
+resource like the git index.
+
+(5) **The editor-buffer-vs-disk hazard (silent revert).** I edited `App.tsx` on disk
+while the user had it **open** in their editor; the editor's stale buffer later got
+saved over my edits, **silently reverting the entire `handleChatSubmit` rewrite +
+header→bottom-bar swap + imports** (only `App.tsx` — other files survived). Caught
+because the running extension still showed the old "3/200". Fix: re-applied the
+edits, and told the user to keep files I'm editing **closed** (or Revert File /
+reopen — keep disk, discard buffer). Lesson: when an agent edits on disk, keep those
+files closed in the editor to avoid a save-over revert.
+
+**The live agent-step trace (a UX decision with a guardrail nuance).**
+`runChatAgent` emits `onStep` events (`AgentStep = thinking | tool{label} |
+answering`); `App` renders a minimal current-step label on the existing B1 Thinking
+placeholder ("Reading your code…" → "Answering…"). **The critical split:** tool-step
+labels are **process, not answer content**, so they're guardrail-**safe** to show
+live; the final **answer still hides-then-reveals** (never token-streamed) because a
+non-exempt answer could flash a solution before the filter runs. The rich styled
+trace *timeline* is deliberately **deferred to E2** — E9 only builds the plumbing so
+the trace is possible without closing the door.
+
+**How solved.** Six logical commits, each a clean concern, verified once up front
+then committed `--no-verify` (see friction note (4)): `63d4d6b` (docs: the E9
+trilogy + roadmap + specs-index row), `60ce047` (`llm`: `sendToolRound` + the
+non-streaming tool-call round + `LLMRequest.messages`/`toolChoice` passthrough),
+`b156564` (`prompts`: `getChatAgentSystemPrompt` + `wrapToolResult` +
+`OWN_CODE_REFERENCE_RULE`), `fa89864` (`chat`: the bounded tool loop + two-layer
+memory — the E9 core), `78cb34b` (`ui`: the draining-droplet usage indicator + the
+live agent-step trace), `932e6c4` (`app`: wire the loop into `handleChatSubmit` +
+expand the golden set). Verified `npm.cmd run build` clean and the full suite at
+**329** (24 files) before committing.
+
+**Interview angle.** ⭐ The headline **agentic-engineering** story and the first
+truly agentic surface in the project. **AI/system design:** "I built an agent
+shaped to the product's constraints, not a framework" — a client-side TS control
+loop with a **route-first, loop-as-fallback** three-tier design, a **bounded**
+iteration cap, **per-round request accounting** (one message = N counted requests,
+unit-tested), a **read-only zero-inference tool allowlist** (and the discipline to
+*drop* a tool whose only implementation would be an uncounted nested LLM call),
+**two-layer memory** that's free on request-count and bounded on tokens, and an
+**unbypassable safety guardrail** (the non-exempt final answer still runs the filter
++ pre-display gate; every untrusted input is fenced). The **two-cost-axes**
+articulation ("context ≠ requests; only tool rounds cost requests") is a crisp
+cost-reasoning answer. **Honesty as a stance:** I documented plainly that *the loop
+is a rare fallback* and kept it anyway because the bounded-agent machinery is the
+correct part — rather than forcing it to fire to look impressive. **Workflow:** the
+"explain and STOP, eyeball the built thing" gate drove the whole usage-indicator
+redesign and surfaced the Option-D own-code bug (bugs come from *running* it); the
+golden set caught a bad *test label* (see below); and two candid operational
+lessons — the `--no-verify`-the-batch terminal workaround and the editor-buffer
+save-over revert.
+
+**Caveats (not overclaimed).** **Committed on a branch, NOT pushed / no PR / not
+merged; CI hasn't run yet.** The **loop is a rare fallback**, not the default path
+(Tier 2 answers almost everything). Tool rounds are **non-streaming**; **streaming
+tool-call deltas are deferred to v1.1**. The **rich agent-step trace UI is deferred
+to E2** — E9 ships only the step-label plumbing. The Option-D own-code fix is a
+**prompt** mitigation (rare, not impossible — the filter is the hard backstop). The
+classifier remains a **local heuristic** (the three-tier design is what makes high
+accuracy less critical — under-routing falls through to capable chat). The golden
+set is still **author-labeled**.
+
+**Commits** (all on `feature/chat-enhancement`, off `main`@`72da4ed` via `3579817`,
+local-only — not pushed): `63d4d6b` (docs(specs): E9 trilogy + roadmap + index),
+`60ce047` (feat(llm): non-streaming tool-call round), `b156564` (feat(prompts):
+agent-chat prompt + tool-result fencing + own-code rule), `fa89864` (feat(chat):
+bounded agentic tool loop + two-layer memory — E9 core), `78cb34b` (feat(ui):
+draining-droplet usage indicator + live agent step trace), `932e6c4` (feat(app):
+wire the agentic chat loop into `handleChatSubmit` + expand golden set). New files:
+`src/services/{chat-window,chat-tools,chat-agent}.ts`,
+`src/components/{UsageReservoir.tsx,usage-band.ts}`, tests
+`chat-window/chat-tools/chat-agent/chat-fencing/llm-tool-round.test.ts` +
+`components/__tests__/usage-reservoir.test.ts`. Modified:
+`src/services/{llm-service,prompts}.ts`, `src/types/api.ts`,
+`src/components/{ThinkingIndicator,ContentDisplay,StatsPanel,SettingsModal}.tsx`,
+`src/sidepanel/App.tsx`, `src/services/intent-router/__tests__/golden-set.test.ts`,
+`.kiro/specs/README.md`.
+
 ---
 
 ## Next up (see [LEARNING_ROADMAP.md](./LEARNING_ROADMAP.md))
@@ -1484,11 +1781,29 @@ clean, 277 tests).
    an explicit manifest CSP, and slug-keyed `url` validation. Round-trip verified
    against the user's real 13-problem export (re-import is a no-op). Unblocks the
    scope-permissions change (#4). Tests **236 → 246 →** (post-merge) **277**.
-   **Next: the deferred eval follow-up** (real captured-Gemini cases + a validated
-   LLM-as-judge), then **scope extension permissions** (now unblocked by export),
-   then progress-tracking Phase D (verified submissions), then cheatsheet / RAG.
-   Still future: a clickable "open on LeetCode from My Progress" link (its `url`
-   is already validated for safety, but the link itself is not built).
+8. ~~**E9 — Chat enhancement** (chat as a three-tier cost-aware agent)~~ — **BUILT,
+   PENDING REVIEW (2026-10-01)** on branch `feature/chat-enhancement` (6 commits
+   `63d4d6b`…`932e6c4` off `main`@`72da4ed` via `3579817`; **NOT pushed, no PR, not
+   merged; CI not yet run**): a **route-first, loop-as-fallback** three-tier chat —
+   Tier 1 route (1 request, shipped path), Tier 2 context chat with no tools
+   (1 request), Tier 3 a **bounded read-only agentic tool loop** (`MAX_TOOL_ROUNDS=2`,
+   worst case 3 requests) with **per-round request accounting** (one message = N
+   counted requests, unit-tested). **Two-layer memory** (the zero-API session digest
+   + a bounded sliding chat window), a **3-tool zero-inference allowlist**
+   (`getComplexityOfCurrentCode` deliberately dropped — it'd be an uncounted nested
+   LLM call), guardrails preserved end-to-end (non-exempt final answer still filtered
+   + pre-display-gated; all untrusted inputs fenced), a live process-only agent-step
+   trace, and an obscured draining-droplet usage indicator (exact count moved to
+   Settings). Prompt-level Option-D fix so chat describing the user's *own* code
+   doesn't trip the filter. Tests **277 → 329** (24 files), build clean.
+   **Now next (the E-series chat polish/bugfix epics): E3/E2/E4** (chat polish +
+   the rich agent-trace UI + bugfixes), then **E10** (eval framework for the
+   router/agent), **E6** (hardening), **E5** (docs-removal decision), **E7** (scope
+   extension permissions — intentionally LAST), **E8** (deploy). Also still open from
+   earlier: the deferred eval follow-up (real captured-Gemini cases + a validated
+   LLM-as-judge) and progress-tracking Phase D (verified submissions). Still future:
+   a clickable "open on LeetCode from My Progress" link (its `url` is already
+   validated for safety, but the link itself is not built).
 
 *When each lands, add an entry above (via the project-historian agent) and backfill
 any resulting numbers into [RESUME.md](./RESUME.md).*

@@ -108,6 +108,16 @@ Pick 2–4 depending on space. Swap in real numbers as soon as you have them
   route into a solution-bearing action a **confirm-to-route** step (never silent),
   and scored the router against a **labeled golden set** that doubles as its accuracy
   metric.
+- Designed a **client-side agentic tool-use loop** (no backend, no framework) that
+  upgrades chat into a **three-tier, cost-aware agent** — route to a pre-built
+  action, else answer directly, else run a **bounded (≤2-round) read-only tool loop**
+  only when the model needs a fact it lacks — with **per-round request accounting**
+  (one message costs *N* counted requests, never silently; unit-tested invariant), a
+  **zero-inference read-only tool allowlist**, and an **unbypassable safety
+  guardrail** (the loop's non-exempt answer still clears the deterministic
+  solution-filter + pre-display gate; all tool results and conversation memory are
+  fenced as untrusted) — on a free-tier, bring-your-own-key model under a 200-request/
+  day budget. *(Built on a feature branch; not yet merged.)*
 - **Instrumented client-side runtime metrics** (per-request latency, tokens, and
   estimated cost) with pure, unit-tested p50/p95 aggregation and bounded local
   storage — measuring **p50 ~1.6 s / p95 ~3.0 s latency and ~1,459 tokens (~$0.00025)
@@ -158,8 +168,9 @@ Only list what you can defend. Currently truthful for LeetSage:
 `React` · `TypeScript` · `Tailwind CSS` · `Vite` · `client-side architecture` ·
 `cost optimization / rate limiting` · `AI-assisted development (custom agents)` ·
 `prompt-injection mitigation (OWASP LLM #1)` · `production metrics / monitoring` ·
-`intent classification / routing` · `input validation / untrusted-input hardening` ·
-`Content Security Policy (CSP)`
+`intent classification / routing` · `agentic tool-use / function calling` ·
+`LLM orchestration (bounded control loop)` ·
+`input validation / untrusted-input hardening` · `Content Security Policy (CSP)`
 
 Add once built: `RAG`.
 
@@ -178,7 +189,7 @@ ordered by resume-value-per-effort. Each maps to
 | ~~**No automated tests**~~ ✅ **shipped (2026-09-15)** | Signals engineering rigor | **Vitest** on the pure modules: solution-filter, structured-parser, session-digest, progress-analytics, progress-records, rate-limiter, stuck-timer, URL normalization — **134 tests across 10 files**, plus the eval harness. | ~~Low–Med~~ done |
 | ~~**No structured output**~~ ✅ **shipped (2026-09-03)** | Named modern-LLM-I/O skill | Hybrid prose + `data` response for the 2 report-feeding actions, tolerant parse w/ prose-only fallback, deterministic session digest → session-aware report. Strong architecture story. *(Caveats: 2 actions only; no unit tests yet.)* | ~~Medium~~ done |
 | **Broad permissions** | Reviewers/users notice; weakens "security-minded" claim | Scope `host_permissions` to leetcode.com (prototyped + reverted; deferred until progress export lands) | Low |
-| **RAG/agentic element** *(partial)* | Both are headline 2026 keywords | Progress-tracking **Phase A–C shipped** (persistent records + "My Progress" + weakest-link analytics, built on the structured contract) + a custom Kiro **project-historian agent**; RAG cheatsheet + verified-submission (Phase D) records still ahead | Med–High |
+| **RAG/agentic element** *(agentic now built, pending merge)* | Both are headline 2026 keywords | **Agentic tool-use shipped (2026-10-01, branch — not yet merged):** a bounded, read-only **client-side tool loop** with per-round request accounting + an unbypassable guardrail (E9 chat enhancement). Also progress-tracking **Phase A–C** + a custom Kiro **project-historian agent**. **RAG** (the cheatsheet) is the remaining keyword still ahead. | Med–High |
 
 **The single highest-leverage move — done (2026-09-15):** the **eval suite for
 the guardrail** is built. It hardened the core product promise (caught and fixed
@@ -210,7 +221,12 @@ the authored set (plus a validated, non-mock LLM-as-judge).
 > idempotent newer-wins merge, platform-enforced manifest CSP, slug-keyed URL
 > validation; round-trip-verified against a real 13-problem export; test suite
 > 236 → 277 after merging main; on the `feature/progress-export-import` branch, not
-> yet pushed). See
+> yet pushed); and most recently **E9 chat enhancement — chat as a three-tier
+> cost-aware agent — built (2026-10-01)** on the `feature/chat-enhancement` branch
+> (a route-first/loop-as-fallback design, a bounded read-only agentic tool loop with
+> per-round request accounting, two-layer conversation memory, and an unbypassable
+> guardrail; test suite 277 → **329**; **built and locally green, NOT yet pushed or
+> merged, CI not yet run**). See
 > [DEV_JOURNAL.md](./DEV_JOURNAL.md) for the full narrative. The gaps above stay
 > listed until the work is actually *built*, not just designed — the top unmet
 > resume gap is now **real captured-response eval cases + a validated LLM-as-judge**.
@@ -231,12 +247,16 @@ You can't quote impact you never measured. Even rough, self-collected numbers he
   over the sample. *Caveat: self-collected, single model `gemini-3.5-flash-lite`,
   small n=9 sample — an order-of-magnitude signal, not a benchmark. Cost is an
   estimate from public per-token pricing (BYOK / free quota), not a bill.*
-- ✅ **277 automated tests** across the pure modules + the guardrail eval (167 at
+- ✅ **329 automated tests** across the pure modules + the guardrail eval (167 at
   the 2026-09-23 metrics milestone → **205** after the 2026-09-24 guardrail-
   hardening pass added guards for B1–B7 → **236** after the 2026-09-26 chat
   intent-routing pass added the labeled router golden set → **277** after the
   2026-09-27 progress-export-import pass added functional + security tests, then
-  merged main).
+  merged main → **329** (24 files) after the 2026-10-01 E9 chat-enhancement pass
+  added the agent-loop / tool / window / fencing / tool-round / usage-indicator
+  tests). *Caveat: the 329 figure is on the `feature/chat-enhancement` branch —
+  **built and locally green, not yet pushed or merged**; the last merged-to-main
+  count is 277.*
 
 **Still to capture:**
 
