@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import type { MetricsSummary } from '../types';
 import { getMetricsSummary } from '../services/metrics-store';
+import { getUsageToday } from '../services/rate-limiter';
 
 /**
  * A small, read-only runtime-metrics readout. Everything shown is computed
@@ -12,19 +13,43 @@ import { getMetricsSummary } from '../services/metrics-store';
  * (the endpoint may not honor `stream_options.include_usage`), the token/cost
  * rows say so instead of showing a fabricated number.
  */
-const StatsPanel: React.FC = () => {
+const StatsPanel: React.FC<{ maxRequestsPerDay?: number }> = ({ maxRequestsPerDay }) => {
   const [summary, setSummary] = useState<MetricsSummary | null>(null);
+  // E9: the exact daily usage count moved here from the header (R11.3). The
+  // header now shows only an obscured reservoir glyph; the precise number lives
+  // in Settings for anyone who wants it.
+  const [usageToday, setUsageToday] = useState<number | null>(null);
 
   useEffect(() => {
     getMetricsSummary().then(setSummary).catch(() => setSummary(null));
+    getUsageToday().then(u => setUsageToday(u.count)).catch(() => setUsageToday(null));
   }, []);
 
+  // The exact "requests today" line — shown regardless of metrics state (R11.3).
+  const usageLine =
+    usageToday !== null && maxRequestsPerDay ? (
+      <div className="flex items-center justify-between py-0.5 text-[11px]">
+        <span className="text-neutral-500 dark:text-neutral-400">Requests today</span>
+        <span className="font-mono">{usageToday} / {maxRequestsPerDay} <span className="text-neutral-400">(resets at midnight)</span></span>
+      </div>
+    ) : null;
+
   if (!summary) {
-    return <p className="text-[11px] text-neutral-400 mt-2">Loading stats…</p>;
+    return (
+      <div className="mt-2 space-y-0.5">
+        {usageLine}
+        <p className="text-[11px] text-neutral-400">Loading stats…</p>
+      </div>
+    );
   }
 
   if (summary.totalRequests === 0) {
-    return <p className="text-[11px] text-neutral-400 mt-2">No requests recorded yet — run a coaching action to start collecting metrics.</p>;
+    return (
+      <div className="mt-2 space-y-0.5">
+        {usageLine}
+        <p className="text-[11px] text-neutral-400">No requests recorded yet — run a coaching action to start collecting metrics.</p>
+      </div>
+    );
   }
 
   const ms = (v: number | null) => (v === null ? '—' : `${v} ms`);
@@ -43,6 +68,7 @@ const StatsPanel: React.FC = () => {
 
   return (
     <div className="mt-3 text-[11px] space-y-0.5">
+      {usageLine}
       {row('Requests recorded', `${summary.totalRequests}`)}
       {row('Latency p50', ms(summary.p50LatencyMs))}
       {row('Latency p95', ms(summary.p95LatencyMs))}

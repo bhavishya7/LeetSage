@@ -13,6 +13,12 @@ interface ContentDisplayProps {
   onSaveToProgress?: (item: LearningContent) => void;
   /** ids of report cards already saved this session (to show a saved state). */
   savedReportIds?: Set<string>;
+  /**
+   * E9: the agentic chat loop's current PROCESS step ("Reading your code",
+   * "Answering") for the streaming card's thinking placeholder. Process-only
+   * (never answer content), so it's safe to show live. Absent = no loop running.
+   */
+  agentStepLabel?: string;
 }
 
 const TYPE_META: Record<LearningContent['type'], { accent: string; icon: string }> = {
@@ -150,7 +156,9 @@ const ContentCard: React.FC<{
   isGated: boolean;
   onSaveToProgress?: (item: LearningContent) => void;
   isSaved?: boolean;
-}> = ({ item, isStreaming, isGated, onSaveToProgress, isSaved }) => {
+  /** E9: live agent step label for THIS card's thinking placeholder (if any). */
+  stepLabel?: string;
+}> = ({ item, isStreaming, isGated, onSaveToProgress, isSaved, stepLabel }) => {
   const [expanded, setExpanded] = React.useState(true);
   const [copied, setCopied] = React.useState(false);
   const meta = TYPE_META[item.type];
@@ -189,7 +197,7 @@ const ContentCard: React.FC<{
           {isGated
             // B1: non-exempt action mid-stream — withhold tokens, show the
             // animated action-aware "thinking" placeholder until the filter runs.
-            ? <ThinkingIndicator label={thinkingLabel(item.actionType, item.type === 'CHAT_MESSAGE')} />
+            ? <ThinkingIndicator label={thinkingLabel(item.actionType, item.type === 'CHAT_MESSAGE')} stepLabel={stepLabel} />
             : item.content
               ? renderContent(item.content)
               : <div className="h-4 bg-neutral-200 dark:bg-neutral-700 rounded animate-pulse" />}
@@ -229,7 +237,7 @@ const ContentCard: React.FC<{
   );
 };
 
-const ContentDisplay: React.FC<ContentDisplayProps> = ({ content, isLoading, streamingId, onSaveToProgress, savedReportIds }) => {
+const ContentDisplay: React.FC<ContentDisplayProps> = ({ content, isLoading, streamingId, onSaveToProgress, savedReportIds, agentStepLabel }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [content.length, streamingId]);
 
@@ -264,6 +272,7 @@ const ContentDisplay: React.FC<ContentDisplayProps> = ({ content, isLoading, str
             isGated={isGated}
             onSaveToProgress={onSaveToProgress}
             isSaved={savedReportIds?.has(item.id)}
+            stepLabel={isStreaming ? agentStepLabel : undefined}
           />
         );
       })}

@@ -22,7 +22,7 @@ import React, { useEffect, useState } from 'react';
 /** After this long with no reveal, switch to the "still working" messaging. */
 const STAGE_TWO_MS = 3000;
 
-const ThinkingIndicator: React.FC<{ label: string }> = ({ label }) => {
+const ThinkingIndicator: React.FC<{ label: string; stepLabel?: string }> = ({ label, stepLabel }) => {
   const [elapsedMs, setElapsedMs] = useState(0);
 
   useEffect(() => {
@@ -33,9 +33,13 @@ const ThinkingIndicator: React.FC<{ label: string }> = ({ label }) => {
   }, []);
 
   const inStageTwo = elapsedMs >= STAGE_TWO_MS;
-  // Stage one: the action-aware label as-is. Stage two: a calmer "still on it"
-  // phrase so the text visibly changes (proof of life) without implying an error.
-  const text = inStageTwo ? 'Still working on it…' : label;
+  // E9: when the agentic chat loop is running, it emits a live PROCESS step
+  // ("Reading your code…", "Answering…"). That step is itself proof-of-life and
+  // updates as the loop progresses, so when present it takes precedence over
+  // both the static label and B5's stage-two "still working" swap. The step
+  // trace is process-only (never answer content), so it's safe to show here.
+  // Stage one otherwise: the action-aware label. Stage two: a calmer phrase.
+  const text = stepLabel ? `${stepLabel}…` : inStageTwo ? 'Still working on it…' : label;
   const seconds = Math.floor(elapsedMs / 1000);
 
   return (
