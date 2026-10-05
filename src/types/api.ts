@@ -38,6 +38,20 @@ export interface LLMRequest {
    * omitted.
    */
   onUsage?: (usage: { promptTokens: number; completionTokens: number }) => void;
+  /**
+   * Chat Enhancement (E9): optional override of the full OpenAI message array.
+   * When set, the service sends these messages verbatim instead of building them
+   * from problemContext/actionType — used by the agentic chat loop's streamed
+   * FINAL answer, which carries the whole tool-augmented conversation. Ignored
+   * when omitted (every existing call path is unaffected).
+   */
+  messages?: Array<Record<string, unknown>>;
+  /**
+   * E9: pins tool_choice on the streamed final answer to "none" so the terminal
+   * call can't re-request tools (the loop is already bounded). Ignored when
+   * omitted. Only meaningful alongside `messages`.
+   */
+  toolChoice?: 'none' | 'auto';
 }
 
 export interface LLMResponse {

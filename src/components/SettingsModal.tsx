@@ -116,7 +116,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
             <button onClick={() => setShowStats(v => !v)} className="text-xs font-medium text-blue-500 hover:text-blue-600">
               {showStats ? '▲ Hide' : '▼ Show'} session stats
             </button>
-            {showStats && <StatsPanel />}
+            {showStats && <StatsPanel maxRequestsPerDay={guardrails.maxRequestsPerDay} />}
           </div>
         </div>
         <div className="flex gap-2 px-4 py-3 border-t border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shrink-0">

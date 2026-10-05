@@ -210,6 +210,63 @@ prompts). **Also still deferred (registry-only, harder to guard):** **B8** —
 equivalence (`O(log M + log N) = O(log(M·N))`); fuzzy model-reasoning that's hard to
 guard deterministically.
 
+### 3.7. E9 — Chat enhancement: chat as a three-tier cost-aware agent  🧪 BUILT, PENDING REVIEW (2026-10-01)
+
+**Spec:** `leetsage-chat-enhancement` (full trilogy, sign-off between phases).
+**Skill:** agentic LLM design (tool-use / function calling, a bounded control loop),
+cost modeling, LLM orchestration without a framework, safety-preserving tool-use.
+**What shipped (branch `feature/chat-enhancement`, 6 commits `63d4d6b`…`932e6c4`
+off `main`@`72da4ed` via `3579817`; **NOT pushed, no PR, not merged; CI not yet
+run**).** Chat became a **route-first, loop-as-fallback three-tier agent** sitting
+*in front of* the untouched intent router: **Tier 1** route to a pre-built action
+(1 request), **Tier 2** context-aware chat with no tools (1 request), **Tier 3** a
+**bounded read-only agentic tool loop** (`MAX_TOOL_ROUNDS=2`, worst case 3 requests)
+that fires only when the model needs a fact it lacks. Built as a pure, deps-injected
+**client-side TS control loop** (`chat-agent.ts`) — no backend, no LangGraph/CrewAI,
+no vector DB. **Two-layer memory:** the existing **zero-API** `buildSessionDigest`
+(long-term) + a new **bounded sliding window** (`chat-window.ts`, last 3 turns,
+char-capped — short-term), both fenced as untrusted in one `wrapUntrusted` block. A
+**3-tool zero-inference read-only allowlist** (`chat-tools.ts`:
+`getEditorCode`/`getProblemExamples`/`getProblemConstraints`) where each tool reads a
+fact that already exists — `getComplexityOfCurrentCode` **deliberately dropped**
+(redundant with the Tier-1 `analyze-code` intent, and its only implementation would
+be an **uncounted nested LLM call** = not read-only, a guardrail side-door). **The
+load-bearing safety property: per-round request accounting** — `recordRound()` fires
+exactly once per network round (each tool round + the final answer), unit-tested, so
+one message costing N requests counts N against the 200/day budget, never silently.
+Guardrails preserved end-to-end (non-exempt final answer still filtered +
+pre-display-gated; tool results + both memory layers fenced). A live **process-only
+agent-step trace** on the Thinking placeholder (rich trace deferred to E2); an
+**obscured draining-droplet usage indicator** (exact count moved to Settings). A
+prompt-level **Option-D fix** (shared `OWN_CODE_REFERENCE_RULE`) so chat can describe
+the user's *own* code without the non-exempt filter blocking it. Test suite
+**277 → 329** (24 files), build clean.
+**The core design story (the two cost axes).** Cost is two independent things:
+**request count** (the 200/day budget — adding memory adds **zero** requests; only
+tool rounds cost requests, *"context ≠ requests"*) and **tokens per request** (which
+context *does* grow, so the window + digest are bounded). This is why memory reuses
+the zero-cost digest + a bounded window rather than a rolling LLM summary (which
+would itself cost a request). Chosen design = **option (b)** (route-first,
+loop-as-fallback) over (a) replace routing wholesale or (c) everything through the
+loop.
+**The honesty the docs keep.** Because the prompt pre-loads problem/examples/
+constraints/code, the model almost always answers at Tier 2 — **the loop is a rare
+fallback, not the default path.** Kept anyway (not forced to fire) because the
+bounded-agent machinery is the correct, reusable part; verified it executes
+end-to-end live (empty editor → `getEditorCode` → filtered final answer).
+**Interview payoff.** The headline **agentic-engineering** story (INTERVIEW_PREP
+**Q13**) + DESIGN_DECISIONS **ADR-009**; a RESUME agentic-tool-loop bullet; and
+workflow lessons (the golden set catching a bad *test label*; the
+`--no-verify`-the-batch terminal workaround; the editor-buffer save-over revert) in
+the "working with AI agents" Q&A. **Deferred (documented, not built):** streaming
+tool-call deltas (v1.1 — tool rounds are non-streaming), the rich agent-step trace
+UI (E2), and an LLM/embedding classifier (the local heuristic stays; the three-tier
+design makes high accuracy less critical). **Effort:** ~~High~~ built, pending
+review. **Next (the E-series chat epics):** E3/E2/E4 (chat polish + the rich trace
+UI + bugfixes) → **E10** (eval framework for the router/agent) → **E6** (hardening)
+→ **E5** (docs-removal decision) → **E7** (scope extension permissions — LAST) →
+**E8** (deploy).
+
 ---
 
 ## Tier 1.5 — Finish what the eval started (deferred from 2026-09-15)
@@ -511,11 +568,24 @@ is exactly the GenAI system-design interview. Rehearse it either way — it's in
     newer-wins merge, platform-enforced manifest CSP, slug-keyed URL validation),
     round-trip-verified against the real 13-problem export. Unblocks the
     scope-permissions change (#4). Tests **236 → 246 →** (post-merge) **277**.
-    **Now next:** the remaining Tier-1.5 eval follow-up (#3a — real captured cases +
-    a validated judge) and/or **scope extension permissions** (#4 — now unblocked by
-    export), then progress-tracking Phase D (verified submissions), then
-    **cheatsheet / RAG** (#8), then Tier 3 stretch items. **B8** still deferred;
-    the "open on LeetCode" link is a documented future (its URL is already validated).
+12. ~~**E9 — Chat enhancement** (chat as a three-tier cost-aware agent)~~ — **BUILT,
+    PENDING REVIEW (2026-10-01)** on branch `feature/chat-enhancement` (6 commits
+    `63d4d6b`…`932e6c4` off `main`@`72da4ed` via `3579817`; **NOT pushed, no PR, not
+    merged; CI not yet run**): a route-first/loop-as-fallback three-tier chat with a
+    bounded read-only agentic tool loop (`MAX_TOOL_ROUNDS=2`), per-round request
+    accounting (unit-tested), two-layer memory (zero-API digest + bounded window), a
+    3-tool zero-inference allowlist (`getComplexityOfCurrentCode` dropped — it'd be
+    an uncounted nested LLM call), guardrails preserved end-to-end, a process-only
+    agent-step trace, an obscured draining-droplet usage indicator, and a
+    prompt-level own-code fix. Tests **277 → 329** (24 files). See #3.7.
+    **Now next (the E-series chat epics): E3/E2/E4** (chat polish + the rich
+    agent-trace UI + bugfixes) → **E10** (eval framework for the router/agent) →
+    **E6** (hardening) → **E5** (docs-removal decision) → **E7** (scope extension
+    permissions — intentionally LAST) → **E8** (deploy). Also still open from
+    earlier: the Tier-1.5 eval follow-up (#3a — real captured cases + a validated
+    judge) and progress-tracking Phase D (verified submissions). **B8** still
+    deferred; the "open on LeetCode" link is a documented future (its URL is already
+    validated).
 
 At each step, backfill numbers into [RESUME.md](./RESUME.md) and new Q&A into
 [INTERVIEW_PREP.md](./INTERVIEW_PREP.md). The docs are living — grow them with the code.

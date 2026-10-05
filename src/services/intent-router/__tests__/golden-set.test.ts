@@ -89,6 +89,23 @@ const GOLDEN_SET: GoldenCase[] = [
   { message: 'why is the sky blue', context: NO_CODE, expected: 'chat' },
   { message: 'thanks, that was helpful', context: NO_CODE, expected: 'chat' },
   { message: 'what should i eat for lunch', context: NO_CODE, expected: 'chat' },
+
+  // --- E9: genuine follow-ups fall through to the (now capable) chat --------
+  // These have no strong single-intent keyword; before E9 they'd get a generic
+  // one-shot answer, now they reach context-aware chat / the tool loop. The
+  // ROUTER's job is unchanged: don't force them into an action — let them chat.
+  //
+  // NOTE: these phrases deliberately avoid registry keywords ("example", "edge
+  // case", "hint", "complexity", "break down", "pattern"), because a message
+  // that happens to contain one routes at Tier 1 — which is correct behavior,
+  // just not a "follow-up" case. (An earlier draft used "the edge case I
+  // mentioned" and the golden set correctly caught that it routes to
+  // GENERATE_EXAMPLES via the "edge case" keyword — a good catch.)
+  { message: 'what about that part we were just talking about?', context: NO_CODE, expected: 'chat', note: 'E9 follow-up → chat (window resolves "that")' },
+  { message: 'why does that work but mine does not?', context: CODE, expected: 'chat', note: 'E9 follow-up → chat' },
+  { message: 'can you say that last bit again more slowly', context: NO_CODE, expected: 'chat', note: 'E9 follow-up → chat' },
+  { message: 'does my version handle negative numbers?', context: CODE, expected: 'chat', note: 'E9 open question → chat (loop may fetch code)' },
+  { message: 'would it still be correct if the input were empty?', context: CODE, expected: 'chat', note: 'E9 open question → chat' },
 ];
 
 describe('golden set — routing accuracy metric (R10)', () => {
