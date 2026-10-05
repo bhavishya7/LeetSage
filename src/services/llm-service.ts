@@ -11,10 +11,53 @@ const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai
 // guarded with `?.` and a fallback.
 interface ChatCompletionResponse {
   choices?: Array<{
-    message?: { content?: string };
+    message?: { content?: string; tool_calls?: RawToolCall[] };
     finish_reason?: LLMResponse['finishReason'];
   }>;
   usage?: { prompt_tokens: number; completion_tokens: number };
+}
+
+// --- Tool/function calling (E9, design §0/§7.1) ----------------------------
+// The Gemini OpenAI-compatible endpoint supports function calling with the
+// standard OpenAI shape (tools[] + tool_choice). We use it ONLY on the
+// non-streaming tool-call rounds; the final answer streams via streamLLMRequest.
+
+/** Raw tool_call as it arrives on the (untrusted) response — guarded parsing. */
+interface RawToolCall {
+  id?: string;
+  function?: { name?: string; arguments?: string };
+}
+
+/** A normalized tool call the agent loop consumes. */
+export interface ToolCall {
+  id: string;
+  name: string;
+  /** Parsed JSON arguments ({} when absent/malformed — our tools take none). */
+  arguments: Record<string, unknown>;
+}
+
+/** One assistant turn from a non-streaming round: content + any tool calls. */
+export interface AssistantTurn {
+  content: string;
+  toolCalls: ToolCall[];
+  usage?: { promptTokens: number; completionTokens: number };
+}
+
+/** OpenAI function-tool spec (as produced by chat-tools.toolSpecs()). */
+export interface ToolSpec {
+  type: 'function';
+  function: { name: string; description: string; parameters: unknown };
+}
+
+export interface ToolRoundRequest {
+  apiKey: string;
+  model?: GeminiModel;
+  maxTokens?: number;
+  timeoutMs?: number;
+  /** Full OpenAI-style message array (system + user + prior tool turns). */
+  messages: Array<Record<string, unknown>>;
+  /** The read-only tool allowlist offered this round. */
+  tools: ToolSpec[];
 }
 
 /** Shape of the JSON error body Gemini returns on a failed request. */
@@ -98,6 +141,71 @@ export async function sendLLMRequest(request: LLMRequest): Promise<LLMResponse> 
   } finally { clearTimeout(timeoutId); }
 }
 
+/**
+ * One NON-STREAMING tool-call round (E9, design §2/§7.1). Sends the full message
+ * array with the read-only tool allowlist and `tool_choice:"auto"`, and returns
+ * the assistant turn: its content plus any tool calls it requested. The agent
+ * loop (chat-agent.ts) runs the requested tools locally (zero-API), appends the
+ * fenced results, and calls this again — bounded by MAX_TOOL_ROUNDS.
+ *
+ * Non-streaming because the OpenAI-compatible endpoint returns tool_calls on the
+ * plain completion; parsing tool-call deltas off a stream is deferred (v1.1).
+ * Guarded throughout — the response is an untrusted external boundary.
+ */
+export async function sendToolRound(request: ToolRoundRequest): Promise<AssistantTurn> {
+  const model = request.model ?? DEFAULT_MODEL;
+  const maxTokens = request.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+  const body = JSON.stringify({
+    model,
+    messages: request.messages,
+    tools: request.tools,
+    tool_choice: 'auto',
+    max_tokens: maxTokens,
+    temperature: 0.7,
+  });
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchWithRetry(`${GEMINI_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${request.apiKey}` },
+      body, signal: controller.signal,
+    }, 2);
+    const data = await response.json() as ChatCompletionResponse;
+    const message = data.choices?.[0]?.message;
+    return {
+      content: message?.content ?? '',
+      toolCalls: parseToolCalls(message?.tool_calls),
+      usage: data.usage
+        ? { promptTokens: data.usage.prompt_tokens, completionTokens: data.usage.completion_tokens }
+        : undefined,
+    };
+  } finally { clearTimeout(timeoutId); }
+}
+
+/** Normalize raw tool_calls off the untrusted response into ToolCall[]. */
+function parseToolCalls(raw: RawToolCall[] | undefined): ToolCall[] {
+  if (!Array.isArray(raw)) return [];
+  const calls: ToolCall[] = [];
+  for (const c of raw) {
+    const name = c?.function?.name;
+    if (!name) continue;
+    let args: Record<string, unknown> = {};
+    const rawArgs = c?.function?.arguments;
+    if (typeof rawArgs === 'string' && rawArgs.trim()) {
+      try {
+        const parsed = JSON.parse(rawArgs);
+        if (parsed && typeof parsed === 'object') args = parsed as Record<string, unknown>;
+      } catch { /* malformed args → empty object; our tools take no args anyway */ }
+    }
+    calls.push({ id: c.id ?? `call_${calls.length}`, name, arguments: args });
+  }
+  return calls;
+}
+
 export async function* streamLLMRequest(request: LLMRequest): AsyncGenerator<string> {
   const model = request.model ?? DEFAULT_MODEL;
   const maxTokens = request.maxTokens ?? DEFAULT_MAX_TOKENS;
@@ -111,7 +219,10 @@ export async function* streamLLMRequest(request: LLMRequest): AsyncGenerator<str
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${request.apiKey}` },
       body: JSON.stringify({
         model,
-        messages: buildMessages(request),
+        // E9: the agent loop passes the full tool-augmented message array for the
+        // streamed final answer; everyone else builds messages the usual way.
+        messages: request.messages ?? buildMessages(request),
+        ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
         max_tokens: maxTokens,
         temperature: 0.7,
         stream: true,
