@@ -177,6 +177,45 @@ const ContentCard: React.FC<{
     }
   };
 
+  // A free-form chat REPLY (user bubbles are intercepted earlier in the render
+  // loop, so a CHAT_MESSAGE reaching here is the assistant's answer). Chat
+  // answers aren't a labeled coaching "action", so they drop the action-card
+  // chrome — no "Concept Explanation" header, icon, or expand/collapse toggle;
+  // just the answer + a copy button, reading like a conversation reply. The old
+  // behavior hard-coded the EXPLAIN_CONCEPT label onto every chat answer (it
+  // reused that action type as a container), which mislabeled e.g. a "what can
+  // you do?" reply as "Concept Explanation". Routed ACTIONS keep their real
+  // labeled headers. Presentation only — the action type is unchanged.
+  const isChatReply = item.type === 'CHAT_MESSAGE';
+
+  if (isChatReply) {
+    return (
+      <div className="leetsage-enter border border-neutral-200 dark:border-neutral-700 border-l-2 border-l-[var(--sage-mid)] bg-white dark:bg-neutral-800 rounded-lg mb-2.5 shadow-sm px-3 py-2.5 min-w-0 break-words overflow-x-hidden">
+        {isGated
+          ? <ThinkingIndicator label={thinkingLabel(item.actionType, true)} stepLabel={stepLabel} />
+          : item.content
+            ? renderContent(item.content)
+            : <div className="h-4 bg-neutral-200 dark:bg-neutral-700 rounded animate-pulse" />}
+        {isStreaming && !isGated && item.content && <span className="leetsage-caret" aria-hidden="true" />}
+        {item.content && !isStreaming && (
+          <div className="flex justify-end items-center gap-2 mt-1.5">
+            <button
+              onClick={handleCopy}
+              title={copied ? 'Copied!' : 'Copy to clipboard'}
+              aria-label="Copy to clipboard"
+              className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs transition-colors cursor-pointer
+                ${copied
+                  ? 'text-green-600 dark:text-green-400'
+                  : 'text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700'}`}
+            >
+              {copied ? '✓' : '⧉'}
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className={`leetsage-enter border border-neutral-200 dark:border-neutral-700 border-l-2 ${meta.accent} bg-white dark:bg-neutral-800 rounded-lg overflow-hidden mb-2.5 shadow-sm`}>
       <button onClick={() => setExpanded(v => !v)} className="w-full flex items-center justify-between px-3 py-2.5 text-left hover:bg-neutral-50 dark:hover:bg-neutral-700/50 transition-colors" aria-expanded={expanded}>
