@@ -65,9 +65,31 @@ interface APIErrorBody {
   error?: { message?: string };
 }
 
+/**
+ * A user-facing API error carrying a `retryable` hint so the retry logic has a
+ * reliable signal (vs. brittle message string-matching). `retryable` is true for
+ * transient server-side conditions (5xx) and false for client errors the user
+ * must fix (bad key, quota).
+ */
+export class APIError extends Error {
+  readonly status: number;
+  readonly retryable: boolean;
+  constructor(message: string, status: number, retryable: boolean) {
+    super(message);
+    this.name = 'APIError';
+    this.status = status;
+    this.retryable = retryable;
+  }
+}
+
 const DEFAULT_MODEL: GeminiModel = 'gemini-3.5-flash-lite';
 const DEFAULT_MAX_TOKENS = 800;
 const DEFAULT_TIMEOUT_MS = 20000;
+// Retries for the streaming request on a TRANSIENT 5xx (e.g. a 503 "model
+// overloaded"). Kept small: with exponential backoff (1s, 2s) two retries add
+// at most ~3s before giving up with the friendly message, so a brief Google-side
+// blip is absorbed without making a real outage feel frozen.
+const STREAM_MAX_RETRIES = 2;
 
 /**
  * Builds the UNTRUSTED data payload for a free-form chat question (B4): the
@@ -183,6 +205,11 @@ export async function sendToolRound(request: ToolRoundRequest): Promise<Assistan
         ? { promptTokens: data.usage.prompt_tokens, completionTokens: data.usage.completion_tokens }
         : undefined,
     };
+  } catch (err) {
+    // Same friendly-error boundary as the streaming path: a timeout/abort or a
+    // network blip on the agent's tool round must not surface as a raw
+    // DOMException ("signal is aborted without reason") or a bare TypeError.
+    throw humanizeTransportError(err, timeoutMs);
   } finally { clearTimeout(timeoutId); }
 }
 
@@ -214,7 +241,7 @@ export async function* streamLLMRequest(request: LLMRequest): AsyncGenerator<str
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${GEMINI_BASE_URL}/chat/completions`, {
+    const init: RequestInit = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${request.apiKey}` },
       body: JSON.stringify({
@@ -234,8 +261,14 @@ export async function* streamLLMRequest(request: LLMRequest): AsyncGenerator<str
         stream_options: { include_usage: true },
       }),
       signal: controller.signal,
-    });
-    if (!response.ok) throw await buildAPIError(response);
+    };
+    // Use fetchWithRetry so a TRANSIENT 5xx (e.g. the common free-tier 503
+    // "model overloaded") is absorbed by the exponential backoff instead of
+    // failing the whole coaching request on the first blip. fetchWithRetry
+    // consumes only the error body on failure; the success Response's streaming
+    // body is still untouched and read below. Non-retryable errors (bad key,
+    // quota) throw immediately with their friendly message.
+    const response = await fetchWithRetry(`${GEMINI_BASE_URL}/chat/completions`, init, STREAM_MAX_RETRIES);
     const reader = response.body?.getReader();
     if (!reader) throw new Error('No response body');
     const decoder = new TextDecoder();
@@ -260,7 +293,34 @@ export async function* streamLLMRequest(request: LLMRequest): AsyncGenerator<str
         } catch { /* skip malformed chunk */ }
       }
     }
+  } catch (err) {
+    // Normalize low-level failures into friendly, user-facing messages. An
+    // APIError (from buildAPIError) is already friendly — rethrow as-is. An
+    // abort (our timeout firing, or the user navigating) surfaces as a raw
+    // DOMException "signal is aborted without reason", which must NOT reach the
+    // UI; map it to a plain timeout message. A bare TypeError from fetch is a
+    // network/connectivity failure.
+    throw humanizeTransportError(err, timeoutMs);
   } finally { clearTimeout(timeoutId); }
+}
+
+/**
+ * Maps a low-level fetch/abort failure to a friendly Error for the chat UI.
+ * APIError instances are already user-facing and pass through unchanged.
+ * Exported for unit testing the mapping (the abort case is the "signal is
+ * aborted without reason" leak this fixes).
+ */
+export function humanizeTransportError(err: unknown, timeoutMs: number): Error {
+  if (err instanceof APIError) return err;
+  if (err instanceof Error && err.name === 'AbortError') {
+    return new Error(`The request took longer than ${Math.round(timeoutMs / 1000)}s and timed out. Google's service may be slow right now — please try again.`);
+  }
+  // fetch() rejects with a TypeError on network/DNS/offline failures.
+  if (err instanceof TypeError) {
+    return new Error("Couldn't reach Google's Gemini service. Check your internet connection and try again.");
+  }
+  if (err instanceof Error) return err;
+  return new Error('Something went wrong. Please try again.');
 }
 
 async function fetchWithRetry(url: string, options: RequestInit, maxRetries: number): Promise<Response> {
@@ -268,22 +328,53 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries: num
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const response = await fetch(url, options);
-      if (response.status >= 400 && response.status < 500) throw await buildAPIError(response);
-      if (!response.ok) throw new Error(`Server error: ${response.status}`);
+      if (!response.ok) throw await buildAPIError(response);
       return response;
     } catch (error) {
       lastError = error as Error;
-      if (error instanceof Error && (error.name === 'AbortError' || error.message.includes('API Error'))) throw error;
+      // Stop immediately on a user-aborted request or a NON-retryable API error
+      // (bad key, quota, other 4xx) — retrying those is pointless. Transient 5xx
+      // (APIError.retryable === true) and network blips fall through to the
+      // exponential backoff below. The retryable flag replaces the old brittle
+      // message string-match.
+      if (error instanceof Error && error.name === 'AbortError') throw error;
+      if (error instanceof APIError && !error.retryable) throw error;
       if (attempt < maxRetries) await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
     }
   }
   throw lastError ?? new Error('Request failed');
 }
 
-async function buildAPIError(response: Response): Promise<Error> {
-  let message = `API Error ${response.status}`;
-  try { const body = await response.json() as APIErrorBody; message = body?.error?.message ?? message; } catch { /* ignore */ }
-  if (response.status === 401 || response.status === 403) return new Error(`Invalid or unauthorized Gemini API key. ${message}`);
-  if (response.status === 429) return new Error('Gemini rate limit / free-tier quota reached. Please wait and try again.');
-  return new Error(message);
+/**
+ * Turns a non-OK Gemini response into a USER-FACING, friendly error. The chat
+ * UI shows `error.message` directly, so these strings are written for a learner,
+ * not a developer — apologetic and actionable, never a raw status code.
+ *
+ * Status reference (Gemini / OpenAI-compatible endpoint):
+ *  - 401/403: bad or unauthorized key (user action: fix the key).
+ *  - 429:     rate limit / free-tier quota (user action: wait).
+ *  - 500/502/503/504: Google's service is overloaded or briefly down — a
+ *    TRANSIENT, server-side condition the user can't fix except by retrying.
+ *    503 ("Service Unavailable") is the common free-tier "model overloaded" one.
+ */
+async function buildAPIError(response: Response): Promise<APIError> {
+  // Keep the raw provider detail for logs, but never surface it verbatim.
+  let detail = `HTTP ${response.status}`;
+  try { const body = await response.json() as APIErrorBody; detail = body?.error?.message ?? detail; } catch { /* ignore */ }
+
+  const status = response.status;
+  if (status === 401 || status === 403) {
+    return new APIError('Your Gemini API key looks invalid or unauthorized. Double-check it in Settings ⚙️ and try again.', status, false);
+  }
+  if (status === 429) {
+    return new APIError("You've hit the Gemini free-tier limit for now. Give it a minute, then try again.", status, false);
+  }
+  if (status >= 500) {
+    // 500/502/503/504 — overloaded / temporarily down on Google's side.
+    // Transient and server-side, so this is RETRYABLE.
+    return new APIError("Sorry — Google's Gemini service is busy right now and couldn't respond. This is temporary; please try again in a moment.", status, true);
+  }
+  // Any other 4xx we didn't special-case: stay friendly, drop the status code.
+  // Not retryable (a client-side problem the retry won't fix).
+  return new APIError(`Sorry, something went wrong talking to Gemini (${detail}). Please try again.`, status, false);
 }
