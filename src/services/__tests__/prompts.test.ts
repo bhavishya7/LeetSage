@@ -237,3 +237,124 @@ describe('formatProblemContext — still produces the labeled data body', () => 
     expect(ctx).toContain('Constraints:');
   });
 });
+
+/**
+ * R1 / B14 — the CHECK_APPROACH prompt must not embed a concrete, answerable
+ * Big-O as example output (see .kiro/specs/leetsage-e6-bug-hardening §2 R1).
+ *
+ * Root cause of the real bug: the prompt hardcoded a Two-Sum Efficiency example
+ * ("**Current:** O(N²)… / **Optimal:** O(N)…") and the structured example
+ * repeated O(N^2)/O(N). gemini-3.5-flash-lite parroted those values instead of
+ * COMPUTING from the user's code — reporting O(N) for a problem whose real
+ * answer is O(N*M). The fix replaces concrete values with non-answerable
+ * placeholders (O(<time>)/O(<space>)) and adds an explicit compute instruction.
+ * These guards stop a future edit from re-introducing the bleed.
+ */
+describe('getSystemPrompt(CHECK_APPROACH) — no answerable example Big-O (R1/B14)', () => {
+  const prompt = getSystemPrompt('CHECK_APPROACH');
+
+  // Isolate the Efficiency example region (where the leak lived) from the
+  // shared OUTPUT_RULES, which legitimately shows "O(N^2)" as a NOTATION
+  // formatting example (not an answer for any problem).
+  const effStart = prompt.indexOf('## ⚡ Efficiency');
+  const effEnd = prompt.indexOf('## 🎨 Code Style');
+  const efficiencySection = prompt.slice(effStart, effEnd);
+
+  it('uses non-answerable placeholders, not concrete values, on the Current/Optimal example lines', () => {
+    expect(effStart).toBeGreaterThanOrEqual(0);
+    expect(effEnd).toBeGreaterThan(effStart);
+    // Placeholder shape present on the value lines…
+    expect(efficiencySection).toContain('O(<time>)');
+    expect(efficiencySection).toContain('O(<space>)');
+    // …and NO concrete answerable Big-O seeded as the Current/Optimal VALUE.
+    // Scope the check to just those two lines — the explanatory prose below
+    // them may legitimately mention "O(1) average" as teaching guidance (that
+    // is not an answer the model can parrot as the problem's complexity).
+    const valueLines = efficiencySection
+      .split('\n')
+      .filter((l) => /^\*\*(Current|Optimal):\*\*/.test(l))
+      .join('\n');
+    expect(valueLines).not.toMatch(/O\(N²\)/);
+    expect(valueLines).not.toMatch(/O\(N\^2\)/);
+    expect(valueLines).not.toMatch(/O\(1\)/);
+    expect(valueLines).not.toMatch(/O\(N\)/);
+    // Both value lines carry the placeholder instead.
+    expect(valueLines).toContain('**Current:** O(<time>) time, O(<space>) space');
+    expect(valueLines).toContain('**Optimal:** O(<time>) time, O(<space>) space');
+  });
+
+  it('explicitly instructs the model to COMPUTE from the user code, not copy', () => {
+    expect(prompt).toContain("COMPUTE, DON'T COPY");
+    expect(prompt.toLowerCase()).toContain('computed from the user');
+    expect(prompt.toLowerCase()).toContain('never copy them');
+  });
+
+  it('requires variables to be defined (no bare, undefined symbol) — R4', () => {
+    expect(prompt).toContain('STATE YOUR VARIABLES');
+    // Multi-variable form and the single-defined-symbol pattern are both named.
+    expect(prompt).toContain('O(N*M)');
+    expect(prompt.toLowerCase()).toContain('define n and m');
+  });
+
+  it('requires a dedicated Variables line so every symbol is defined (R4)', () => {
+    // A bare "O(N)" with no definition is what confused the user (LeetCode's
+    // N = #strings; some sources' N = total chars). The prompt mandates a
+    // dedicated **Variables:** line defining every symbol used in the
+    // Current/Optimal complexity, so an undefined bare symbol never reaches the
+    // user. (Prompt-level; a cheap model's compliance is for the eval.)
+    expect(efficiencySection).toContain('**Variables:**');
+    expect(efficiencySection.toLowerCase()).toContain('define every symbol');
+  });
+
+  it('requires the Current headline to match its own per-operation breakdown (B16)', () => {
+    // The real defect: a response whose **Current:** line (O(N*M + C)) contradicted
+    // its own bullet (O(C*N*M)) in the same message — the headline was generated
+    // independently of the breakdown. The prompt now makes the headline the
+    // AGGREGATE of the bullets and tells the model to reconcile them.
+    expect(prompt).toContain('HEADLINE MUST MATCH YOUR BREAKDOWN');
+    expect(prompt.toLowerCase()).toContain('must equal what your own bullets add up to');
+    // It explicitly calls out the "loops multiply, sequential steps add" rule
+    // that turns per-op costs into the headline.
+    expect(prompt.toLowerCase()).toContain('loops multiply');
+  });
+
+  it('forbids suggesting a same-complexity alternative the user already uses (B15)', () => {
+    // The real bug: the coach told a user whose code already uses a length-prefix
+    // + delimiter scheme to "use a length-prefix + fixed delimiter". The prompt
+    // must forbid recommending a technique that only matches the SAME asymptotic
+    // complexity they already have.
+    expect(prompt.toLowerCase()).toContain('same asymptotic complexity they already have');
+    expect(prompt.toLowerCase()).toContain('only suggest a change if it genuinely improves');
+  });
+
+  it('instructs a BULLETED "Where the cost comes from" breakdown (format regression guard)', () => {
+    // A rewrite once collapsed the original bulleted cost breakdown into a
+    // single prose paragraph, which the model mirrored — the Efficiency section
+    // lost its clean bullet list. Pin that the prompt asks for a bulleted list
+    // and seeds "- " bullet examples so the model keeps emitting bullets.
+    const where = efficiencySection.slice(efficiencySection.indexOf('Where the cost comes from'));
+    // The per-operation breakdown is requested "line-by-line"…
+    expect(where.toLowerCase()).toContain('line-by-line');
+    // …and seeded with "- " bullet examples (real newlines in the built prompt)…
+    expect((where.match(/\n- /g) ?? []).length).toBeGreaterThanOrEqual(3);
+    // …that model the RICH style: inline O(...) badges AND backtick code refs,
+    // which is what makes each bullet attribute a cost to a specific operation
+    // (the formatting that was lost when the examples were watered down).
+    expect(where).toMatch(/→ O\(/);          // a bullet attributes an inline Big-O
+    expect(where).toContain('`seen = {}`');  // a bullet references code in backticks
+  });
+
+  it('keeps the three-section structure (Approach / Efficiency / Code Style)', () => {
+    expect(prompt).toContain('## 🧭 Approach');
+    expect(prompt).toContain('## ⚡ Efficiency');
+    expect(prompt).toContain('## 🎨 Code Style');
+  });
+
+  it('structured-data example carries placeholders, not a concrete Big-O', () => {
+    // The leetsage-data example block must not seed O(N^2)/O(N) either.
+    const dataStart = prompt.indexOf('```leetsage-data');
+    const dataBlock = prompt.slice(dataStart, dataStart + 600);
+    expect(dataBlock).toContain('O(<time>)');
+    expect(dataBlock).not.toMatch(/O\(N\^2\)/);
+  });
+});

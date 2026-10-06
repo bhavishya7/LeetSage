@@ -504,6 +504,12 @@ diagnosing a tool's version-gated feature and routing around it via connection m
 - **Auto-generated/continuously-saved progress report** (the user named this as a
   future for export/import).
 - **Per-attempt merge** in import (v1 is whole-record newer-wins).
+- **"What can you do?" → capabilities router intent that pops the welcome card**
+  (deferred from chat-polish design §10). A zero-token local-router intent: when the
+  user asks what LeetSage can do, route it to re-open the first-run welcome /
+  empty-state card (which lists the capabilities + example asks) instead of spending
+  an API call. Small future feature — a new `IntentDef` in the intent router + a
+  trigger to surface the onboarding card. Independent of the E6 pass.
 
 ---
 

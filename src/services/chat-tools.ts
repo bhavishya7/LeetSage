@@ -62,9 +62,16 @@ export const CHAT_TOOLS: ToolDef[] = [
     run: async (ctx) => {
       const tabId = await ctx.getTabId();
       if (tabId == null) return "(couldn't read the editor — no active LeetCode tab was found)";
+      // R2/B15: the read is now a discriminated ok | empty | failed. Report each
+      // honestly so the model never treats a failed read as empty code (and
+      // never receives a partial scrape — a failed Monaco read is 'failed', not
+      // a truncated fragment).
       const extracted = await extractCurrentCode(tabId);
-      if (!extracted || !extracted.code.trim()) {
-        return "(the editor appears empty, or the code couldn't be read — the user may not have written code yet)";
+      if (extracted.status === 'empty') {
+        return "(the editor is empty — the user hasn't written any code yet)";
+      }
+      if (extracted.status === 'failed') {
+        return "(couldn't read the editor code reliably — do not assume what they wrote; suggest they ensure the Code tab is open)";
       }
       return `Current editor code (language: ${extracted.language}):\n\n\`\`\`${extracted.language}\n${extracted.code}\n\`\`\``;
     },
