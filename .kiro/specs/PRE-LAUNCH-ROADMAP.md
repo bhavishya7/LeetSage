@@ -462,6 +462,36 @@ diagnosing a tool's version-gated feature and routing around it via connection m
   attempt count.
 - **B8** — optimality-equivalence crediting (recognize `O(log M + log N)` ≡
   `O(log(M·N))`) — fuzzy model-reasoning, deferred.
+- **B10** — **optimal complexity drifts across messages in the same session**
+  (found 2026-10-05, verified by a full lifecycle trace). The optimal time/space
+  for a problem is a FIXED property, but it's re-guessed independently on every
+  action and every chat turn — e.g. "Analyze my code" said Optimal O(N)/O(N) and a
+  later message said O(N+M)/O(N+M) for the same problem. **Root cause:** there is NO
+  single source of truth for optimal complexity. Each of CHECK_APPROACH,
+  UNDERSTAND_SOLUTION, GENERATE_REPORT, TIME_COMPLEXITY_HINT, and free-form chat is an
+  independent model call that recomputes it; parsed optimals are stored only as
+  per-message `metadata.structured` artifacts; and the E9 two-layer memory does NOT
+  pin it — the conversation window excludes action cards, and `buildSessionDigest`
+  surfaces optimal only as *advisory prose* that can even carry **two conflicting
+  lines** (latest analysis' optimal vs. latest understanding's optimal, emitted
+  independently in `session-digest.ts`). The only reconciliation
+  (`extractSessionFacts` → report > latest-understand > latest-analysis) runs ONLY at
+  report-save time and never feeds back into a prompt.
+  **Fix direction (for the B10 build):** establish a single source of truth per
+  problem — on the first authoritative optimal (CHECK_APPROACH / UNDERSTAND_SOLUTION),
+  capture + persist it keyed on the normalized `/problems/{slug}/` URL (same key as
+  session persistence), then feed it back into EVERY subsequent prompt (actions + chat)
+  as a HARD constraint ("the established optimal for this problem is X; use exactly
+  this, do not recompute"); and fix the digest to emit ONE reconciled optimal line, not
+  two. **Open decision:** when a later analysis disagrees with the pinned value, trust
+  the first pin, or let UNDERSTAND_SOLUTION (the action whose job is explaining the
+  optimal) override an earlier CHECK_APPROACH guess and re-pin? (GM leans the latter.)
+  **Nuance:** optimal is model-produced with no verifier, so "strictly enforced"
+  realistically means *pin-and-reuse*, not *provably correct*. Related to but distinct
+  from **B8** (B8 = crediting equivalent notations like O(N) ≡ O(N+M); B10 = not
+  drifting in the first place). **Touches the same files E9 changed** (prompts,
+  storage, chat memory) → do it as part of the **E6 bug-hardening pass**, batched
+  with **E10b** (MCP browser testing) so the fix can be smoke-tested on a real page.
 - **Eval follow-up** — real captured Gemini responses + a validated LLM-as-judge
   (current eval is on an authored dataset; `src/evals/llm-judge.ts` scaffold exists).
 - **"Open on LeetCode" clickable link** in records — the `url` is already validated
