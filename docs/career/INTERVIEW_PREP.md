@@ -1255,6 +1255,106 @@ egress paths (a future link) when deciding what to validate — paying a cheap c
 now to avoid a scramble later. Pair with **Q12** (the import threat model) and
 **Q4** (prompt injection).
 
+### "Tell me about a time you were stuck in a loop with the agent — how did you break out?" ⭐
+
+**Answer.** During a chat-polish session the user wanted a persistent, terminal-style
+blinking cursor *inside* the chat input when it was unfocused. I tried it, and it
+fought me on two fronts. First it **wouldn't blink** — and the root cause wasn't a
+bug, it was my own code behaving correctly: the user had `prefers-reduced-motion`
+effectively on (Windows energy-saver), and my reduced-motion CSS *deliberately* makes
+decorative motion static, so the caret was static *by design*. Second, the
+placeholder **jumped on focus**, because my decorative caret (absolutely positioned)
+and the real browser text caret sat at different x-positions depending on padding — I
+chased it with padding swaps and made it worse. After the second failed attempt I
+**stopped patching and named the root cause out loud**: this element is fighting *two
+platform defaults at once* — the reduced-motion setting kills its whole reason to
+exist (the blink), and the real OS text caret is white and can't be recolored to the
+theme, so a second fake caret will always risk a visual mismatch. I surfaced that
+tradeoff to the user and recommended dropping the decorative caret for the
+conventional rotating-placeholder affordance. The user decided to **keep** it (static
+is fine) *and* bring back the rotating placeholder; the actual fix was then trivial —
+one constant padding value so the decorative and real carets share an x, no jump.
+
+**Signal.** I apply the "if an approach fails twice, diagnose the root cause rather
+than patch a third time" discipline literally. The valuable move wasn't a clever CSS
+trick — it was recognizing a **failure loop**, attributing it to *fighting platform
+defaults* (reduced-motion + the un-styleable OS caret) rather than to a fixable bug,
+and handing the user an honest tradeoff instead of burning more attempts. It's also a
+small lesson that a decorative element that doesn't earn its complexity is worth
+dropping — and that it's the user's call to make, not mine to force either way.
+
+### "A feature started throwing errors right after your change. How did you tell a real regression from an unrelated failure — and own the part that *was* yours?" ⭐
+
+**Answer.** Mid-review of a visual-polish change, every request started failing with
+a raw `API Error 503`. The lazy read is "I just changed things, I broke it." I didn't
+assume that — I checked the DevTools console and saw `generativelanguage.g.../chat/
+completions` itself returning 503, which is Google's Gemini **free tier being
+overloaded**, an upstream condition. My change was presentation-only and never touched
+the request path, so I told the user plainly: **this specific error is not a
+regression from my work.** But I didn't stop at "not my fault" — investigating the
+503 exposed two *real* latent weaknesses worth fixing: users were seeing raw technical
+error codes, and the streaming path did a bare `fetch` with **no retry**, so a
+transient 5xx failed hard. I fixed both (a typed `APIError` with a `retryable` flag +
+friendly per-status copy, transient-5xx retry with backoff). Then the user hit a
+*second* error — `signal is aborted without reason` — and this one **I had
+introduced** with the retry change: a raw abort/timeout `DOMException` leaking to the
+UI. I owned it and added a `humanizeTransportError` boundary. And I caught that my
+*first* fix was **incomplete** — I'd wrapped only the streaming generator, but the
+chat path's non-streaming `sendToolRound` had no catch, so the abort still leaked when
+the user asked a chat question. I added the same boundary there. The honest caveat I
+kept in the docs: I was never able to confirm a *successful* end-to-end call that
+session because the free tier stayed overloaded, so the error *handling* is
+unit-tested but the happy path wasn't seen live.
+
+**Signal.** I separate "my change regressed this" from "an upstream dependency is
+failing" with evidence (the console), instead of either reflexively blaming myself or
+reflexively blaming the service — and I still mine an upstream failure for the real
+local weaknesses it reveals. And when a bug genuinely *is* mine, I say so, and I check
+whether my fix is *complete* (both the streaming and non-streaming paths) rather than
+declaring victory after the first obvious spot. The honesty extends to the docs: I
+don't let "error handling verified" quietly become "feature verified working."
+
+### "Give me an example of deciding something should NOT be an LLM call." ⭐
+
+**Answer.** Testing the chat, the user asked it "what all can you do?" — and watched
+it route into the **agentic loop**, spending an actual API request (and risking the
+free-tier overload) to describe the app's own features. The insight is a cost one: a
+capabilities / how-to-use answer is **static** — it doesn't depend on the user's code
+or problem — so paying a model call (and a loop) to generate it is pure waste on a
+200-request/day budget. The right answer is **client-side, zero tokens**: the app
+already *has* a "what is LeetSage / how to use it" surface — the onboarding
+`WelcomeCard` I'd just built — so a capabilities question should pop that card, not
+call the model. I deferred actually building it, honestly, because the fix lives in
+territory that spec had promised not to touch (it needs an intent-router rule or a
+chat-prompt change), and I documented the candidate design (a local "help" intent,
+guarded by a golden-set case) for a small follow-up spec rather than scope-creeping.
+
+**Signal.** Cost-awareness as a design instinct — "not everything is an LLM call,"
+especially on a free-tier budget — and recognizing when the correct response is a
+*static, local* answer wired to an existing surface. Plus the discipline to *defer*
+the fix cleanly (documented, scoped to a follow-up) when it would otherwise violate
+the current spec's boundaries, rather than reaching across them mid-session.
+
+### "Have you ever skipped the full spec process on purpose? How do you decide?"
+
+**Answer.** Yes, deliberately and in writing. My project's convention is to scale
+spec rigor to feature complexity: a substantial feature gets the full requirements →
+design → tasks trilogy with sign-off between phases, but a small, well-understood,
+UI-focused change can be a single design-only spec — *as long as the deviation is
+documented, not silent.* For the chat-polish work (visual gradient, motion,
+onboarding, two small routing bugs) I wrote **one design-only spec with a note at the
+top stating why**: the scope was an enumerated checklist, the requirements were
+self-evident from it, it was almost entirely presentational, and it folded three
+roadmap items that all lived on the same chat surface and overlapped heavily. A full
+trilogy would have been ceremony out of proportion to the work. The thing I guard
+against isn't skipping — it's *silent* skipping (undocumented drift).
+
+**Signal.** I treat process as a tool scaled to the problem, not a ritual performed
+for its own sake — and I know the honest interview answer is "I scaled rigor to
+complexity and documented the deviation," which is stronger than pretending every
+change got a full trilogy. Pairs with the E9 answer in "working with AI agents" where
+the *opposite* call was right (a big agentic feature that earned the full trilogy).
+
 ---
 
 ## Behavioral / judgment questions

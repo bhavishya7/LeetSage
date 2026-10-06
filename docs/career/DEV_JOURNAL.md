@@ -1729,6 +1729,224 @@ wire the agentic chat loop into `handleChatSubmit` + expand golden set). New fil
 
 ---
 
+## 2026-10-05 — Chat polish (E2 + E3 + E4): the Sage identity, motion, onboarding, two routing bugs, and a bonus error-handling hunt
+
+> A **visual/UX polish** session consolidating three roadmap items on the one chat
+> surface. Design-only spec
+> ([`.kiro/specs/leetsage-chat-polish/design.md`](../../.kiro/specs/leetsage-chat-polish/design.md))
+> — rigor deliberately scaled DOWN (no requirements/tasks trilogy), with the reason
+> stated at the top of the doc. On branch `feature/chat-polish` (4 commits off
+> `main`, **local — NOT pushed, no PR**). Ran under the hard "build → explain →
+> **STOP for review** → commit only after approval" gate, with heavy iterative
+> visual review by the user. Test suite **329 → 344** (24 → 26 files), build clean,
+> eslint 0 errors. **Hard constraint throughout: PRESENTATION ONLY** — never touched
+> `filterResponse`, the B1 pre-display gate, `getChatSystemPrompt` /
+> `getChatAgentSystemPrompt`, the intent router, or the agentic loop.
+
+**What.** Four strands landed on the chat panel:
+- **E3 — two routing bugs** (`B11`, `B12`), each with a guarding test.
+- **E2 — visual polish:** a swappable **"Sage" gradient** identity, entrance/press
+  motion, animated expand/collapse, a fixed streaming caret, more breathing room —
+  all `prefers-reduced-motion`-gated.
+- **E4 — onboarding:** a `WelcomeCard` that is the single source for both the chat
+  empty-state and a re-openable "?" overlay.
+- **A folded-in bonus** surfaced by the visual-review gate: friendly API error
+  copy + transient retry + abort mapping (its own commit).
+
+**Why.** The panel worked but read as flat gray, cramped, and motion-less; the
+discovery affordances had two concrete routing bugs; and there was no re-openable
+"what is this / how do I get a key" surface. This is *polish* on the existing
+feature set — explicitly **not** a LeetCode clone and **not** a capability expansion
+(no Mermaid / idea-maps / generative visual output, some of which would violate the
+no-solutions guardrail).
+
+**Why design-only (and why that's an interview point).** Per
+`.kiro/steering/workflow.md` → Spec discipline, this is the "small, well-understood,
+UI-focused" bucket: one enumerated checklist, self-evident requirements, almost
+entirely presentational, and three roadmap items (E2/E3/E4) that overlap heavily on
+the same surface (the discovery chips appear in all three). So it got a **single
+design-only spec** with the reason written at the top — a deliberate, *documented*
+deviation from the full trilogy rather than silent drift. Being able to say "I
+scaled process rigor to feature complexity and documented when I deviated" is the
+point.
+
+**E3 — the two routing bugs (each guarded, per the bug-registry principle).**
+- **B11 (duplicate "Try").** Two discovery surfaces both said "Try" on an empty
+  chat — the chip row's `Try asking:` label AND the rotating placeholder's `Try: …`
+  prefix (5 of 6 `PLACEHOLDER_EXAMPLES`). Fix: strip the prefix from the
+  placeholders so the single "Try" lives only on the chip row. Guard:
+  `discovery-prompts.test.ts` asserts no placeholder starts with `try:` / `try `.
+- **B12 (chips populated but didn't submit).** The Try chips are complete questions,
+  not templates, but `onClick` only did `setChatInput(chip)` — the user still had to
+  press Send. Fix: tapping a chip now **submits immediately** via `submitChat(chip)`
+  (which also exercises the real intent-routing path — a bonus routing demo). **The
+  key nuance:** introduced a pure `resolveSubmitText(explicit, inputValue)` helper
+  that **prefers an explicit arg over the input-box state**, to dodge a **React
+  setState race** — calling `setChatInput(chip)` then reading `chatInput` in the same
+  tick sees the **stale** value. `submitChat` now takes an optional `text?` arg;
+  Send/Enter pass nothing and fall back to state. Guard: `discovery-prompts.test.ts`
+  pins explicit-over-state precedence, trimming, and every chip resolving to a
+  non-empty submit. A design note preserves the future case: a *template*-style chip
+  needing input would populate-only (documented so the auto-submit isn't blindly
+  applied later).
+- **Loose end flagged:** the **B11/B12 registry entries still need to be added to the
+  guardrail-hardening spec's bug-registry table** — noted as "to follow" in the
+  commit message, not yet done.
+
+**E2 — the Sage gradient (the big iterative design story).** Introduced ONE swappable
+CSS token set (`--sage-*` custom properties in `index.css`) so the whole panel
+re-themes from one place; default sage-green → teal, with a one-line commented
+sage → cyan alternative. Applied **sparingly** (header strip, Send button, user
+bubble, focus ring, suggestion-pill tint); kept the per-section heading palette +
+amber complexity badge as warm counterpoints; did NOT recolor the semantic
+difficulty / error colors. It took **three rounds of user visual review on
+readability:**
+1. First pass — white text on the light gradient; user said it was hard to read.
+2. I switched to **dark** text on the light gradient (honest tradeoff: white fails
+   contrast on light sage-green). User disliked the dark-on-light look.
+3. Final — the user chose **white text on a *darkened* gradient**. So I **split the
+   tokens into two roles:** `--sage-mid` / `--sage-ring` / `--sage-tint` stay
+   **light** (borders, focus ring, pill tints) while new `--sage-fill-start` /
+   `--sage-fill-end` are **deep** stops used only where white text sits (Send, user
+   bubble). Also bumped the fill text to font-weight 500 for white-on-color crispness
+   at small size. **This two-role split is the clean design point:** separate the
+   concern that needs *contrast* (the fill under white text) from the concern that
+   needs *subtlety* (the accent tints), rather than forcing one token to do both.
+
+**E2 — the font/weight lever (the non-obvious fix).** Confirmed the stack renders as
+**Segoe UI on Windows** (non-variable, so fractional weights snap to 400/500). Rather
+than over-bolding body prose to 500, I got the "slightly thicker / more readable"
+feel by **deepening body text color** (neutral-700 → 800 light, neutral-200 → 100
+dark) — higher contrast reads as more substantial *without* actually bolding. A nice
+"the right lever isn't always the obvious one" note.
+
+**E2 — motion (all `prefers-reduced-motion`-gated).** Card/bubble entrance
+(fade + rise); button/chip press feedback (`:active` scale-down via
+`.leetsage-pressable`); animated expand/collapse via a **grid-rows 1fr ↔ 0fr
+transition** (chosen over max-height — cheap, no JS height measurement, no jank with
+variable-height content); a streaming blinking caret (fixed the keyframe from
+`steps(1,end)`, which read as static, to a clean hard on/off flip); and breathing
+room (padding/gaps/line-height).
+
+**What broke / the hard part — the decorative input caret (a "know when to stop
+fighting the platform" story).** The user asked for a persistent "you can type here"
+blinking cursor *inside* the chat input (terminal-prompt style) when unfocused. It
+took several frustrating rounds:
+- It **wouldn't blink** — root cause: the user had `prefers-reduced-motion`
+  effectively active (Windows energy-saver on), and my reduced-motion CSS
+  *deliberately* made the decorative caret static. It was behaving exactly as coded;
+  the behavior just defeated the goal.
+- The placeholder **"jumped" on focus** — the decorative caret (absolute at
+  `left:0.875rem`) and the real browser text caret sat at **different x-positions**
+  depending on padding; I chased it with padding swaps (`pl-6` ↔ `pl-3.5`) and made
+  it worse.
+- I **explicitly stepped back** and told the user I'd tried the decorative-caret
+  approach twice and it was fighting **both the platform** (reduced-motion kills the
+  blink) **and the real OS text caret** (white, can't be recolored to sage). I
+  recommended dropping it for the conventional rotating-placeholder affordance.
+**How solved.** The user made the call: **keep** the decorative caret (static is
+fine) AND bring back the rotating placeholder suggestions. Final fix: **constant
+`px-3.5` padding** so the decorative caret and the real caret occupy the **same x**
+(no jump); placeholder restored. The interview-worthy lesson: recognizing a failure
+loop, naming the root cause (fighting platform defaults + the OS caret), **surfacing
+the tradeoff honestly and letting the user decide** rather than patching a third
+time — a concrete instance of the "if an approach fails twice, diagnose the root
+cause and reconsider" discipline, and of a decorative element not earning its
+complexity but being kept because the user valued it.
+
+**E4 — onboarding.** A `WelcomeCard` component used as the **single source** for both
+(a) the chat empty-state and (b) a re-openable overlay via a new header "?" button —
+so the two can't drift. The user wanted it re-openable (not just first-run) and to
+include how to get the free Gemini key, so it links to
+`https://aistudio.google.com/app/apikey` (verified current via web search; wording
+matches the existing `SettingsModal` copy so the two don't contradict). The overlay
+dismisses via a "Got it" button or a backdrop tap; the empty-state version omits the
+button.
+
+**The bonus bug hunt — friendly API error handling (commit `aff3b65`), surfaced BY
+the visual-review gate.** While exercising the built extension, the user hit
+cascading failures:
+- First: a raw **`API Error 503`** on Generate Report / Analyze. **Honest diagnosis:
+  this is NOT a regression from the polish work** — a 503 is Google's Gemini free
+  tier being **overloaded** (confirmed in the DevTools console:
+  `generativelanguage.g.../chat/completions` returning 503). The request path
+  (`llm-service.ts`, prompts) was untouched by this session.
+- But investigating surfaced real latent weaknesses, which I fixed: (1) raw technical
+  messages were shown to users; (2) the **streaming path did a bare `fetch` with NO
+  retry**, so a transient 503 failed hard. Fix: a typed **`APIError`** class with a
+  `retryable` flag (replacing brittle message string-matching in `fetchWithRetry`);
+  `buildAPIError` now returns friendly, non-technical copy per status (401/403 key,
+  429 quota, 5xx "service busy", other 4xx generic) with **no raw codes**; transient
+  5xx now retry with backoff on the streaming path too.
+- Then the user hit **`signal is aborted without reason`** — a **second bug I had
+  introduced** with the retry change: a raw abort/timeout `DOMException` leaking to
+  the UI. Added `humanizeTransportError` mapping abort → friendly timeout message and
+  network `TypeError` → connectivity message. **A second nuance:** my first fix was
+  **incomplete** — it only wrapped the streaming generator, but the chat path's
+  non-streaming `sendToolRound` had no catch, so the abort leaked *there* when the
+  user asked a chat question. I **owned it** and added the same boundary to
+  `sendToolRound`. An honest "I introduced this, here's the complete fix" moment.
+- Guards: new `llm-error-messages.test.ts` (incl. the exact "signal is aborted"
+  string MUST NOT leak), 503 cases + a **503 → 200 retry-recovery** case in
+  `llm-tool-round.test.ts` (fake timers skip the real backoff wait); updated the
+  existing 429 test to assert the new friendly copy (behavior: friendly limit
+  message, no raw code).
+
+**The honesty caveat the docs must keep.** I was **never able to confirm a successful
+end-to-end API call this session** — Google's free tier stayed overloaded
+(persistent 503s / timeouts). The error **handling** is verified via unit tests; the
+**happy-path coaching output was NOT visually confirmed live.** This is an upstream
+condition, not our code — but the docs must not overstate "verified working."
+
+**Deferred (design doc §10, NOT built) — the zero-token "capabilities" question.**
+The user observed that asking the chat *"what all can you do?"* routes into the
+**agentic loop** — spending an API request (and risking the overload/timeout) to
+describe the app's own features. The insight: a capabilities / how-to answer is
+**static** and should be answered **client-side, no API call, no loop** — "this
+should be fairly built in." Deferred because the fix lives in territory this spec
+must not touch (chat prompt OR intent router). Documented candidate: a local
+"capabilities/help" router intent that pops the `WelcomeCard` (which already *is* the
+"what is LeetSage / how to use it" surface) instead of calling the model — zero
+tokens, guarded by a golden-set case. Belongs to a small follow-up spec. A good
+"recognize when the right answer is NOT an LLM call" product/cost-awareness point.
+
+**Index drift fixed (part of commit `a353a70`).** The specs README listed
+`leetsage-chat-enhancement` as "pending review, NOT merged" but it had actually
+**merged to main via PR #19** (`0341bcd`). Corrected the README + PRE-LAUNCH-ROADMAP.
+
+**Interview angles.** Several distinct, strong stories: (1) **the visual-review gate
+is load-bearing** — a green 329/344-test suite caught none of the gradient
+readability (3 rounds), the caret jump, the static caret, the error-banner alignment,
+the whole error-handling bug class, or the capabilities insight; the human eyeball
+did. (2) **Failure-loop discipline** — the decorative caret: stop after two failures,
+name the root cause, surface the tradeoff, let the user decide. (3) **Honesty under
+pressure** — attributing the 503 to upstream overload (with DevTools evidence) while
+STILL finding the real latent weaknesses it exposed, and owning the abort-leak I
+introduced + its incomplete first fix. (4) **Cost-awareness** — "not everything is an
+LLM call" (the capabilities deferral). (5) **Design-token architecture** — the
+two-role Sage split (contrast-bearing fill vs. subtle accent). (6) **Scaling process
+rigor** — a documented design-only deviation instead of a performative trilogy.
+
+**Verification.** `npm.cmd run test` **344 passed (26 files)**, build clean, eslint
+**0 errors** (1 **pre-existing** `react-hooks/exhaustive-deps` warning on `App.tsx`
+~line 205 — intentionally left, NOT introduced this session). New test files:
+`discovery-prompts.test.ts`, `llm-error-messages.test.ts`; expanded
+`llm-tool-round.test.ts`. The PowerShell wrapper garbled chained/piped commands and
+buffered output, so build/test output was captured to a temp file and read, then the
+temp file deleted — consistent with the documented build gotcha in `tech.md`.
+
+**Commits (branch `feature/chat-polish`, 4 off `main`; local — NOT pushed, no PR).**
+`a353a70` (docs(specs): add chat-polish design + fix index drift),
+`5ebe4f6` (fix(chat): B11 duplicate "Try" + B12 chips submit on tap —
+`discovery-prompts.ts` + `discovery-prompts.test.ts`),
+`aff3b65` (fix(llm): friendly API error copy + transient retry + abort mapping —
+`llm-service.ts`, `llm-error-messages.test.ts`, `llm-tool-round.test.ts`),
+`71fed28` (feat(ui): Sage gradient, motion polish, onboarding + error banner —
+`index.css`, `App.tsx`, `ContentDisplay.tsx`, `QuickActions.tsx`,
+`WelcomeCard.tsx`).
+
+---
+
 ## Next up (see [LEARNING_ROADMAP.md](./LEARNING_ROADMAP.md))
 
 1. ~~**Structured output** — the backbone~~ — **DONE (2026-09-03)**; the report is
@@ -1796,14 +2014,33 @@ wire the agentic chat loop into `handleChatSubmit` + expand golden set). New fil
    trace, and an obscured draining-droplet usage indicator (exact count moved to
    Settings). Prompt-level Option-D fix so chat describing the user's *own* code
    doesn't trip the filter. Tests **277 → 329** (24 files), build clean.
-   **Now next (the E-series chat polish/bugfix epics): E3/E2/E4** (chat polish +
-   the rich agent-trace UI + bugfixes), then **E10** (eval framework for the
-   router/agent), **E6** (hardening), **E5** (docs-removal decision), **E7** (scope
-   extension permissions — intentionally LAST), **E8** (deploy). Also still open from
-   earlier: the deferred eval follow-up (real captured-Gemini cases + a validated
-   LLM-as-judge) and progress-tracking Phase D (verified submissions). Still future:
-   a clickable "open on LeetCode from My Progress" link (its `url` is already
-   validated for safety, but the link itself is not built).
+   (E9 later merged to main via **PR #19**, `0341bcd`.)
+9. ~~**Chat polish (E2 + E3 + E4)**~~ — **BUILT, PENDING REVIEW (2026-10-05)** on
+   branch `feature/chat-polish` (4 commits `a353a70`…`71fed28` off `main`; **local —
+   NOT pushed, no PR**): a visual/UX polish pass on the chat surface — the swappable
+   **"Sage" gradient** identity (two-role token split: deep fill stops under white
+   text vs. light accent tints), entrance/press motion + grid-rows expand/collapse +
+   a fixed streaming caret (all `prefers-reduced-motion`-gated), more breathing room,
+   a re-openable `WelcomeCard` (empty-state + "?" overlay, single source), and two
+   guarded routing bugs — **B11** (duplicate "Try") and **B12** (chips now submit on
+   tap via a `resolveSubmitText` helper that dodges a React setState race). **Design-
+   only spec** (documented deviation — small, UI-focused). A folded-in bonus
+   (`aff3b65`): friendly API error copy + transient 5xx retry + abort→friendly mapping
+   on both the streaming path and the agent's `sendToolRound`. Tests **329 → 344**
+   (26 files), build clean, eslint 0. **Honesty caveat:** no successful end-to-end API
+   call was confirmable this session (Google's free tier stayed overloaded with
+   503s) — error *handling* is unit-verified, happy-path output was not seen live.
+   **Deferred (design §10):** a zero-token client-side "capabilities" answer (needs
+   router/prompt territory this spec couldn't touch). **Loose end:** B11/B12 still
+   need rows in the guardrail-hardening bug registry.
+
+   **Now next: E10** (eval framework for the router/agent), **E6** (hardening),
+   **E5** (docs-removal decision), **E7** (scope extension permissions — intentionally
+   LAST), **E8** (deploy). Also still open from earlier: the deferred eval follow-up
+   (real captured-Gemini cases + a validated LLM-as-judge) and progress-tracking
+   Phase D (verified submissions). Still future: a clickable "open on LeetCode from My
+   Progress" link (its `url` is already validated for safety, but the link itself is
+   not built).
 
 *When each lands, add an entry above (via the project-historian agent) and backfill
 any resulting numbers into [RESUME.md](./RESUME.md).*

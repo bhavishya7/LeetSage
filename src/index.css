@@ -3,6 +3,71 @@
 /* Class-based dark mode: dark: variants apply when a .dark ancestor exists. */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/*
+ * ── "Sage" signature accent (chat-polish E2 §3.2) ──────────────────────────
+ * ONE swappable set of tokens so the panel reads as a cohesive identity instead
+ * of flat gray. Everything accent-colored (header strip, Send button, user
+ * bubble, focus ring, suggestion-pill tint) references these — change them here
+ * and the whole panel re-themes.
+ *
+ * Default = sage-green → teal (a calm, muted green sliding into teal; "Sage",
+ * true to the product name and distinct from LeetCode's purple-blue).
+ *
+ * ALTERNATIVE — brighter / techier "sage → cyan" (the turquoise direction):
+ * flip --sage-end to the cyan stop and --sage-mid to a cyan ring. Both options
+ * are listed inline; comment one out. The user tunes these by eye.
+ */
+:root {
+  /* --sage-mid / --sage-ring / --sage-tint drive borders, focus ring, and the
+     soft pill tints (these stay light so hover/focus accents read subtly).
+     --sage-fill-start/-end are the DEEPER stops used only where WHITE text sits
+     on the gradient (Send button, user bubble), so the contrast is strong. */
+  --sage-mid:   #14b8a6; /* teal-500   — mid/border accent */
+  /* Alt (sage → cyan): --sage-mid: #22d3ee; */
+
+  --sage-fill-start: #0f9d8f; /* deep sage-teal — white reads cleanly on this */
+  --sage-fill-end:   #0b7268; /* deeper teal end */
+  /* Alt (sage → cyan): --sage-fill-start: #0891b2; --sage-fill-end: #0e7490; */
+
+  --sage-gradient: linear-gradient(to right, var(--sage-fill-start), var(--sage-fill-end));
+  /* Soft tints for pill backgrounds / hovers — low-alpha so they stay subtle. */
+  --sage-tint:       color-mix(in srgb, var(--sage-mid) 10%, transparent);
+  --sage-tint-hover: color-mix(in srgb, var(--sage-mid) 18%, transparent);
+  --sage-ring:       color-mix(in srgb, var(--sage-mid) 45%, transparent);
+}
+.dark {
+  --sage-mid:   #2dd4bf; /* teal-400 — brighter border/ring on dark chrome */
+  /* Alt (sage → cyan): --sage-mid: #67e8f9; */
+
+  /* The fill stays deep in dark mode too so white text keeps its contrast. */
+  --sage-fill-start: #12a897;
+  --sage-fill-end:   #0c7d72;
+  /* Alt (sage → cyan): --sage-fill-start: #0e9bbd; --sage-fill-end: #0e7490; */
+
+  --sage-tint:       color-mix(in srgb, var(--sage-mid) 14%, transparent);
+  --sage-tint-hover: color-mix(in srgb, var(--sage-mid) 24%, transparent);
+  --sage-ring:       color-mix(in srgb, var(--sage-mid) 55%, transparent);
+}
+
+/*
+ * Utility: fill with the Sage gradient (Send button, header strip, user bubble).
+ * Text is WHITE on a DEEPENED gradient (--sage-fill-* stops): the earlier light
+ * gradient forced dark ink to pass contrast, which read poorly — so instead the
+ * fill is darker and white sits on it cleanly (chat-polish review). A touch
+ * heavier weight (500) sharpens white-on-color legibility at this small size.
+ * The thin header strip has no text, so this only affects the button + bubble.
+ */
+.leetsage-sage-fill {
+  background-image: var(--sage-gradient);
+  color: #ffffff;
+  font-weight: 500;
+}
+/* The accent focus ring, applied via focus-visible on inputs/buttons. */
+.leetsage-sage-focus:focus-visible {
+  outline: 2px solid var(--sage-mid);
+  outline-offset: 1px;
+}
+
 *, *::before, *::after { box-sizing: border-box; }
 html, body, #root { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; }
 body {
@@ -28,8 +93,10 @@ body {
     text-align: inherit;
   }
   button:disabled { cursor: not-allowed; }
+  /* Accent focus ring = the Sage mid stop (was blue-500). Keeps a clear
+     focus-visible outline for keyboard users while matching the identity. */
   button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
-    outline: 2px solid #3b82f6; outline-offset: 2px;
+    outline: 2px solid var(--sage-mid); outline-offset: 2px;
   }
 }
 ::-webkit-scrollbar { width: 4px; }
@@ -68,4 +135,95 @@ body {
 }
 @media (prefers-reduced-motion: reduce) {
   .leetsage-pop-in { animation: none; }
+}
+
+/*
+ * ── Motion / animations (chat-polish E2 §3.1) ─────────────────────────────
+ * Every animation below is gated behind `prefers-reduced-motion: reduce` (the
+ * project's established pattern — see leetsage-dot / leetsage-pop-in above).
+ * Reduced-motion users get the final state instantly, no movement.
+ */
+
+/* Card + user-bubble ENTRANCE: a soft fade + slight rise on mount, so content
+ * arrives instead of snapping in. Softer/slower than the pop-in interrupt. */
+@keyframes leetsage-enter {
+  0%   { opacity: 0; transform: translateY(8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.leetsage-enter {
+  animation: leetsage-enter 190ms ease-out both;
+}
+
+/* Button / chip PRESS feedback: subtle scale-down on :active + smooth settle.
+ * The transition carries hover color changes too (callers keep their own
+ * transition-colors; `transform` is additive). */
+.leetsage-pressable {
+  transition: transform 120ms ease, background-color 150ms ease, border-color 150ms ease;
+}
+.leetsage-pressable:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* Card EXPAND / COLLAPSE: animate a grid-rows 0fr↔1fr track (cheap, no JS height
+ * measurement, no layout jank with variable-height content). The inner wrapper
+ * must have `min-height: 0; overflow: hidden` so it can collapse fully. */
+.leetsage-collapsible {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 200ms ease;
+}
+.leetsage-collapsible[data-collapsed='true'] {
+  grid-template-rows: 0fr;
+}
+.leetsage-collapsible > .leetsage-collapsible-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Streaming BLINKING CURSOR: a steady blink (distinct from the dot-pulse fade)
+ * shown at the live end of streaming / freshly-revealed content. A hard on/off
+ * flip (no stepped timing — that could settle on a frame that read as static). */
+@keyframes leetsage-caret-blink {
+  0%, 49%   { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.leetsage-caret {
+  display: inline-block;
+  width: 2px;
+  height: 0.9em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--sage-mid);
+  border-radius: 1px;
+  animation: leetsage-caret-blink 1.06s infinite;
+}
+
+/* Decorative INPUT-PROMPT caret: a blinking "you can type here" cursor shown at
+ * the start of the chat input while it's EMPTY and UNFOCUSED (a terminal-style
+ * affordance). It's hidden the moment the field is focused (the real text caret
+ * takes over) or has text, so the two carets never show at once. Positioned
+ * absolutely over the input's left padding; pointer-events:none so it never
+ * blocks a click into the field. */
+.leetsage-input-caret {
+  position: absolute;
+  left: 0.875rem; /* matches the input's pl-3.5 left padding — same x as the
+                     real text caret, so focusing causes no horizontal jump */
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 0.95em;
+  background: var(--sage-mid);
+  border-radius: 1px;
+  pointer-events: none;
+  animation: leetsage-caret-blink 1.06s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .leetsage-enter { animation: none; }
+  .leetsage-pressable { transition: none; }
+  .leetsage-pressable:active:not(:disabled) { transform: none; }
+  .leetsage-collapsible { transition: none; }
+  /* Keep the carets visible (they mark position) but stop them blinking. */
+  .leetsage-caret { animation: none; opacity: 1; }
+  .leetsage-input-caret { animation: none; opacity: 0.6; }
 }

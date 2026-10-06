@@ -72,9 +72,54 @@ describe('sendToolRound', () => {
     expect(turn.toolCalls[0].name).toBe('getProblemConstraints');
   });
 
-  it('surfaces a 429 rate-limit error via buildAPIError', async () => {
+  it('surfaces a 429 rate-limit error as a friendly, non-technical message', async () => {
     mockFetchOnceJson({ error: { message: 'quota' } }, false, 429);
-    await expect(sendToolRound(base)).rejects.toThrow(/rate limit|quota/i);
+    // The message is user-facing: it names the free-tier limit and the "wait"
+    // action, and must NOT leak a raw status code. (chat-polish error-copy fix)
+    const err = await sendToolRound(base).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/free-tier limit|try again/i);
+    expect((err as Error).message).not.toMatch(/\b429\b/);
+  });
+
+  it('surfaces a transient 503 as a friendly "service busy" message (not a raw code)', async () => {
+    // 503 = Google-side overload. The user should see an apologetic, temporary
+    // message, never "API Error 503". Guards the chat-polish error-copy fix.
+    // 503 is RETRYABLE, so fetchWithRetry backs off (1s, 2s) between attempts;
+    // fake timers advance through that so the test doesn't actually wait ~3s.
+    vi.useFakeTimers();
+    try {
+      mockFetchOnceJson({ error: { message: 'overloaded' } }, false, 503);
+      const pending = sendToolRound(base).catch((e: Error) => e);
+      await vi.runAllTimersAsync(); // flush the retry backoff waits
+      const err = await pending;
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(/busy|temporary|try again/i);
+      expect((err as Error).message).not.toMatch(/\b503\b/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('RETRIES a transient 503 and succeeds if a later attempt is OK', async () => {
+    // Proves the retry actually recovers: first call 503, second call 200.
+    // This is the behavior that turns a one-off Google blip into a non-event.
+    vi.useFakeTimers();
+    try {
+      let call = 0;
+      vi.stubGlobal('fetch', vi.fn(async () => {
+        call += 1;
+        if (call === 1) return { ok: false, status: 503, json: async () => ({ error: { message: 'overloaded' } }) };
+        return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'recovered' } }] }) };
+      }) as unknown as typeof fetch);
+      const pending = sendToolRound(base);
+      await vi.runAllTimersAsync();
+      const turn = await pending;
+      expect(turn.content).toBe('recovered');
+      expect(call).toBe(2); // one failure, one success
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('tolerates an empty/zero-choice response', async () => {

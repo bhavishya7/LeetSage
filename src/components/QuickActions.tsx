@@ -40,10 +40,10 @@ const QuickActions: React.FC<QuickActionsProps> = ({ progress, disabled, isLoadi
         onClick={() => onAction(chip.type)}
         disabled={chipDisabled}
         title={chip.title}
-        className={`inline-flex items-center justify-start gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border shadow-sm transition-colors
+        className={`leetsage-pressable inline-flex items-center justify-start gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border shadow-sm transition-colors
           ${chipDisabled
             ? 'opacity-40 cursor-not-allowed bg-neutral-100 dark:bg-neutral-800 border-neutral-300 dark:border-neutral-700 text-neutral-400'
-            : 'bg-white dark:bg-neutral-700 border-neutral-300 dark:border-neutral-500 text-neutral-700 dark:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-600 hover:border-blue-400 dark:hover:border-blue-400 cursor-pointer'}
+            : 'bg-white dark:bg-neutral-700 border-neutral-300 dark:border-neutral-500 text-neutral-700 dark:text-neutral-100 hover:bg-[var(--sage-tint)] dark:hover:bg-neutral-600 hover:border-[var(--sage-mid)] dark:hover:border-[var(--sage-mid)] cursor-pointer'}
         `}
       >
         <span className="shrink-0">{chip.icon}</span>
