@@ -18,7 +18,8 @@ import { saveAttempt, slugFromUrl } from '../services/progress-records';
 import { routeMessage } from '../services/intent-router';
 import ConfirmAffordance from '../components/ConfirmAffordance';
 import UsageReservoir from '../components/UsageReservoir';
-import { PLACEHOLDER_EXAMPLES, TRY_ASKING_CHIPS } from '../components/discovery-prompts';
+import WelcomeCard from '../components/WelcomeCard';
+import { PLACEHOLDER_EXAMPLES, TRY_ASKING_CHIPS, resolveSubmitText } from '../components/discovery-prompts';
 import { getChatAgentSystemPrompt, wrapUntrusted, wrapToolResult } from '../services/prompts';
 import { buildConversationWindow } from '../services/chat-window';
 import { toolSpecs, toolLabel, runTool, type ToolContext } from '../services/chat-tools';
@@ -54,6 +55,9 @@ const App: React.FC = () => {
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showProgress, setShowProgress] = useState(false);
+  // E4: re-openable welcome overlay (the header "?" button). The welcome also
+  // shows automatically as the empty state; this lets users revisit it any time.
+  const [showWelcome, setShowWelcome] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [stuckSuggestion, setStuckSuggestion] = useState<StuckSuggestion | null>(null);
   const [usageCount, setUsageCount] = useState(0);
@@ -62,6 +66,10 @@ const App: React.FC = () => {
   // Process-only (never answer content) — safe to show live. null when idle.
   const [agentStepLabel, setAgentStepLabel] = useState<string | null>(null);
   const [chatInput, setChatInput] = useState('');
+  // Tracks whether the chat input is focused, so the decorative "you can type
+  // here" blinking caret only shows while the field is empty AND unfocused
+  // (the real text caret takes over on focus — never two carets at once).
+  const [chatFocused, setChatFocused] = useState(false);
   const [savedReportIds, setSavedReportIds] = useState<Set<string>>(new Set());
   // Chat intent routing: a pending confirm affordance (exempt guardrail OR the
   // borderline `ask` outcome). `query` is the original message so "Just answer"
@@ -519,8 +527,13 @@ const App: React.FC = () => {
   //   - chat     → the existing free-form chat path, unchanged.
   // The router is a PRE-STEP only: filterResponse, the pre-display gate, and
   // getChatSystemPrompt are untouched — routing sits in front of them.
-  const submitChat = () => {
-    const q = chatInput.trim();
+  // `text` lets a caller submit an explicit message (e.g. a tapped "Try asking…"
+  // chip, B12) instead of only the live `chatInput` state — avoiding a set-state
+  // race where reading `chatInput` right after `setChatInput(chip)` would still
+  // see the old value. The input bar's Send/Enter pass nothing and fall back to
+  // the current input. See .kiro/specs/leetsage-chat-polish (B12).
+  const submitChat = (text?: string) => {
+    const q = resolveSubmitText(text, chatInput);
     if (!q) return;
     // A new submission supersedes any stale confirm prompt.
     setPendingConfirm(null);
@@ -574,13 +587,19 @@ const App: React.FC = () => {
   };
 
   const currentPlaceholder = canInteract ? PLACEHOLDER_EXAMPLES[placeholderIdx] : 'Configure your API key first';
+  // The decorative "you can type here" caret shows only when the field is usable,
+  // empty, and unfocused (the real text caret takes over on focus).
+  const showIdleCaret = canInteract && !chatFocused && !chatInput;
 
   return (
-    <div className={`${isDark ? 'dark' : ''} flex flex-col h-screen bg-neutral-50 dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 text-sm`}>
+    <div className={`${isDark ? 'dark' : ''} relative flex flex-col h-screen bg-neutral-50 dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 text-sm`}>
+      {/* Sage identity strip: a thin gradient bar at the very top so the panel
+          carries its signature color even before any content loads. */}
+      <div className="leetsage-sage-fill h-0.5 shrink-0" aria-hidden="true" />
       {/* Single consolidated header: problem title + difficulty on the left,
           usage counter + theme + settings on the right. (Chrome's side-panel
           title bar already shows the "LeetSage" name, so we don't repeat it.) */}
-      <div className="flex items-start justify-between gap-2 px-3 py-2 bg-white dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700 shrink-0">
+      <div className="flex items-start justify-between gap-2 px-3 py-2.5 bg-white dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700 shrink-0">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 min-w-0 flex-1">
           {problemContext ? (
             <>
@@ -594,7 +613,8 @@ const App: React.FC = () => {
           )}
         </div>
         <div className="flex items-center gap-2.5 shrink-0">
-          <button onClick={() => setShowProgress(v => !v)} className={`transition-colors ${showProgress ? 'text-blue-500' : 'text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200'}`} aria-label="My Progress" aria-pressed={showProgress} title="My Progress">📈</button>
+          <button onClick={() => setShowProgress(v => !v)} className={`leetsage-pressable transition-colors ${showProgress ? 'text-teal-500' : 'text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200'}`} aria-label="My Progress" aria-pressed={showProgress} title="My Progress">📈</button>
+          <button onClick={() => setShowWelcome(true)} className="leetsage-pressable text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 transition-colors" aria-label="What is LeetSage?" title="What is LeetSage?">❔</button>
           <button onClick={toggleTheme} className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 transition-colors" aria-label="Toggle theme" title={isDark ? 'Switch to light' : 'Switch to dark'}>
             {isDark ? '☀️' : '🌙'}
           </button>
@@ -622,8 +642,16 @@ const App: React.FC = () => {
 
       {/* Errors + stuck suggestion */}
       {error && (
-        <div className="mx-3 mb-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-red-500 text-xs shrink-0">
-          {error} <button onClick={() => setError(null)} className="ml-2 underline">Dismiss</button>
+        <div className="mx-3 mb-2 p-2.5 bg-red-500/10 border border-red-500/30 rounded text-red-500 text-xs shrink-0">
+          <p className="leading-relaxed">{error}</p>
+          <div className="flex justify-end mt-1.5">
+            <button
+              onClick={() => setError(null)}
+              className="leetsage-pressable px-2.5 py-1 rounded border border-red-500/40 hover:bg-red-500/15 font-medium transition-colors"
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
       {stuckSuggestion && !(stuckSuggestion.suggestedAction === 'GET_HINT' && (progress?.hintLevel ?? 0) >= 3) && (
@@ -652,16 +680,19 @@ const App: React.FC = () => {
         <QuickActions progress={progress} disabled={!canInteract} isLoading={isLoading} onAction={handleActionClick} />
 
         {/* Discovery (R8): dismissible "Try asking…" chips teach the intents that
-            no longer have buttons. Tapping a chip only FILLS the input (no API
-            call); the user still presses Send. */}
+            no longer have buttons. B12 (chat-polish): these are COMPLETE example
+            questions, so tapping one SUBMITS immediately via submitChat(chip)
+            (which also exercises the real routing path) — no second "press Send"
+            step. A future template-style chip (needing user input) would populate
+            instead; see design §4.3. */}
         {canInteract && showTryChips && learningContent.length === 0 && (
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[11px] text-neutral-400 shrink-0">Try asking:</span>
             {TRY_ASKING_CHIPS.map(chip => (
               <button
                 key={chip}
-                onClick={() => setChatInput(chip)}
-                className="text-[11px] px-2 py-0.5 rounded-full border border-neutral-300 dark:border-neutral-600 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-700 hover:border-blue-400 dark:hover:border-blue-400 transition-colors"
+                onClick={() => submitChat(chip)}
+                className="leetsage-pressable text-[11px] px-2.5 py-1 rounded-full border border-[var(--sage-ring)] text-neutral-600 dark:text-neutral-300 bg-[var(--sage-tint)] hover:bg-[var(--sage-tint-hover)] hover:border-[var(--sage-mid)] transition-colors"
               >
                 {chip}
               </button>
@@ -678,18 +709,33 @@ const App: React.FC = () => {
         )}
 
         <div className="flex items-center gap-2">
-          <input
-            value={chatInput}
-            onChange={e => setChatInput(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitChat(); } }}
-            disabled={!canInteract}
-            placeholder={currentPlaceholder}
-            className="flex-1 text-xs bg-neutral-100 dark:bg-neutral-700 border border-neutral-300 dark:border-neutral-600 rounded-full px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-50"
-          />
+          <div className="relative flex-1">
+            <input
+              value={chatInput}
+              onChange={e => setChatInput(e.target.value)}
+              onFocus={() => setChatFocused(true)}
+              onBlur={() => setChatFocused(false)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitChat(); } }}
+              disabled={!canInteract}
+              placeholder={currentPlaceholder}
+              // Padding is a CONSTANT px-3.5 in every state. The decorative caret
+              // is positioned at the SAME x as the real text caret (left: 0.875rem
+              // == pl-3.5), so focusing swaps one caret for the other at the exact
+              // same spot — no horizontal jump. The rotating placeholder stays
+              // visible while idle; the 2px caret sits just in front of its text,
+              // like a cursor before text.
+              className="leetsage-sage-focus w-full text-xs bg-neutral-100 dark:bg-neutral-700 border border-neutral-300 dark:border-neutral-600 rounded-full py-2 px-3.5 focus:outline-none focus:border-[var(--sage-mid)] disabled:opacity-50"
+            />
+            {/* Decorative "you can type here" caret: only while enabled, empty,
+                and unfocused. On focus the real text caret takes over. */}
+            {showIdleCaret && (
+              <span className="leetsage-input-caret" aria-hidden="true" />
+            )}
+          </div>
           <button
-            onClick={submitChat}
+            onClick={() => submitChat()}
             disabled={!canInteract || !chatInput.trim()}
-            className="text-xs px-3 py-1.5 bg-blue-500 text-white rounded-full hover:bg-blue-600 disabled:opacity-40 transition-colors shrink-0"
+            className="leetsage-pressable leetsage-sage-fill text-xs px-3.5 py-2 rounded-full shadow-sm hover:brightness-105 disabled:opacity-40 disabled:brightness-100 shrink-0"
           >
             Send
           </button>
@@ -728,6 +774,25 @@ const App: React.FC = () => {
         )}
       </div>
       </>
+      )}
+
+      {/* E4: re-openable welcome overlay (header "?" button). Same WelcomeCard
+          as the empty state; a backdrop tap or "Got it" dismisses it. */}
+      {showWelcome && (
+        <div
+          className="absolute inset-0 z-20 flex items-center justify-center px-6 bg-black/40 backdrop-blur-[1px] leetsage-enter"
+          onClick={() => setShowWelcome(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="About LeetSage"
+        >
+          <div
+            className="leetsage-pop-in bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-xl shadow-lg px-5 py-5"
+            onClick={e => e.stopPropagation()}
+          >
+            <WelcomeCard onDismiss={() => setShowWelcome(false)} />
+          </div>
+        </div>
       )}
 
       {showSettings && <SettingsModal currentSettings={settings} onSave={handleSettingsSave} onClose={() => setShowSettings(false)} />}

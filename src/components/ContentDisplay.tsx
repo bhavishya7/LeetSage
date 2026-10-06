@@ -4,6 +4,7 @@ import { isSolutionExemptAction } from '../services/solution-filter';
 import ThinkingIndicator from './ThinkingIndicator';
 import { thinkingLabel } from './thinking-labels';
 import { splitComplexity } from './complexity-parse';
+import WelcomeCard from './WelcomeCard';
 
 interface ContentDisplayProps {
   content: LearningContent[];
@@ -132,18 +133,18 @@ function renderContent(text: string): React.ReactNode {
       elements.push(<pre key={i} className="bg-neutral-950 text-neutral-100 border border-neutral-700 rounded p-2 text-[12px] overflow-x-auto my-1.5 font-mono leading-relaxed">{codeLines.join('\n')}</pre>);
     } else if (line.startsWith('## ')) { elements.push(<h2 key={i} className={`font-bold text-[15px] mt-3 mb-1 ${headingColor(line)}`}>{line.slice(3)}</h2>); }
     else if (line.startsWith('### ')) { elements.push(<h3 key={i} className={`font-semibold text-[13px] mt-2 mb-0.5 ${headingColor(line)}`}>{line.slice(4)}</h3>); }
-    else if (line.startsWith('- ') || line.startsWith('* ')) { elements.push(<li key={i} className="ml-4 text-[13px] text-neutral-700 dark:text-neutral-200 list-disc leading-relaxed">{renderInline(line.slice(2))}</li>); }
-    else if (/^\d+\.\s/.test(line)) { elements.push(<li key={i} className="ml-4 text-[13px] text-neutral-700 dark:text-neutral-200 list-decimal leading-relaxed">{renderInline(line.replace(/^\d+\.\s/, ''))}</li>); }
+    else if (line.startsWith('- ') || line.startsWith('* ')) { elements.push(<li key={i} className="ml-4 text-[13px] text-neutral-800 dark:text-neutral-100 list-disc leading-relaxed">{renderInline(line.slice(2))}</li>); }
+    else if (/^\d+\.\s/.test(line)) { elements.push(<li key={i} className="ml-4 text-[13px] text-neutral-800 dark:text-neutral-100 list-decimal leading-relaxed">{renderInline(line.replace(/^\d+\.\s/, ''))}</li>); }
     else if (line.trim() === '') { elements.push(<div key={i} className="h-1.5" />); }
-    else { elements.push(<p key={i} className="text-[13px] text-neutral-700 dark:text-neutral-200 leading-relaxed">{renderInline(line)}</p>); }
+    else { elements.push(<p key={i} className="text-[13px] text-neutral-800 dark:text-neutral-100 leading-relaxed">{renderInline(line)}</p>); }
     i++;
   }
   return <>{elements}</>;
 }
 
 const UserBubble: React.FC<{ text: string }> = ({ text }) => (
-  <div className="flex justify-end mb-2">
-    <div className="max-w-[85%] rounded-2xl rounded-br-sm px-3 py-2 text-[13px] bg-blue-600 text-white break-words">{text}</div>
+  <div className="flex justify-end mb-2.5 leetsage-enter">
+    <div className="leetsage-sage-fill max-w-[85%] rounded-2xl rounded-br-sm px-3.5 py-2 text-[13px] break-words shadow-sm">{text}</div>
   </div>
 );
 
@@ -177,8 +178,8 @@ const ContentCard: React.FC<{
   };
 
   return (
-    <div className={`border border-neutral-200 dark:border-neutral-700 border-l-2 ${meta.accent} bg-white dark:bg-neutral-800 rounded-lg overflow-hidden mb-2`}>
-      <button onClick={() => setExpanded(v => !v)} className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-neutral-50 dark:hover:bg-neutral-700/50" aria-expanded={expanded}>
+    <div className={`leetsage-enter border border-neutral-200 dark:border-neutral-700 border-l-2 ${meta.accent} bg-white dark:bg-neutral-800 rounded-lg overflow-hidden mb-2.5 shadow-sm`}>
+      <button onClick={() => setExpanded(v => !v)} className="w-full flex items-center justify-between px-3 py-2.5 text-left hover:bg-neutral-50 dark:hover:bg-neutral-700/50 transition-colors" aria-expanded={expanded}>
         <div className="flex items-center gap-1.5">
           <span className="text-sm">{meta.icon}</span>
           <span className="text-[13px] font-semibold text-neutral-800 dark:text-neutral-100">{label}</span>
@@ -192,8 +193,12 @@ const ContentCard: React.FC<{
           <span className="text-neutral-400 text-xs">{expanded ? '▲' : '▼'}</span>
         </div>
       </button>
-      {expanded && (
-        <div className="px-3 pb-2 min-w-0 break-words overflow-x-hidden">
+      {/* Animated expand/collapse: a grid-rows 1fr↔0fr transition (see
+          index.css .leetsage-collapsible) instead of an instant conditional
+          render. The inner wrapper collapses to zero height smoothly. */}
+      <div className="leetsage-collapsible" data-collapsed={!expanded} aria-hidden={!expanded}>
+        <div className="leetsage-collapsible-inner">
+        <div className="px-3 pb-2.5 min-w-0 break-words overflow-x-hidden">
           {isGated
             // B1: non-exempt action mid-stream — withhold tokens, show the
             // animated action-aware "thinking" placeholder until the filter runs.
@@ -201,7 +206,14 @@ const ContentCard: React.FC<{
             : item.content
               ? renderContent(item.content)
               : <div className="h-4 bg-neutral-200 dark:bg-neutral-700 rounded animate-pulse" />}
-          {isStreaming && !isGated && item.content && <span className="inline-block w-1 h-3 bg-neutral-400 animate-pulse ml-0.5" />}
+          {/* Streaming blinking cursor (E2 §3.1): shows at the live end of
+              content that is ALREADY cleared for display — i.e. exempt actions
+              streaming live (not gated). The B1 gate still withholds non-exempt
+              tokens behind the ThinkingIndicator, so the caret never paints on
+              gated-but-unfiltered content. The fix vs. the old version: a real
+              steady-blink caret (.leetsage-caret) tied to the sage accent,
+              rendered inline right after the streamed prose. */}
+          {isStreaming && !isGated && item.content && <span className="leetsage-caret" aria-hidden="true" />}
           {item.content && !isStreaming && (
             <div className="flex justify-end items-center gap-2 mt-1.5">
               {/* Save-to-progress: only offered on a finished Study Report card. */}
@@ -210,10 +222,10 @@ const ContentCard: React.FC<{
                   onClick={(e) => { e.stopPropagation(); if (!isSaved) onSaveToProgress(item); }}
                   disabled={isSaved}
                   title={isSaved ? 'Saved to My Progress' : 'Save this report to My Progress'}
-                  className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium border transition-colors
+                  className={`leetsage-pressable inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium border transition-colors
                     ${isSaved
                       ? 'text-green-600 dark:text-green-400 border-green-500/40 cursor-default'
-                      : 'text-blue-600 dark:text-blue-300 border-blue-500/50 hover:bg-blue-500/10 cursor-pointer'}`}
+                      : 'text-teal-700 dark:text-teal-300 border-[var(--sage-ring)] hover:bg-[var(--sage-tint)] cursor-pointer'}`}
                 >
                   {isSaved ? '✓ Saved' : '💾 Save to My Progress'}
                 </button>
@@ -232,7 +244,8 @@ const ContentCard: React.FC<{
             </div>
           )}
         </div>
-      )}
+        </div>
+      </div>
     </div>
   );
 };
@@ -242,12 +255,11 @@ const ContentDisplay: React.FC<ContentDisplayProps> = ({ content, isLoading, str
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [content.length, streamingId]);
 
   if (content.length === 0 && !isLoading) {
+    // E4 first-run welcome / empty state (chat-polish §5). The same WelcomeCard
+    // is re-openable from the header "?" button, so the two can't drift.
     return (
-      <div className="flex-1 flex items-center justify-center text-center px-6">
-        <div className="text-neutral-400">
-          <div className="text-3xl mb-2">🧠</div>
-          <p className="text-xs">Tap a quick action below, or ask your own question. I'll coach you toward the answer — never hand it over.</p>
-        </div>
+      <div className="flex-1 flex items-center justify-center px-6 leetsage-enter">
+        <WelcomeCard />
       </div>
     );
   }
