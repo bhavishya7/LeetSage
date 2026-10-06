@@ -1947,6 +1947,186 @@ temp file deleted — consistent with the documented build gotcha in `tech.md`.
 
 ---
 
+## 2026-10-06 — E6 batch 1: harden "Analyze my code" (capture, formatting, prompt)
+
+> The first batch of the standing **E6 bug-hardening pass**
+> ([`.kiro/specs/leetsage-e6-bug-hardening/design.md`](../../.kiro/specs/leetsage-e6-bug-hardening/design.md)
+> — a design-only, STANDING spec on the long-lived branch `feature/e6-bug-hardening`;
+> the user merges per completed fix). Scoped tightly to the **"Analyze my code"
+> (`CHECK_APPROACH`) path**, dogfooded on LeetCode **"Encode and Decode Strings"**
+> with the user's accepted length-prefix + dynamic-delimiter solution. Ran under the
+> hard "build → explain → **STOP for review** → commit only after approval" gate,
+> with multiple live test rounds. Committed as **`034f2ce`** on
+> `feature/e6-bug-hardening` (**not pushed/merged — the user's call**). Bug IDs track
+> the standing registry in
+> [`leetsage-guardrail-hardening/requirements.md`](../../.kiro/specs/leetsage-guardrail-hardening/requirements.md);
+> remediation IDs (R1–R4) are the E6 design's own labels. Build compiles,
+> `npm.cmd run test` **387 passing**, `npm.cmd run lint` **0 errors** (1 pre-existing
+> `App.tsx` ~line 205 exhaustive-deps warning, untouched).
+
+**What.** Four distinct defects on the "Analyze my code" path fixed; a fifth routed
+to a future eval:
+- **B15 ✅ — reliable code capture** (`src/services/code-extractor.ts`, full rewrite;
+  callers `src/sidepanel/App.tsx`, `src/services/chat-tools.ts`).
+- **B13 ✅ — complexity formatting no longer eaten by markdown**
+  (`src/components/ContentDisplay.tsx`, `src/components/complexity-parse.ts`).
+- **B14 🏗️ partial / R4 🏗️ partial — `CHECK_APPROACH` prompt example-bleed**
+  (`src/services/prompts.ts`).
+- **B16 🏗️ partial — headline complexity contradicted its own breakdown** (new this
+  session; `src/services/prompts.ts`).
+
+**Why.** The user repeatedly saw "Analyze my code" report **`O(N)`** for Encode and
+Decode Strings when the verified-correct answer is **`O(N·M)`** (N = number of
+strings, M = average length), and saw it "suggest" the length-prefix scheme the user
+had *already* written. Verified by hand that the extension's `O(N)` is wrong and the
+user's approach is in fact optimal. These are confirmed-real, unshippable correctness
+and trust bugs on the product's flagship coaching action.
+
+**B15 — the code reader could silently analyze a partial solution.** The old reader
+(a) fell back to a **visible-only `.view-lines` DOM scrape** that could return a
+**truncated fragment masquerading as the whole solution**, (b) made **one attempt
+with no retry**, and (c) returned `ExtractedCode | null`, which **conflated "empty
+editor" with "read failed."** Fix: the full **Monaco model value is the ONLY analyzed
+source**; the DOM is demoted to a **liveness signal** (never sent to the model);
+**retry/backoff** (4 attempts, 0/150/400/800 ms) mirrors the robust problem-data
+pull; the return type is a discriminated **`{ status: 'ok' | 'empty' | 'failed' }`**;
+a diff/preview model filter targets the user's model in multi-model editors; the
+plaintext → toolbar language fallback is kept. **Behavior change:** `CHECK_APPROACH`
+now surfaces an **honest error and STOPS** on a failed read instead of silently
+analyzing as if the editor were empty. Guarded by a new
+`src/services/__tests__/code-extractor.test.ts`: `ok|empty|failed` distinct,
+partial-never-accepted, retry-on-transient, multi-model selection, language fallback.
+
+**B13 — a single `*` in a complexity string was being read as markdown italic.**
+`renderInline` split on markdown emphasis **before** complexity parsing, so a lone
+`*` in `O(N*M)` — and a bare `N * M` in prose — got consumed as italic delimiters and
+stripped, mangling the Efficiency section. Fix: `renderInline` now honors **only**
+`**bold**` and `` `code` `` — every other `*` stays literal (nothing in our prompts
+asks for single-`*` italic, verified), and `O(...)` groups are masked to a sentinel
+before the emphasis split and restored after. A new pure helper
+`formatComplexityInner` uppercases standalone variables (`n`→`N`, `m`→`M`) **without
+corrupting words** — fixing a latent `/n/g` that had been turning `O(min(a,b))` into
+`O(miN(a,b))`. Guarded in `complexity-parse.test.ts`, including a bare-`*`-in-prose
+regression test.
+
+**B14 / R4 — the prompt was handing the model an answer to parrot.** The
+`CHECK_APPROACH` prompt hardcoded a **Two-Sum** Efficiency example (`O(N²)`/`O(N)`),
+and a cheap model (`gemini-3.5-flash-lite`) **parroted those values instead of
+computing from the user's code** — producing a wrong, unstable `O(N)` for a problem
+whose real answer is `O(N·M)`. Fix: replaced the concrete Big-O on the
+`**Current:**`/`**Optimal:**` **answer** lines (and in `ANALYZE_DATA_EXAMPLE`) with
+**non-answerable placeholders** `O(<time>)`/`O(<space>)`, while **keeping the rich
+bullet examples verbatim** so the model still mirrors the inline-badge +
+code-reference style. Added a **"COMPUTE, DON'T COPY"** instruction, a **"STATE YOUR
+VARIABLES"** rule + a dedicated `**Variables:**` line (R4 — no bare undefined
+symbols), and a rule against recommending a **same-asymptotic-complexity** alternative
+the user already uses. **Scoped partial, honestly:** removing the bleed was
+*necessary, not sufficient* — the run-to-run `O(N)` ↔ `O(N·M)` **instability is NOT
+fixed** here; that is model-correctness, routed to the deferred correctness eval
+(**E10**), not to B10.
+
+**B16 — the headline contradicted its own breakdown, within one message.** In a
+single response the `**Current:**` line read `O(N*M + C)` while the per-operation
+bullet right below it correctly said `O(C*N*M)`. This is **intra-message**
+inconsistency — distinct from B14's cross-*run* drift and B10's cross-*message*
+optimal drift. Cheap prompt-only fix: compute the per-operation bullets **first**,
+set the headline to their **aggregate** (loops multiply, sequential steps add, drop
+lower-order terms), and **reconcile** before finishing. Guarded by a
+`prompts.test.ts` assertion. Whether the number is *objectively correct* remains the
+eval's job (E10).
+
+**What broke / the hard part — a "root fix" I built, measured, and removed.** The E6
+design's **R3** proposed rendering the Efficiency badge from the structured
+`AnalyzeData` (`applyStructuredComplexity`) rather than from re-parsed prose. I
+**built it**, instrumented the pipeline with temporary console diagnostics to *see*
+the real strings — and then **reverted it**, because the diagnostics proved it: (1)
+in the common case **IN == OUT** (prose and the model's JSON already agree), so it
+**no-oped almost always**; (2) it added real **render risk** (it was implicated in a
+formatting regression); and (3) it **cannot fix the `O(N)` drift** — when the model
+drifts, its JSON drifts too, so prose and data agree *on the wrong answer*. Decision:
+keep R3's value as **only** the `*`-formatting fix + `formatComplexityInner`, and
+defer any structured-driven badge to **B10**. Instrumenting to turn guessing into
+knowing — then deleting a change that measured as net-negative — is the story here,
+not a clever transform.
+
+**The second hard part — three "wrong complexity" bugs that look identical but
+aren't.** A real trap this batch, caught and corrected: (a) **B14** example-bleed
+(the prompt feeds the answer) — fixable at the prompt; (b) **B16** intra-message
+headline-vs-breakdown inconsistency — fixable at the prompt (reconcile); (c) **B10**
+cross-message optimal drift — needs a single source of truth per problem; and the
+underlying (d) **the model is just wrong/unstable**, which only a correctness eval
+(and possibly a stronger model) addresses. We explicitly **corrected a mislabel** —
+B10 is *not* the fix for the headline-wrongness — and did **not** claim the
+instability was fixed. No prompt makes a cheap model a reliable complexity theorist;
+raising that ceiling (a stronger model for `CHECK_APPROACH`, or a verification pass)
+is a future cost/latency decision, not slipped in.
+
+**The diagnosis-discipline lesson (worth stating plainly).** Several
+mis-diagnoses this session all came from **reasoning about transforms instead of
+looking at the actual artifact**: a paragraph was called "missing" when it was merely
+scrolled; the `O(N*M)` fix inside badges initially **missed the bare `N * M` in
+prose**; and it took several rounds to realize the lost bullet formatting came from a
+prompt rewrite, not the renderer. The discipline that resolved it: when a visual/
+output regression is reported, **get the before/after artifact and diff it
+element-by-element before theorizing.**
+
+**The scope-the-prompt-edit lesson.** R1's actual job was a **two-value** change
+(swap the concrete example Big-O for placeholders). The first attempt instead
+**rewrote the whole `CHECK_APPROACH` section's structure and tone**, which silently
+dropped the bulleted "Where the cost comes from" format the model mirrors — because
+in a **few-shot prompt the model mirrors the example's *structure***, so changing the
+example structure changes the output structure. The fix was to **restore the original
+example verbatim and change only the leak-prone values**; a guard test now pins that
+the breakdown stays bulleted with inline `O()` + backtick code refs.
+
+**Index/registry bookkeeping (in `034f2ce`).** Registry rows set to **B13 ✅**,
+**B15 ✅**, **B14 🏗️ partial**, **R4 🏗️ partial**, **B16 🏗️ partial** (new row),
+with the correctness instability explicitly routed to the eval (E10), not B10. New
+E6 `design.md` added; specs index + `PRE-LAUNCH-ROADMAP.md` updated. Pre-commit
+husky/eslint **caught 2 lint errors** the first pass introduced (an intentional
+control-char-regex sentinel needing an `eslint-disable`, and an unused test param);
+both fixed before the commit landed — the automated guard doing its job.
+
+**Interview angles.** (1) **Built, measured, removed** — the R3 revert: temporary
+diagnostics proved a planned "root fix" no-oped in the common case and only added
+risk, so it was deleted; a valid, honest engineering outcome, not a failure.
+(2) **Diagnose by looking, not reasoning** — several formatting mis-diagnoses traced
+to theorizing instead of diffing the real artifact against the user's known-good
+reference. (3) **Few-shot prompts are structural contracts** — the model mirrors the
+example's *shape*, so a "small" prompt rewrite silently changed output structure; the
+fix is surgical (change values, not structure) and guarded by a test. (4) **One
+symptom, four distinct bugs** — distinguishing example-bleed vs. intra-message vs.
+cross-message vs. model-wrongness, and refusing to mislabel them as one. (5)
+**Honest scoping under a product constraint** — marking B14/R4/B16 "partial" and
+routing *correctness* to a named future eval instead of claiming the instability
+fixed. (6) **Green build ≠ correct for LLM/DOM features** — 387 passing tests saw
+none of these; only dogfooding on a real problem did, which is the core argument for
+the deferred correctness eval.
+
+**Verification.** `npm.cmd run build` compiles; `npm.cmd run test` **387 passing**;
+`npm.cmd run lint` **0 errors** (1 pre-existing `App.tsx` ~line 205 exhaustive-deps
+warning, not introduced this batch). The PowerShell wrapper garbles chained/piped
+commands, so build/test output was captured to a temp file and read, then deleted —
+per the documented build gotcha in `tech.md`. **Honesty caveat (B15):** the
+discriminated-status reader is unit-verified; the registry notes the live-confirm as
+"pending."
+
+**Deferred / NOT built (so the docs don't overstate).** **B10** (pin one canonical
+optimal per problem across messages) — next batch, same branch; R3's groundwork
+notwithstanding, explicitly not attempted here. **B8, B9** — carried-over registry
+bugs, later batch. The **E6 vuln-scan checklist** (`npm audit`, CSP re-verify,
+`host_permissions` breadth, `innerHTML` re-verify, BYOK posture) — later batch.
+**E10/E10b correctness eval** — deferred until E6 lands; it is the real home for "is
+the Big-O actually correct." **The run-to-run complexity instability remains OPEN.**
+
+**Commit (branch `feature/e6-bug-hardening`, off `main`; local — NOT pushed/merged).**
+`034f2ce` (E6 batch 1: harden "Analyze my code" — capture, formatting, prompt fixes —
+`code-extractor.ts` + its new test, `ContentDisplay.tsx`, `complexity-parse.ts` + its
+test, `prompts.ts` + its test, `chat-tools.ts`, `App.tsx`; E6 `design.md`, registry
+rows, specs index, `PRE-LAUNCH-ROADMAP.md`).
+
+---
+
 ## Next up (see [LEARNING_ROADMAP.md](./LEARNING_ROADMAP.md))
 
 1. ~~**Structured output** — the backbone~~ — **DONE (2026-09-03)**; the report is

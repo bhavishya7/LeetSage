@@ -1355,6 +1355,82 @@ complexity and documented the deviation," which is stronger than pretending ever
 change got a full trilogy. Pairs with the E9 answer in "working with AI agents" where
 the *opposite* call was right (a big agentic feature that earned the full trilogy).
 
+### "Tell me about a time you built something and then threw it away." ⭐
+
+**Answer.** During a bug-hardening pass on my "Analyze my code" feature, the design
+I'd written proposed a "root fix" for a formatting bug: render the complexity badge
+from the model's **structured JSON** (`AnalyzeData`) instead of from the re-parsed
+prose, so the badge would be authoritative. I built it. Then — rather than trust the
+plan — I instrumented the render pipeline with temporary console diagnostics to
+actually *see* the strings flowing through, and the data killed the idea three ways:
+in the common case the structured value and the prose value were **identical**, so
+the change **no-oped almost every time**; it introduced real **render risk** (it was
+implicated in a formatting regression I was chasing); and it **couldn't fix the bug I
+cared about** — the model's complexity *drifting* — because when the model drifts, its
+JSON drifts with the prose, so they'd just agree on the wrong answer. So I **reverted
+it**, kept only the small, provably-useful part of the change (the actual
+asterisk-formatting fix), and deferred the structured-badge idea to the feature where
+it might actually pay off. The diagnostics came out before the commit.
+
+**Signal.** "Built, measured, removed" is a *valid* outcome, not a failure — and
+instrumenting to turn a guess into a measurement is what makes the removal defensible
+rather than a gut call. I'd rather delete a plausible-sounding change that measures as
+a no-op-plus-risk than ship it because it was in the design doc. It also shows I don't
+treat my own written plan as binding when evidence contradicts it.
+
+### "An LLM gave the wrong answer. Walk me through how you found the real cause — and how you knew it was one bug and not several." ⭐
+
+**Answer.** My "Analyze my code" action kept reporting **`O(N)`** for a problem whose
+verified-correct complexity is **`O(N·M)`**, and it flip-flopped run to run. The
+tempting move is to call it "the model is bad at Big-O" and move on. Instead I pulled
+the symptom apart into **four distinct failure modes that look identical from the
+outside**: (1) **example-bleed** — my prompt hardcoded a Two-Sum example with `O(N)`
+in it, and a cheap model was *parroting the example's value* instead of computing from
+the user's code; (2) an **intra-message** contradiction — within one reply, the
+headline `O(N*M + C)` disagreed with its own per-operation bullet `O(C*N*M)`; (3) a
+**cross-message** drift — the "optimal" wandering between replies in the same session;
+and (4) the residual — **the model just being wrong/unstable** even with a clean
+prompt. Each has a different fix and a different owner: (1) and (2) are prompt fixes
+(remove the answerable example → non-answerable placeholders + "compute, don't copy";
+compute the bullets first and reconcile the headline to them); (3) needs a *single
+source of truth* pinned per problem; and (4) is a **correctness-eval** problem, and
+possibly a stronger-model decision. I shipped the prompt fixes, marked them explicitly
+**partial**, and routed the correctness question to a named future eval — and I caught
+and corrected a **mislabel** where the cross-message-drift fix was being treated as
+the fix for the intra-message contradiction. No prompt turns a cheap model into a
+reliable complexity theorist, so I didn't claim the instability was fixed.
+
+**Signal.** With non-deterministic LLM output, "the model is wrong" is a *category*,
+not a diagnosis — the engineering is in decomposing one symptom into its distinct
+mechanisms, fixing the ones you can fix cheaply, and being honest that the residual
+needs a measurement harness, not another prompt tweak. Refusing to let four bugs wear
+one label (and catching myself when I almost did) is the actual skill.
+
+### "You edited a prompt and the output format silently broke. What happened, and what's the discipline?" ⭐
+
+**Answer.** The task was a **two-value** change: swap a hardcoded example Big-O for
+non-answerable placeholders so the model would stop parroting it. My first attempt
+over-reached and **rewrote the whole prompt section's structure and tone** — and that
+silently dropped the bulleted "where the cost comes from" breakdown the output was
+supposed to have. The root cause is a property of **few-shot prompting**: the model
+mirrors the *structure* of the example you give it, so changing the example's shape
+changes the output's shape, even when you only meant to change a value. The fix was to
+**restore the original example verbatim and change only the leak-prone values**, and
+then **pin the format with a guard test** that asserts the breakdown stays bulleted
+with inline `O()` and backtick code references, so a future "small" prompt edit can't
+quietly regress the structure again. A parallel discipline from the same session:
+when a *visual/output* regression is reported, I now diff the actual before/after
+artifact element-by-element instead of reasoning about what my transforms "should"
+do — I'd mis-called a paragraph "missing" when it was merely scrolled, and "fixed"
+`O(N*M)` inside badges while missing a bare `N * M` in prose, both because I theorized
+instead of looked.
+
+**Signal.** I treat a prompt as a **structural contract**, not free text — a few-shot
+example's shape is load-bearing, so prompt edits get scoped as surgically as code
+edits and pinned with a test. And I diagnose output bugs by **looking at the real
+artifact**, not by reasoning about the pipeline, because the two disagree more often
+than you'd expect.
+
 ---
 
 ## Behavioral / judgment questions
