@@ -13,6 +13,19 @@ import { getUsageToday } from '../services/rate-limiter';
  * (the endpoint may not honor `stream_options.include_usage`), the token/cost
  * rows say so instead of showing a fabricated number.
  */
+
+/**
+ * B17: the user-facing cost caption. Exported so it can be asserted in a node
+ * test (the component itself is JSX and the test env is DOM-free). It must NOT
+ * leak an internal file name (the old copy said "see metrics-pricing.ts") and
+ * must state plainly that a free-tier user is NOT billed — a 429 rejects, it
+ * never charges (see DESIGN_DECISIONS ADR-007). The number is a
+ * token-efficiency estimate at public pay-as-you-go rates, not a bill.
+ */
+export const COST_CAPTION =
+  'Local only. You run on your own free Gemini quota, so you are not charged — ' +
+  'this figure is just a token-efficiency estimate at public pay-as-you-go rates, not a bill.';
+
 const StatsPanel: React.FC<{ maxRequestsPerDay?: number }> = ({ maxRequestsPerDay }) => {
   const [summary, setSummary] = useState<MetricsSummary | null>(null);
   // E9: the exact daily usage count moved here from the header (R11.3). The
@@ -82,8 +95,7 @@ const StatsPanel: React.FC<{ maxRequestsPerDay?: number }> = ({ maxRequestsPerDa
         </p>
       )}
       <p className="text-neutral-400 text-[10px] mt-1 leading-snug">
-        Local only. Cost is an estimate from public per-token pricing (see
-        metrics-pricing.ts) — you run on your own free quota.
+        {COST_CAPTION}
       </p>
     </div>
   );
