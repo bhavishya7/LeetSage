@@ -230,15 +230,33 @@ const App: React.FC = () => {
       return;
     }
 
-    // For Check Approach: read the user's current editor code first so the
-    // analysis is grounded in what they've actually written.
+    // For code-aware actions: read the user's current editor code first so the
+    // analysis is grounded in what they've actually written. R2/B15: the read
+    // now returns a discriminated ok | empty | failed status so we never send a
+    // partial scrape or treat a failed read as "empty".
     let userCode: string | undefined;
     let codeLanguage: string | undefined;
+    let codeReadStatus: 'ok' | 'empty' | 'failed' | undefined;
     if (actionType === 'CHECK_APPROACH' || actionType === 'UNDERSTAND_SOLUTION' || actionType === 'GENERATE_REPORT') {
       const tabId = await getActiveLeetCodeTabId();
       if (tabId != null) {
         const extracted = await extractCurrentCode(tabId);
-        if (extracted) { userCode = extracted.code; codeLanguage = extracted.language; }
+        codeReadStatus = extracted.status;
+        if (extracted.status === 'ok') { userCode = extracted.code; codeLanguage = extracted.language; }
+      } else {
+        codeReadStatus = 'failed';
+      }
+
+      // CHECK_APPROACH ("Analyze my code") is ONLY meaningful with the user's
+      // actual, fully-captured code. If the read failed, refuse to run a generic
+      // analysis (the old behavior silently analyzed as if the editor were
+      // empty, producing confident-but-wrong advice). Surface an honest error so
+      // the user can retry. UNDERSTAND_SOLUTION / GENERATE_REPORT can still
+      // proceed without code (they explain/record the optimal), so only
+      // CHECK_APPROACH hard-stops here.
+      if (actionType === 'CHECK_APPROACH' && codeReadStatus === 'failed') {
+        setError("Couldn't read your editor code. Make sure you're on the problem's Code tab, then try again.");
+        return;
       }
     }
 
@@ -352,7 +370,11 @@ const App: React.FC = () => {
       const tabId = await getActiveLeetCodeTabId();
       if (tabId != null) {
         const extracted = await extractCurrentCode(tabId);
-        if (extracted && extracted.code.trim().length > 0) {
+        // Only attach code on a trustworthy full read. On empty/failed we send
+        // no code — the agent loop can call getEditorCode as a fallback, and the
+        // chat prompt handles "no code present" gracefully. We never pass a
+        // partial fragment (R2/B15).
+        if (extracted.status === 'ok') {
           userCode = extracted.code;
           codeLanguage = extracted.language;
         }
@@ -482,7 +504,7 @@ const App: React.FC = () => {
       const tabId = await getActiveLeetCodeTabId();
       if (tabId != null) {
         const extracted = await extractCurrentCode(tabId);
-        language = extracted?.language;
+        if (extracted.status === 'ok') language = extracted.language;
       }
       const projection = buildRecordProjection(facts, reportData, item.content, language);
       await saveAttempt({

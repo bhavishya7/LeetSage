@@ -3,7 +3,7 @@ import type { LearningContent } from '../types';
 import { isSolutionExemptAction } from '../services/solution-filter';
 import ThinkingIndicator from './ThinkingIndicator';
 import { thinkingLabel } from './thinking-labels';
-import { splitComplexity } from './complexity-parse';
+import { splitComplexity, formatComplexityInner, maskComplexity, COMPLEXITY_SENTINEL_RE } from './complexity-parse';
 import WelcomeCard from './WelcomeCard';
 
 interface ContentDisplayProps {
@@ -62,10 +62,10 @@ function renderComplexity(text: string, keyBase: number): React.ReactNode[] {
   const segments = splitComplexity(text);
   const parts: React.ReactNode[] = segments.map((seg, i) => {
     if (seg.kind === 'text') return <React.Fragment key={`t-${keyBase}-${i}`}>{seg.value}</React.Fragment>;
-    // Convert ^2 -> superscript, uppercase N for consistency.
-    const formatted = seg.inner
-      .replace(/\^(\d+)/g, '⁰¹²³⁴⁵⁶⁷⁸⁹'.includes('') ? '$1' : '^$1') // fallback
-      .replace(/n/g, 'N');
+    // Normalize the inner text: uppercase standalone variables (n→N, m→M)
+    // WITHOUT corrupting words like min/log (B13 sibling fix lives in
+    // formatComplexityInner), then superscript ^2/N2 forms.
+    const formatted = formatComplexityInner(seg.inner);
     const superscripted = formatSuperscripts(formatted);
     return (
       <span key={`complexity-${keyBase}-${seg.at}`}
@@ -91,15 +91,46 @@ function formatSuperscripts(text: string): React.ReactNode {
   });
 }
 
+/**
+ * Renders a plain-text run that may contain masked complexity sentinels. Splits
+ * on the sentinel, rendering the complexity tokens as badges and the rest as
+ * text. This is the "restore" half of the B13 mask/restore: by the time we get
+ * here, markdown emphasis has already been applied to the MASKED text, so the
+ * `*` inside an `O(N*M)` was never exposed to the emphasis split.
+ */
+function renderMaskedText(part: string, tokens: string[], keyBase: number): React.ReactNode {
+  if (!part.includes('\u0000CX')) return <React.Fragment key={keyBase}>{part}</React.Fragment>;
+  const pieces = part.split(COMPLEXITY_SENTINEL_RE);
+  // split with one capture group yields: [text, idx, text, idx, text, ...]
+  return pieces.map((piece, i) => {
+    if (i % 2 === 1) {
+      const token = tokens[Number(piece)] ?? '';
+      return <React.Fragment key={`${keyBase}-cx-${i}`}>{renderComplexity(token, keyBase * 100 + i)}</React.Fragment>;
+    }
+    return <React.Fragment key={`${keyBase}-tx-${i}`}>{piece}</React.Fragment>;
+  });
+}
+
 function renderInline(raw: string): React.ReactNode {
   const text = stripLatex(raw);
-  // Split on markdown inline formatting first.
-  return text.split(/(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g).map((part, i) => {
-    if (part.startsWith('**') && part.endsWith('**')) return <strong key={i} className="font-semibold text-neutral-900 dark:text-white">{part.slice(2, -2)}</strong>;
+  // B13: the markdown emphasis split used to also treat a SINGLE `*…*` as
+  // italic. That ate the asterisks in complexity/multiplication expressions —
+  // both inside a badge (`O(N*M)`) and in plain prose (`…total characters, N *
+  // M. The next loop…`), where two stray `*` on a line got paired into a bogus
+  // italic run. The model is instructed to write plain text (no markdown
+  // italic) and nothing in our prompts asks for single-`*` emphasis, so we only
+  // honor `**bold**` and `` `code` `` and leave every other `*` literal.
+  //
+  // We still MASK each O(...) group to a sentinel before the split so the badge
+  // renderer receives a clean token (and a `**` that happens to border a
+  // complexity can't swallow it); the sentinel carries no `*`.
+  const { masked, tokens } = maskComplexity(text);
+  return masked.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**')) return <strong key={i} className="font-semibold text-neutral-900 dark:text-white">{renderMaskedText(part.slice(2, -2), tokens, i)}</strong>;
     if (part.startsWith('`') && part.endsWith('`')) return <code key={i} className="bg-neutral-200 dark:bg-neutral-700 text-pink-600 dark:text-pink-300 px-1 rounded font-mono text-[12px] break-words">{part.slice(1, -1)}</code>;
-    if (part.startsWith('*') && part.endsWith('*')) return <em key={i}>{part.slice(1, -1)}</em>;
-    // For plain text, render complexity notation with nice formatting.
-    return <React.Fragment key={i}>{renderComplexity(part, i)}</React.Fragment>;
+    // Plain-text run: restore any masked complexity tokens as badges. Bare `*`
+    // in prose (e.g. "N * M") is left exactly as written.
+    return <React.Fragment key={i}>{renderMaskedText(part, tokens, i)}</React.Fragment>;
   });
 }
 

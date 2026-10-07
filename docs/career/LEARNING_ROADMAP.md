@@ -670,11 +670,32 @@ is exactly the GenAI system-design interview. Rehearse it either way — it's in
     (design §10):** a zero-token client-side "capabilities" answer. **Loose end:**
     B11/B12 still need rows in the guardrail-hardening bug registry. Tests
     **329 → 344** (26 files).
-    **Now next: E10** (eval framework for the router/agent) → **E6** (hardening) →
-    **E5** (docs-removal decision) → **E7** (scope extension permissions —
-    intentionally LAST) → **E8** (deploy). Also still open from earlier: the Tier-1.5
-    eval follow-up (#3a — real captured cases + a validated judge) and
-    progress-tracking Phase D (verified submissions). **B8** still deferred; the
+14. **E6 — bug-hardening, batch 1** — **BUILT, PENDING REVIEW (2026-10-06)** on the
+    standing branch `feature/e6-bug-hardening` (commit `034f2ce`, off `main`; **local
+    — NOT pushed/merged**, the user merges per completed fix). Scoped to the
+    **"Analyze my code" (`CHECK_APPROACH`)** path, dogfooded on "Encode and Decode
+    Strings". **Closed: B13 ✅** (markdown parser no longer eats `*` in `O(N*M)` /
+    bare `N * M`; `renderInline` honors only `**bold**`/`` `code` ``, `O(...)` masked
+    before the emphasis split, `formatComplexityInner` fixes the `O(min)`→`O(miN)`
+    over-replace) and **B15 ✅** (reliable code capture — full Monaco model value is
+    the only analyzed source, DOM demoted to a liveness signal, retry/backoff,
+    discriminated `{status:'ok'|'empty'|'failed'}`, honest-stop on a failed read).
+    **Partial: B14/R4/B16 🏗️** (prompt example-bleed → non-answerable `O(<time>)`
+    placeholders + "COMPUTE, DON'T COPY"; a `Variables:` line so no bare undefined
+    symbol; an intra-message headline-matches-breakdown reconcile rule) — **the
+    run-to-run `O(N)`↔`O(N·M)` correctness instability is explicitly NOT fixed**,
+    routed to the deferred correctness eval **E10** (and *not* B10 — a mislabel we
+    caught and corrected). The design's **R3** structured-`AnalyzeData` badge "root
+    fix" was **built, measured as a no-op in the common case, and reverted** (it can't
+    fix drift since the JSON drifts too; structured-driven badge deferred to B10).
+    Tests **344 → 387**, build clean, lint 0 (1 pre-existing warning). **Carries to
+    later batches:** B10 (pin a canonical optimal per problem — next), B8/B9, and a
+    vuln-scan pass (`npm audit`, CSP, `host_permissions`, `innerHTML`, BYOK). See #3.9.
+    **Now next: finish E6** (B10 → B8/B9 → vuln-scan) → **E10** (correctness eval,
+    the real home for "is the Big-O correct") → **E5** (docs-removal decision) →
+    **E7** (scope extension permissions — intentionally LAST) → **E8** (deploy). Also
+    still open from earlier: the Tier-1.5 eval follow-up (#3a — real captured cases +
+    a validated judge) and progress-tracking Phase D (verified submissions). The
     "open on LeetCode" link is a documented future (its URL is already validated).
 
 At each step, backfill numbers into [RESUME.md](./RESUME.md) and new Q&A into
