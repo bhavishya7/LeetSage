@@ -119,6 +119,55 @@ describe('buildSessionDigest', () => {
     );
     expect(digest).toContain('Asked 1 free-form question');
   });
+
+  // B10 — the digest must emit ONE reconciled optimal line, never two
+  // conflicting ones (an analysis' optimal AND an understanding's optimal).
+  describe('B10 — single reconciled optimal line', () => {
+    it('emits exactly one "optimal" line (not a per-analysis + per-understanding pair)', () => {
+      const digest = buildSessionDigest(
+        [
+          content('CHECK_APPROACH', { structured: analyze({ optimalComplexity: { time: 'O(n)', space: 'O(n)' } }) }),
+          content('UNDERSTAND_SOLUTION', { structured: understand({ optimalComplexity: { time: 'O(n log n)', space: 'O(1)' } }) }),
+        ],
+        progress(0),
+      );
+      // Match lines that state an optimal COMPLEXITY VALUE (not the "optimal
+      // path" phrase on the analysis line). Exactly one — the reconciled line.
+      const optimalLines = digest.split('\n').filter((l) => /optimal complexity/i.test(l));
+      expect(optimalLines).toHaveLength(1);
+      expect(optimalLines[0]).toContain('Canonical optimal');
+    });
+
+    it('prefers the PINNED optimal over the analysis/understanding values', () => {
+      const digest = buildSessionDigest(
+        [content('CHECK_APPROACH', { structured: analyze({ optimalComplexity: { time: 'O(n)', space: 'O(n)' } }) })],
+        progress(0),
+        { time: 'O(N*M)', space: 'O(N*M)' }, // the pin
+      );
+      expect(digest).toContain('Canonical optimal complexity for this problem: O(N*M) time / O(N*M) space');
+      // The drifted O(n) is NOT presented as the optimal.
+      expect(digest).not.toMatch(/optimal.*O\(n\) time \/ O\(n\) space/i);
+    });
+
+    it('the analysis line still reports the CURRENT (achieved) complexity, which is not pinned', () => {
+      const digest = buildSessionDigest(
+        [content('CHECK_APPROACH', { structured: analyze({ currentComplexity: { time: 'O(n^2)', space: 'O(1)' } }) })],
+        progress(0),
+        { time: 'O(N*M)', space: 'O(N*M)' },
+      );
+      // Current is reported from the analysis; optimal is the pin — they differ.
+      expect(digest).toContain('O(n^2) time / O(1) space');
+      expect(digest).toContain('Canonical optimal complexity for this problem: O(N*M)');
+    });
+
+    it('falls back to the latest understanding, then analysis, when no pin is given', () => {
+      const digest = buildSessionDigest(
+        [content('UNDERSTAND_SOLUTION', { structured: understand({ optimalComplexity: { time: 'O(V+E)', space: 'O(V)' } }) })],
+        progress(0),
+      );
+      expect(digest).toContain('Canonical optimal complexity for this problem: O(V+E) time / O(V) space');
+    });
+  });
 });
 
 describe('extractSessionFacts', () => {

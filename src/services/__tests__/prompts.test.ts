@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildUserMessage, wrapUntrusted, formatProblemContext, getChatSystemPrompt, getSystemPrompt, getChatAgentSystemPrompt, wrapToolResult } from '../prompts';
-import type { ActionType, ProblemContext } from '../../types';
+import { buildUserMessage, wrapUntrusted, formatProblemContext, getChatSystemPrompt, getSystemPrompt, getChatAgentSystemPrompt, wrapToolResult, pinnedOptimalConstraint } from '../prompts';
+import type { ActionType, ProblemContext, Complexity } from '../../types';
 
 /**
  * Prompt-injection hardening tests (see .kiro/specs/leetsage-prompt-injection).
@@ -356,5 +356,73 @@ describe('getSystemPrompt(CHECK_APPROACH) — no answerable example Big-O (R1/B1
     const dataBlock = prompt.slice(dataStart, dataStart + 600);
     expect(dataBlock).toContain('O(<time>)');
     expect(dataBlock).not.toMatch(/O\(N\^2\)/);
+  });
+});
+
+/**
+ * B10 — pinned canonical optimal + reasoning levers
+ * (see .kiro/specs/leetsage-e6-bug-hardening §3b).
+ *
+ * The pinned optimal is injected as a HARD constraint so the model stops
+ * re-guessing the optimal; CHECK_APPROACH/GENERATE_REPORT carry it, but
+ * UNDERSTAND_SOLUTION (the canonical authority) does NOT (it may re-pin).
+ * Lever 1 (hidden chain-of-thought) + Lever 3 (variables from constraints)
+ * ride on the complexity-bearing prompts.
+ */
+const PIN: Complexity = { time: 'O(N*M)', space: 'O(N*M)' };
+
+describe('pinnedOptimalConstraint (B10)', () => {
+  it('formats the pin as an authoritative, do-not-recompute instruction', () => {
+    const line = pinnedOptimalConstraint(PIN);
+    expect(line).toContain('O(N*M) time / O(N*M) space');
+    expect(line.toLowerCase()).toContain('do not recompute');
+    expect(line.toLowerCase()).toContain('canonical optimal');
+  });
+  it('is empty when there is no pin (model computes, then it gets pinned)', () => {
+    expect(pinnedOptimalConstraint(undefined)).toBe('');
+    expect(pinnedOptimalConstraint({ time: '', space: '' })).toBe('');
+  });
+});
+
+describe('buildUserMessage — pinned optimal injection (B10)', () => {
+  const problem = INJECTED_PROBLEM;
+
+  it('CHECK_APPROACH carries the pinned optimal as a hard constraint', () => {
+    const msg = buildUserMessage('CHECK_APPROACH', problem, { userCode: 'x=1', codeLanguage: 'python', pinnedOptimal: PIN });
+    expect(msg).toContain('O(N*M) time / O(N*M) space');
+    expect(msg.toLowerCase()).toContain('do not recompute');
+  });
+
+  it('GENERATE_REPORT carries the pinned optimal', () => {
+    const msg = buildUserMessage('GENERATE_REPORT', problem, { userCode: 'x=1', codeLanguage: 'python', pinnedOptimal: PIN });
+    expect(msg).toContain('O(N*M) time / O(N*M) space');
+  });
+
+  it('UNDERSTAND_SOLUTION does NOT force the pin (it is the authority that re-pins)', () => {
+    const msg = buildUserMessage('UNDERSTAND_SOLUTION', problem, { userCode: 'x=1', codeLanguage: 'python', pinnedOptimal: PIN });
+    expect(msg.toLowerCase()).not.toContain('do not recompute');
+  });
+
+  it('CHECK_APPROACH with no pin omits the constraint (first run computes it)', () => {
+    const msg = buildUserMessage('CHECK_APPROACH', problem, { userCode: 'x=1', codeLanguage: 'python' });
+    expect(msg.toLowerCase()).not.toContain('do not recompute');
+  });
+});
+
+describe('complexity reasoning levers on the complexity-bearing prompts (B10)', () => {
+  for (const action of ['CHECK_APPROACH', 'UNDERSTAND_SOLUTION'] as ActionType[]) {
+    it(`${action} carries hidden chain-of-thought (Lever 1) + constraint-anchored variables (Lever 3)`, () => {
+      const p = getSystemPrompt(action);
+      expect(p).toContain('COMPLEXITY REASONING');
+      // Lever 1: reason step by step, but SILENTLY — never printed.
+      expect(p.toLowerCase()).toContain('reason step by step');
+      expect(p.toLowerCase()).toContain('do not print your reasoning');
+      // Lever 3: anchor variables to the stated constraints.
+      expect(p.toLowerCase()).toContain('constraints');
+    });
+  }
+
+  it('does not add the levers to non-complexity actions (e.g. GET_HINT)', () => {
+    expect(getSystemPrompt('GET_HINT')).not.toContain('COMPLEXITY REASONING');
   });
 });

@@ -20,6 +20,7 @@ import type { LearningContent, AnalyzeData, UnderstandData, ReportData, ProblemP
 export function buildSessionDigest(
   history: LearningContent[],
   progress: ProgressState | null,
+  pinnedOptimal?: Complexity | null,
 ): string {
   const lines: string[] = [];
 
@@ -39,11 +40,15 @@ export function buildSessionDigest(
     .map(c => c.metadata?.structured)
     .filter((d): d is AnalyzeData => !!d && 'approachDetected' in d);
   if (analyses.length > 0) {
+    // B10: the analysis line reports the user's CURRENT (achieved) complexity —
+    // which legitimately changes as they edit — but NOT a per-analysis "optimal",
+    // which is reconciled into ONE canonical line below so the digest can't carry
+    // two conflicting optimals.
     if (analyses.length === 1) {
       const a = analyses[0];
       lines.push(
         `- Analyzed their code once: approach was "${a.approachDetected}" at ` +
-        `${fmt(a.currentComplexity)}; optimal is ${fmt(a.optimalComplexity)}` +
+        `${fmt(a.currentComplexity)}` +
         `${a.onOptimalPath ? ' (they were on the optimal path)' : ' (not yet on the optimal path)'}.`,
       );
     } else {
@@ -51,8 +56,7 @@ export function buildSessionDigest(
       const last = analyses[analyses.length - 1];
       lines.push(
         `- Analyzed their code ${analyses.length} times — first attempt "${first.approachDetected}" at ` +
-        `${fmt(first.currentComplexity)}, latest "${last.approachDetected}" at ${fmt(last.currentComplexity)}; ` +
-        `optimal is ${fmt(last.optimalComplexity)}.`,
+        `${fmt(first.currentComplexity)}, latest "${last.approachDetected}" at ${fmt(last.currentComplexity)}.`,
       );
     }
     const issues = Array.from(new Set(analyses.flatMap(a => a.issues))).slice(0, 4);
@@ -67,12 +71,23 @@ export function buildSessionDigest(
     const u = understandings[understandings.length - 1];
     if (u.patterns.length > 0) lines.push(`- Pattern(s): ${u.patterns.join(', ')}.`);
     if (u.keyInsight) lines.push(`- Key insight covered: ${u.keyInsight}`);
-    lines.push(`- Optimal complexity discussed: ${fmt(u.optimalComplexity)}.`);
+    // (B10: the optimal is emitted ONCE below as the reconciled canonical line.)
   }
 
   // Free-form chat questions the user asked (count only — content is prose).
   const questions = history.filter(c => c.metadata?.isUserQuery).length;
   if (questions > 0) lines.push(`- Asked ${questions} free-form question${questions === 1 ? '' : 's'} during the session.`);
+
+  // B10: ONE reconciled canonical optimal line. Prefer the pinned value (the
+  // single source of truth for this problem); else fall back to the latest
+  // understanding's, then the latest analysis' optimal (same precedence as
+  // extractSessionFacts). This replaces the two formerly-conflicting lines.
+  if (lines.length > 0) {
+    const lastAnalysisOptimal = analyses.length ? analyses[analyses.length - 1].optimalComplexity : null;
+    const lastUnderstandOptimal = understandings.length ? understandings[understandings.length - 1].optimalComplexity : null;
+    const canonicalOptimal = pinnedOptimal ?? lastUnderstandOptimal ?? lastAnalysisOptimal;
+    if (canonicalOptimal) lines.push(`- Canonical optimal complexity for this problem: ${fmt(canonicalOptimal)}.`);
+  }
 
   if (lines.length === 0) return '';
 
