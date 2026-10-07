@@ -1,4 +1,4 @@
-import type { ActionType, ProblemContext } from './models';
+import type { ActionType, ProblemContext, Complexity } from './models';
 
 /** Gemini models exposed to the user (free-tier friendly). */
 export type GeminiModel = 'gemini-3.5-flash-lite' | 'gemini-3.5-flash';
@@ -29,6 +29,13 @@ export interface LLMRequest {
    * did (see session-digest.ts). Ignored by other actions.
    */
   sessionDigest?: string;
+  /**
+   * B10: the canonical pinned OPTIMAL complexity for this problem, injected as a
+   * hard constraint so the model stops re-guessing (and drifting on) the optimal
+   * between calls. Threaded into the templated action messages via
+   * buildUserMessage. Ignored when omitted. See services/complexity-pin.ts.
+   */
+  pinnedOptimal?: Complexity;
   /**
    * Optional callback invoked once with token usage if the API surfaces it.
    * On the streaming path this fires when the final usage-only chunk arrives

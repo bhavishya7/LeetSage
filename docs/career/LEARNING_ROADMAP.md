@@ -339,6 +339,60 @@ call" point. **Loose end to close:** the **B11/B12 entries still need rows in th
 guardrail-hardening bug registry** (noted "to follow" in the commit, not yet added).
 **Effort:** ~~Low–Medium~~ built, pending review.
 
+### 3.9. E6 — bug-hardening (standing pass, dogfood-driven)  🏗️ IN PROGRESS (batches 1–2 built 2026-10-06/07, PENDING REVIEW)
+
+**Spec:** `leetsage-e6-bug-hardening` (**design-only**, STANDING — a long-lived branch
+`feature/e6-bug-hardening` the user merges per completed fix). **Skill:** failure-mode
+decomposition on non-deterministic LLM output, single-source-of-truth design,
+cost-budget-driven architecture, honest scoping (stable ≠ correct), dogfooding
+discipline.
+
+**Batch 1 (2026-10-06, `034f2ce`) — the "Analyze my code" (`CHECK_APPROACH`) path**,
+dogfooded on "Encode and Decode Strings": **B13 ✅** complexity formatting no longer
+eaten by markdown, **B15 ✅** reliable Monaco code capture with a discriminated
+`ok|empty|failed` status, **B14/R4 🏗️ partial** prompt example-bleed (placeholders +
+"compute, don't copy" + a `**Variables:**` line), **B16 🏗️ partial** intra-message
+headline-vs-breakdown reconciled. The design's **R3** (structured-driven badge) was
+**built, measured, and reverted** (no-oped in the common case, added render risk,
+can't fix drift). Tests **344 → 387**.
+
+**Batch 2 (2026-10-07, `4b1af65` B10 + `c97e78b` B17) — the cross-message DRIFT fix +
+an honesty fix.** **B10 ✅** pins **one canonical OPTIMAL per problem** — a new
+schema-versioned store `src/services/complexity-pin.ts` keyed on the
+`/problems/{slug}/` slug, an authority rule as a pure `shouldRepin()` (first
+authoritative emission pins; `UNDERSTAND_SOLUTION` overrides and re-pins; a later
+`CHECK_APPROACH`/`GENERATE_REPORT` never overwrites — that stability IS the fix), fed
+back as a HARD prompt constraint on `CHECK_APPROACH`+`GENERATE_REPORT` (not
+`UNDERSTAND_SOLUTION`), the session digest reconciled from two conflicting optimal
+lines to ONE "Canonical optimal" line, and a clearable escape hatch via "Reset this
+problem" (no verifier exists — ADR-007). Two **cost-neutral reasoning levers** (hidden
+chain-of-thought + constraint-anchored variables) keep each action at **exactly +1
+request**; a stronger-model route was rejected. **The explicit honest limit:** B10
+makes the optimal **STABLE + self-consistent, NOT provably correct** — correctness is
+**E10**'s job, stated in code, the registry, and the docs. **B17 ✅** reworded the
+Session Stats cost caption (it leaked the internal file name `metrics-pricing.ts` and
+implied a bill; the free tier is never charged — a 429 rejects, never bills) and
+extracted it to an exported `COST_CAPTION` for test assertion. **New: B18** captured
+(NOT fixed) — a complexity follow-up about the user's own code misroutes to
+`TIME_COMPLEXITY_HINT` (no chat bubble + a generic card); a **routing** defect (the
+card was correct for the action it ran), deferred to a future intent-router pass.
+Tests **387 → 413** (29 files), build clean, lint 0.
+
+**Interview payoff.** (1) **Stable ≠ correct, said out loud** — B10 ships
+drift-stability and routes correctness to a named eval, a more credible claim than
+"fixed". (2) **"No source of truth" is itself a finding** — ADR-007's research proved
+no fetchable complexity exists anywhere, which *justifies* pinning the model's own
+answer. (3) **A self-imposed +1-request budget drove the architecture** — ruled out a
+verification pass / stronger model, ruled in hidden CoT. (4) **Dogfooding caught B18**
+that 413 green tests didn't. (5) **One symptom, four distinct bugs** — example-bleed
+(B14) vs. intra-message (B16) vs. cross-message drift (B10) vs. model-wrongness (E10).
+
+**Still in E6 (later batches, same branch):** **B8/B9** (carried registry bugs) and
+the **vuln-scan** pass (`npm audit`, CSP re-verify, `host_permissions` breadth,
+`innerHTML` re-verify, BYOK posture). **B18** is tracked for a future intent-router
+pass. **Effort:** Medium — in progress. See [DEV_JOURNAL.md](./DEV_JOURNAL.md)
+(2026-10-06, 2026-10-07) and `.kiro/specs/leetsage-e6-bug-hardening/design.md`.
+
 ---
 
 ## Tier 1.5 — Finish what the eval started (deferred from 2026-09-15)
@@ -689,14 +743,38 @@ is exactly the GenAI system-design interview. Rehearse it either way — it's in
     fix" was **built, measured as a no-op in the common case, and reverted** (it can't
     fix drift since the JSON drifts too; structured-driven badge deferred to B10).
     Tests **344 → 387**, build clean, lint 0 (1 pre-existing warning). **Carries to
-    later batches:** B10 (pin a canonical optimal per problem — next), B8/B9, and a
-    vuln-scan pass (`npm audit`, CSP, `host_permissions`, `innerHTML`, BYOK). See #3.9.
-    **Now next: finish E6** (B10 → B8/B9 → vuln-scan) → **E10** (correctness eval,
+    later batches:** B10 (pin a canonical optimal per problem — done in batch 2),
+    B8/B9, and a vuln-scan pass (`npm audit`, CSP, `host_permissions`, `innerHTML`,
+    BYOK). See #3.9.
+15. **E6 — bug-hardening, batch 2** — **BUILT, PENDING REVIEW (2026-10-07)** on the
+    standing branch `feature/e6-bug-hardening` (two commits `4b1af65` B10 + `c97e78b`
+    B17, off `main`; **local — NOT pushed/merged**). **B10 ✅ — THE drift fix:** pin
+    ONE canonical **optimal** per problem (new `complexity-pin.ts`, slug-keyed,
+    schema-versioned), an authority rule as a pure `shouldRepin()` (first authoritative
+    emission pins; `UNDERSTAND_SOLUTION` overrides; a later `CHECK_APPROACH`/
+    `GENERATE_REPORT` never overwrites), fed back as a HARD prompt constraint (NOT on
+    `UNDERSTAND_SOLUTION`), the session digest reconciled to ONE "Canonical optimal"
+    line, cleared by "Reset this problem". Two cost-neutral levers (hidden CoT +
+    constraint-anchored variables) hold each action at **exactly +1 request** (a
+    stronger-model route was rejected). **Honest limit:** stable + self-consistent,
+    **NOT provably correct** — correctness → E10 (stated in code/registry/docs).
+    **B17 ✅** honest, leak-free stats cost caption (dropped the internal
+    `metrics-pricing.ts` reference; the free tier is never billed — a 429 rejects;
+    exported `COST_CAPTION` for test assertion). **New: B18** captured (NOT fixed) — a
+    complexity follow-up about the user's own code misroutes to `TIME_COMPLEXITY_HINT`
+    (no chat bubble + a generic card); a **routing** defect (correct card, wrong
+    question), deferred to a future intent-router pass. Dogfooded on "Longest
+    Consecutive Sequence" — the drift is gone (Current/Optimal/Variables stayed stable
+    across repeated runs); 4 responses hand-verified correct (evidence, not a
+    guarantee — that's E10). Tests **387 → 413** (29 files), build clean, lint 0.
+    See #3.9.
+    **Now next: finish E6** (B8/B9 → vuln-scan) → **E10** (correctness eval,
     the real home for "is the Big-O correct") → **E5** (docs-removal decision) →
     **E7** (scope extension permissions — intentionally LAST) → **E8** (deploy). Also
-    still open from earlier: the Tier-1.5 eval follow-up (#3a — real captured cases +
-    a validated judge) and progress-tracking Phase D (verified submissions). The
-    "open on LeetCode" link is a documented future (its URL is already validated).
+    still open: **B18** (a future intent-router pass), the Tier-1.5 eval follow-up (#3a
+    — real captured cases + a validated judge) and progress-tracking Phase D (verified
+    submissions). The "open on LeetCode" link is a documented future (its URL is
+    already validated).
 
 At each step, backfill numbers into [RESUME.md](./RESUME.md) and new Q&A into
 [INTERVIEW_PREP.md](./INTERVIEW_PREP.md). The docs are living — grow them with the code.

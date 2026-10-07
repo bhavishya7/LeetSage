@@ -187,10 +187,115 @@ The bug today is that outcomes 2 and 3 are CONFLATED (a failed read looks like
 
 ## 3. Interaction with B10 (optimal drift) — sequence note
 
-R3 (structured-driven badge) is a PREREQUISITE enabler for **B10** (pin a single
-optimal per problem across messages): once the badge reads from structured data, the
-B10 fix can persist one canonical optimal keyed on the `/problems/{slug}/` URL and
-feed it back as a hard constraint. **Do R1–R4 first, then B10** in this same E6 pass.
+R3 was ORIGINALLY framed as a prerequisite enabler for B10 (render the badge from
+structured data, then pin that value). **Update (post-batch-1): R3's structured-
+driven badge was tried and REVERTED** — it no-oped when prose and JSON agree (the
+common case) and couldn't fix the drift because the structured JSON drifts too. So
+B10 does NOT depend on a structured-driven badge. B10 is now the PRIMARY fix for the
+run-to-run complexity instability (the open part of B14/R4/B16).
+
+---
+
+## 3b. B10 — pin ONE canonical complexity per problem (the real drift fix)
+
+**This is the next build (batch 2). It is what actually closes the O(N) ↔ O(N·M)
+run-to-run instability that batch 1 could only partially address.**
+
+### The problem (confirmed)
+`currentComplexity`/`optimalComplexity` are RE-GUESSED by the model on every call —
+each `CHECK_APPROACH` (and chat/report) is an independent request with no shared
+ground truth, so the value flip-flops between messages for the SAME problem. Batch 1
+removed the prompt example-bleed (necessary) but the model still drifts (not
+sufficient). There is no single source of truth today.
+
+### The design — persist-and-feed-back (prompt-level pin)
+The fix is NOT a render change; it is a **memory + prompt-constraint** change:
+1. **Persist the first authoritative complexity per problem**, keyed on the
+   normalized `/problems/{slug}/` URL (the SAME key session persistence and progress
+   records already use). Store BOTH `optimalComplexity` AND the model's assessment
+   of the user's `currentComplexity`? → **Decision: pin the OPTIMAL only.** The
+   optimal is a fixed property of the problem (stable, pinnable). The *current*
+   complexity legitimately CHANGES as the user edits their code, so it must stay
+   re-computed each call — pinning it would be wrong. (This resolves the "both looked
+   wrong" observation: optimal should be stable; current should track their code.)
+2. **Feed the pinned optimal back into every subsequent prompt** (CHECK_APPROACH,
+   UNDERSTAND_SOLUTION, the chat/agent path, GENERATE_REPORT) as a HARD constraint:
+   "The established optimal complexity for THIS problem is X (time) / Y (space). Use
+   exactly this as the optimal; do NOT recompute or contradict it. Assess the user's
+   CURRENT complexity against it." So the model stops re-guessing the optimal.
+3. **Authority rule — LOCKED: (b).** Pin on the first authoritative emission, but
+   **`UNDERSTAND_SOLUTION` can OVERRIDE and re-pin** (it's the action whose whole job
+   is the optimal — the canonical authority; a first `CHECK_APPROACH` guess must not
+   permanently outrank it).
+4. **Honesty / self-correction — LOCKED: clearable, session-scoped pin.** Since the
+   pin comes from a non-deterministic model with NO verifier (confirmed: no external
+   authoritative source exists — see note below), it can be WRONG:
+   - The pin is scoped to the **session/problem**, not a permanent global truth.
+   - **Ship a clearable escape hatch** so a wrong pin is never inescapable — at
+     minimum a "this looks off? / clear" affordance (and "Reset this problem" already
+     clears session state, so wire the pin into that too). Do NOT silently lock a
+     wrong optimal with no way out.
+   - Pinning makes the value STABLE and SELF-CONSISTENT across a session; being
+     *correct* is still the eval's job (E10). State this honestly — **B10 fixes
+     *drift*, not *correctness*.**
+
+### No external authoritative source (confirmed by research, 2026-10-06)
+There is **no machine-readable complexity to fetch** — not from LeetCode (its
+GraphQL has no `timeComplexity` field; complexity appears only as optional human
+prose in editorials/solutions; introspection is disabled; no official API) and not
+anywhere else. **Every tool in this space COMPUTES complexity from the code with an
+LLM** (even LeetCode's own AI, and the public complexity-analyzer tools). And
+complexity is often notation/definition-dependent (O(N·M) ≡ "O(N) where N = total
+chars"), so a single typed field couldn't be authoritative anyway. **Conclusion:**
+pinning the model's own first authoritative answer and letting the user correct it
+IS the right design given the landscape — not a workaround. Don't spend effort
+hunting for a source of truth; there isn't one.
+
+### Reasoning-quality levers (keep requests at +1 — LOCKED)
+Hard constraint: a predefined button press stays **exactly 1 request** against the
+200/day. Within that, two levers improve each (still-1-request) call's complexity
+reliability — BOTH approved for B10:
+- **Lever 1 — chain-of-thought (APPROVED, accept the latency tradeoff).** Make the
+  model reason through the cost derivation step-by-step (identify each loop/op, its
+  cost, how they combine) BEFORE committing to the headline. Biggest correctness
+  lever that respects "+1 request". **The reasoning MUST stay HIDDEN** (reasoned
+  internally / stripped from the displayed card — never dump it into the answer, and
+  it must not leak past the no-solutions guardrail). Cost: more tokens + **latency**
+  within the one request — NOT more requests, and (per ADR-007 clarification) NOT a
+  realistic TPM-quota threat for one-at-a-time usage. Watch the B5 "feels frozen"
+  lesson: the pre-display gate must still feel alive during the longer think.
+- **Lever 3 — anchor variables to the problem constraints (APPROVED, ~free).** Tell
+  the model to derive its complexity VARIABLES from the stated constraints (already
+  in the prompt context, e.g. `1 ≤ strs.length ≤ 200` → N; `strs[i].length ≤ 200`
+  → M). Tight addition to the existing R4 "Variables:" rule, not a new paragraph.
+  Grounds the definitions; ~zero extra tokens.
+- **NOT doing — Lever 2 (route to the stronger model):** rejected — raises token
+  cost even though requests stay +1; keep flash-lite the default.
+5. **Digest reconciliation (carried from the original B10 trace):** `buildSessionDigest`
+   can currently emit TWO conflicting optimal lines (latest analysis' vs. latest
+   understanding's). With a single pinned optimal, the digest must emit ONE
+   reconciled line (the pinned value). Fix this as part of B10.
+
+### Storage shape
+Small, keyed on slug. Options: a dedicated `complexity_pin_{slug}` key, OR extend the
+existing per-problem record/progress structure. **Lean: a small dedicated store** (it
+exists even before the user saves a progress record; a `CHECK_APPROACH` with no save
+should still pin). Keep it schema-versioned like the other stores.
+
+### Guards (tests)
+- A pinned optimal persists across calls for the same slug and is injected into each
+  action/chat prompt (assert the prompt carries the pinned value).
+- Two sequential analyses of the same problem return the SAME optimal (drift gone) —
+  the explicit regression test for this bug.
+- The CURRENT complexity is NOT pinned (still recomputed) — assert current can differ
+  across calls while optimal is stable.
+- The authority rule ((a) vs (b)) behaves as chosen.
+- Digest emits ONE reconciled optimal line.
+
+### What B10 does NOT do
+It does not make the complexity *correct* — a wrong-but-stable optimal is still
+possible and is the correctness eval's (E10) job. B10's win is: **stable, self-
+consistent, non-contradictory within a problem.** Say this honestly in the UI/docs.
 
 ---
 
@@ -202,6 +307,11 @@ feed it back as a hard constraint. **Do R1–R4 first, then B10** in this same E
   problem; see §3 and the roadmap). Do AFTER R1–R4.
 - **B9** — hallucinated section headers (client-side canonicalization) — candidate
   for this pass if cheap.
+- **B17** — stats-panel caption leaks the internal file name `metrics-pricing.ts`
+  into user-facing UI and misframes "cost" (free-tier users are never billed — a
+  429 rejects, never charges). Fix: drop the file reference; state the no-charge
+  reality honestly. UI text → user eyeballs. **Bundle with the B10 batch** (same
+  branch, tiny). See DESIGN_DECISIONS ADR-007 clarification (2026-10-06).
 
 (Plus the roadmap's broader E6 vulnerability-scan checklist — `npm audit`, CSP
 re-verify, `host_permissions` breadth, `innerHTML` re-verify, BYOK-key posture — as

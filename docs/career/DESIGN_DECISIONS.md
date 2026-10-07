@@ -233,6 +233,31 @@ demonstrate **cost-control thinking** — a theme interviewers probe directly
 editing storage — acceptable because the only person they'd hurt is themselves
 (their own key/quota). Server-side enforcement would need a backend.
 
+**Clarification (2026-10-06) — how the free tier ACTUALLY limits, and what "cost"
+means.** Researched while deciding whether a prompt change could push users past
+their quota. Key facts:
+- Gemini's free tier enforces **three simultaneous limits — RPM (requests/min),
+  RPD (requests/day), TPM (tokens/min)** — and exceeding **any one** triggers a
+  **429 error**. So our app's **200/day cap is self-imposed and NOT the user's true
+  ceiling**; the real ceiling is whichever of Google's RPM/RPD/TPM they hit first.
+  Google **stopped publishing** these numbers (they're per-project in AI Studio);
+  third-party trackers put flash-lite near ~500 RPD. We can't read a user's live
+  limit from the API, which is why we can't display it — we only learn it reactively
+  via a 429.
+- **On the free tier the user is NEVER billed.** Hitting a limit = the request is
+  **rejected (429)**, never silently billed. Money is only possible if the user has
+  deliberately **linked a billing account** (paid tier). So the Stats panel's "Est.
+  cost" is **$0 in reality for the typical user** — it's a *token-efficiency*
+  estimate at public pay-as-you-go rates ("what this would cost if you paid"), NOT a
+  bill. (Caption corrected for honesty + the leaked `metrics-pricing.ts` internal
+  file reference removed — bug **B17**, E6.)
+- **Practical take for this app:** at ~1,500–2,300 tokens/request and
+  one-analysis-at-a-time usage, **TPM is almost never the binding limit** — RPM
+  (bursting) or RPD is. So a prompt change that adds reasoning tokens within a single
+  request (chain-of-thought) does **not** realistically threaten a free user's token
+  quota; its real cost is **latency**, not quota. This is why CoT (B10, lever 1) was
+  acceptable under the hard "+1 request per button" constraint.
+
 ---
 
 ## ADR-008 — Model tiering (Flash-Lite default, Flash optional)

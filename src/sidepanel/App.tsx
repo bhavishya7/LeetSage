@@ -15,6 +15,7 @@ import { extractCurrentCode } from '../services/code-extractor';
 import { parseStructuredResponse, stripDataBlockForDisplay } from '../services/structured-parser';
 import { buildSessionDigest, extractSessionFacts, buildRecordProjection } from '../services/session-digest';
 import { saveAttempt, slugFromUrl } from '../services/progress-records';
+import { getComplexityPin, recordOptimalPin, clearComplexityPin } from '../services/complexity-pin';
 import { routeMessage } from '../services/intent-router';
 import ConfirmAffordance from '../components/ConfirmAffordance';
 import UsageReservoir from '../components/UsageReservoir';
@@ -260,11 +261,21 @@ const App: React.FC = () => {
       }
     }
 
+    // B10: read the canonical pinned optimal for this problem (if any). It is
+    // fed into the prompt as a hard constraint so the model stops re-guessing
+    // (and drifting on) the optimal. UNDERSTAND_SOLUTION is the canonical
+    // authority and may OVERRIDE the pin, so we do NOT constrain it with the
+    // existing pin (buildUserMessage's UNDERSTAND_SOLUTION case ignores it); we
+    // still re-pin from whatever it emits below. See services/complexity-pin.ts.
+    const existingPin = await getComplexityPin(slugFromUrl(problemContext.url));
+    const pinnedOptimal = actionType === 'UNDERSTAND_SOLUTION' ? undefined : existingPin?.optimal;
+
     // For the report, assemble a deterministic digest of the session's
     // structured activity so the report reflects what the user actually did
-    // rather than a generic writeup (see session-digest.ts).
+    // rather than a generic writeup (see session-digest.ts). B10: feed the
+    // pinned optimal so the digest emits ONE reconciled optimal line.
     const sessionDigest = actionType === 'GENERATE_REPORT'
-      ? buildSessionDigest(learningContentRef.current, progress)
+      ? buildSessionDigest(learningContentRef.current, progress, existingPin?.optimal)
       : undefined;
 
     setIsLoading(true); setError(null);
@@ -298,7 +309,7 @@ const App: React.FC = () => {
         problemContext, actionType, systemPrompt: '', userMessage: '',
         apiKey: settings.apiConfig.apiKey, model: settings.apiConfig.model,
         maxTokens: settings.guardrails.maxTokens, timeoutMs: settings.guardrails.requestTimeoutMs,
-        previousHintLevel: progress?.hintLevel ?? 0, userApproach, userCode, codeLanguage, sessionDigest,
+        previousHintLevel: progress?.hintLevel ?? 0, userApproach, userCode, codeLanguage, sessionDigest, pinnedOptimal,
         onUsage: (u) => { capturedUsage = u; },
       })) {
         fullContent += chunk;
@@ -335,6 +346,12 @@ const App: React.FC = () => {
       const updatedProgress = await trackAction(problemContext.url, actionType);
       setProgress(updatedProgress);
       await appendContent(problemContext.url, finalContent);
+      // B10: pin the canonical optimal from this action's structured data,
+      // applying the authority rule (first emission pins; UNDERSTAND_SOLUTION
+      // overrides). Best-effort — a pin write must never break the action.
+      if (data && 'optimalComplexity' in data) {
+        await recordOptimalPin(problemContext.url, data.optimalComplexity, actionType).catch(() => { /* pin is non-critical */ });
+      }
       stuckTimerRef.current?.start({ difficulty: problemContext.difficulty, hintsExhausted: updatedProgress.hintLevel >= 3 });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong');
@@ -404,12 +421,20 @@ const App: React.FC = () => {
       // bounded conversation window (short-term "what was just said", R4), both
       // read from learningContentRef so they're never the stale useCallback
       // closure. The live question stays OUTSIDE the fence as the instruction.
-      const digest = buildSessionDigest(learningContentRef.current, progress);
+      // B10: fold the canonical pinned optimal into the chat context (both the
+      // digest's reconciled line and an explicit constraint line) so the agent
+      // answers complexity questions against the SAME fixed optimal as the
+      // actions, not a fresh re-guess.
+      const chatPin = (await getComplexityPin(slugFromUrl(problemContext.url)))?.optimal;
+      const digest = buildSessionDigest(learningContentRef.current, progress, chatPin);
       const window = buildConversationWindow(learningContentRef.current);
+      const pinLine = chatPin
+        ? `ESTABLISHED OPTIMAL (authoritative for this problem — do not recompute): ${chatPin.time} time / ${chatPin.space} space.`
+        : '';
       const dataBlock = [buildChatData({
         problemContext, actionType: 'EXPLAIN_CONCEPT', systemPrompt: '', userMessage: '',
         apiKey: '', userQuery: q, userCode, codeLanguage,
-      }), digest, window].filter(Boolean).join('\n\n');
+      }), pinLine, digest, window].filter(Boolean).join('\n\n');
       const initialMessages: Array<Record<string, unknown>> = [
         { role: 'system', content: getChatAgentSystemPrompt(!!userCode) },
         { role: 'user', content: wrapUntrusted(dataBlock, `My question: ${q}`) },
@@ -481,6 +506,10 @@ const App: React.FC = () => {
   const handleReset = useCallback(async () => {
     if (!problemContext) return;
     await clearProgress(problemContext.url);
+    // B10: the pinned optimal is session/problem-scoped and can be wrong (no
+    // verifier exists) — "Reset this problem" is the escape hatch that clears it
+    // so a bad pin is never inescapable.
+    await clearComplexityPin(slugFromUrl(problemContext.url)).catch(() => { /* non-critical */ });
     setProgress(null); setLearningContent([]);
     setConfirmReset(false);
   }, [problemContext]);

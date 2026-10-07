@@ -127,6 +127,7 @@ function buildMessages(request: LLMRequest) {
         userCode: request.userCode,
         codeLanguage: request.codeLanguage,
         sessionDigest: request.sessionDigest,
+        pinnedOptimal: request.pinnedOptimal,
       });
   return [
     { role: 'system', content: systemPrompt },
