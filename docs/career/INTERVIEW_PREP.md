@@ -1226,10 +1226,25 @@ ampersands. Over-sanitizing *was* the bug; the minimal transform was both
 safety-equivalent and idempotent. I documented the one honest trade: a literal `>` in
 prose ("timestamp > mid") loses that char — acceptable and safe.
 
+A second, more recent one from the LLM side: with **413 passing tests and a clean
+build**, I was dogfooding the extension on a real LeetCode problem and asked it a
+pointed follow-up about *my own* code — "how is this O(N) when the inner loop can run
+N times?" The answer never showed up as a chat bubble, and I got a generic "complexity
+hint" card instead of a reply. No test caught it because the defect isn't in any pure
+function — the intent router over-triggered on complexity keywords and dispatched a
+pre-built *action* (which doesn't create a chat bubble) instead of routing my question
+to chat. I filed it as a bug (B18) with the precise diagnosis — a **routing** defect,
+not a correctness one; the card it produced was actually correct *for the action it
+ran*, it just answered the wrong question — and deferred it to a dedicated
+intent-router pass rather than hot-patching the router mid-batch.
+
 **Signal.** Round-trip / property tests against real data beat more unit tests with
 convenient inputs; I know to look for idempotency on any re-runnable transform; and
 my instinct for a sanitizer bug was to make the transform *smaller and provably
-safe*, not to pile on more escaping.
+safe*, not to pile on more escaping. For LLM/UX behavior especially, a green suite is
+necessary but nowhere near sufficient — the bugs that matter (a misroute, a missing
+bubble, drifting output) live in integration and real usage, so dogfooding is a
+deliberate, repeated step, not a one-off.
 
 ### "When you add a safety guarantee, how do you make it as strong as possible — and when do you validate a field before it's even used?" ⭐
 
@@ -1398,7 +1413,15 @@ possibly a stronger-model decision. I shipped the prompt fixes, marked them expl
 **partial**, and routed the correctness question to a named future eval — and I caught
 and corrected a **mislabel** where the cross-message-drift fix was being treated as
 the fix for the intra-message contradiction. No prompt turns a cheap model into a
-reliable complexity theorist, so I didn't claim the instability was fixed.
+reliable complexity theorist, so I didn't claim the instability was fixed. In a
+follow-up batch I then **built fix (3)**: a per-problem *pin* — a small, slug-keyed,
+schema-versioned store that captures the model's first authoritative "optimal" and
+feeds it back into every later prompt as a hard constraint, with an authority rule
+(the "understand the solution" action can override and re-pin; a casual later analysis
+cannot) and an escape hatch to clear a bad pin. Crucially I kept the honest line: the
+pin makes the optimal **stable and self-consistent, not provably correct** — a
+*wrong-but-stable* value is still possible, which is exactly why (4) stays routed to
+the eval.
 
 **Signal.** With non-deterministic LLM output, "the model is wrong" is a *category*,
 not a diagnosis — the engineering is in decomposing one symptom into its distinct
@@ -1430,6 +1453,89 @@ example's shape is load-bearing, so prompt edits get scoped as surgically as cod
 edits and pinned with a test. And I diagnose output bugs by **looking at the real
 artifact**, not by reasoning about the pipeline, because the two disagree more often
 than you'd expect.
+
+### "An LLM feature kept giving inconsistent answers. How did you make it consistent — and did that make it correct?" ⭐
+
+**Answer.** My "Analyze my code" coach kept reporting a *different* "optimal
+complexity" for the **same** problem run to run — the big-O would flip between answers
+across messages. The root cause was architectural: the optimal was being **re-derived
+by the model on every call** (analyze, understand-solution, chat, report), and those
+are independent requests with no shared ground truth, so each one was free to guess
+differently. My fix was to give the system a **single source of truth**: a small,
+per-problem *pin* — slug-keyed, schema-versioned local storage — that captures the
+model's **first authoritative** optimal and then feeds it back into every later prompt
+as a *hard constraint* ("the optimal for this problem is X — use exactly this, don't
+recompute"). It has an **authority rule** (the dedicated "understand the solution"
+action, whose whole job is the optimal, may override and re-pin; a casual later
+analysis may not), it **only pins the optimal** — not the user's *current* complexity,
+which legitimately changes as they edit — and because the pin comes from a model with
+**no verifier**, it's **clearable** so a wrong value is never inescapable. The hardest
+part was being disciplined about the claim: pinning makes the number **stable and
+self-consistent, it does not make it correct.** A wrong-but-stable optimal is still
+possible. So I shipped the narrow, honest claim (I fixed *drift*) and explicitly
+routed *correctness* to a separate, still-open evaluation harness — in the code
+comments, the bug registry, and the docs, so nobody downstream reads "stable" as
+"verified."
+
+**Signal.** I separate **consistency** from **correctness** and refuse to let the
+first masquerade as the second. The engineering instinct — when an LLM output is
+non-deterministic, pin a single source of truth and feed it back as a constraint
+rather than hoping a prompt tweak makes the model deterministic — plus the honesty to
+scope the win precisely, is the whole answer. "I shipped drift-stability and was
+explicit it's not a correctness guarantee" is a stronger, more credible line than
+"I fixed the complexity."
+
+### "You wanted a feature to be more reliable but couldn't just call the model again. How did your constraints shape the design?" ⭐
+
+**Answer.** The feature is a coaching button that must cost **exactly one API request**
+— the whole app lives on a self-imposed per-day cap on the user's free tier, so a
+button press that quietly became two or three requests would be a real regression. I
+wanted the model to reason more carefully about complexity (to stop it drifting and to
+improve its derivations), and the obvious reliability moves were **off the table**: a
+*verification second pass* (ask the model to check its own answer) doubles the request
+count, and **routing to a stronger model** changes the cost/latency posture of the
+default path. What the budget *ruled in* was reasoning that stays **inside the one
+request**: a **hidden chain-of-thought** — the prompt tells the model to work the cost
+derivation out operation-by-operation *silently* and then emit only the final answer
+(never printing the scratch work, which also matters because leaking reasoning could
+leak past my no-full-solutions guardrail) — plus **anchoring the complexity variables
+to the problem's own stated constraints**, which is essentially free. The honest cost
+of chain-of-thought here is **latency and tokens within that single call, not a second
+call** — and I'd done the quota research to know that for one-analysis-at-a-time usage
+the binding free-tier limit is requests-per-minute/day, not tokens-per-minute, so
+spending more tokens in one request doesn't realistically threaten a user's quota. So
+the "+1 request" rule wasn't a constraint I worked around; it actively selected the
+architecture.
+
+**Signal.** A hard cost budget is a **design input**, not an afterthought — it ruled
+out the expensive reliability levers (self-verification pass, stronger model) and ruled
+in the cheap in-request ones (hidden CoT, constraint-anchored variables), and I could
+justify *why* that was safe from the actual quota mechanics rather than guessing. Shows
+cost-modeling and the discipline to reach for the technique that fits the budget.
+
+### "You needed authoritative data for a feature and there was no API for it. What did you do?" ⭐
+
+**Answer.** I wanted an authoritative "optimal complexity" for each LeetCode problem so
+my coach could stop guessing. The instinct is "go fetch the real answer" — so I
+researched whether one exists, and the finding *was the answer*: there is **no
+machine-readable complexity to fetch anywhere.** LeetCode has no API field for it;
+complexity, when it appears, is **optional human prose** in community editorials. Every
+tool I looked at — including LeetCode's own AI — **computes** it with an LLM rather than
+looking it up. And complexity is **notation- and definition-dependent** anyway: `O(N·M)`
+and "`O(N)` where N is the total number of characters" are the same statement, so even
+a "canonical" string isn't unique. The conclusion flipped the design: since no external
+source of truth exists and *everyone* is computing it with a model, the right move is to
+**pin my own model's first authoritative answer as the per-problem truth and let the
+user correct it** — that's not a workaround for a source I failed to find, it's the
+correct design *given the landscape.* It also told me where to stop: I didn't burn
+effort hunting for a data source that doesn't exist, and I documented the research as a
+decision record so the next person doesn't repeat the hunt.
+
+**Signal.** "There's no source for this" is itself a **design finding**, not a dead end
+— establishing that no authoritative source exists is what *justifies* generating the
+value yourself and making it correctable, and it tells you how much effort to spend
+(none, on the fruitless search). Doing the research and recording it as an ADR is the
+difference between a hack and a defensible decision.
 
 ---
 

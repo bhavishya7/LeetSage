@@ -2127,6 +2127,172 @@ rows, specs index, `PRE-LAUNCH-ROADMAP.md`).
 
 ---
 
+## 2026-10-07 — E6 batch 2: B10 — pin one canonical optimal per problem (the drift fix) + B17 — honest stats cost caption
+
+> Batch 2 of the standing **E6 bug-hardening pass**
+> ([`.kiro/specs/leetsage-e6-bug-hardening/design.md`](../../.kiro/specs/leetsage-e6-bug-hardening/design.md)
+> §3b — all B10 decisions LOCKED — plus the B17 note), same long-lived branch
+> `feature/e6-bug-hardening`. Shipped as **two** commits (a core + a trailing-tiny,
+> the "split a too-big batch" discipline): **`4b1af65`** (B10) and **`c97e78b`**
+> (B17); **local — NOT pushed/merged, the user merges per completed fix.** Dogfooded
+> on LeetCode **"Longest Consecutive Sequence"** (the user's set-based `O(N)`
+> solution). Ran under the hard "build → explain → **STOP for review** → commit only
+> after approval" gate. Build compiles; `npm.cmd run test` **413 passing** (29 files);
+> `npm.cmd run lint` **0 errors** (1 pre-existing `App.tsx` ~line 206 exhaustive-deps
+> warning, untouched). Bug IDs track the standing registry in
+> [`leetsage-guardrail-hardening/requirements.md`](../../.kiro/specs/leetsage-guardrail-hardening/requirements.md).
+
+**What.** The run-to-run **optimal-complexity DRIFT** fixed by pinning a single
+source of truth per problem (**B10 ✅**), plus a user-facing honesty fix to the stats
+cost caption (**B17 ✅**). One new bug captured but **not** fixed (**B18**).
+
+**Why (B10).** The optimal is a *fixed property of a problem*, but it was being
+**re-guessed by the model on every** `CHECK_APPROACH` / `UNDERSTAND_SOLUTION` / chat /
+report call — each an independent request with no shared ground truth — so the OPTIMAL
+flip-flopped run-to-run for the same problem (the `O(N)` ↔ `O(N·M)` drift). **Batch 1
+removed the prompt example-bleed (necessary) but the model still drifted (not
+sufficient)**; B10 adds the missing single source of truth. This is the cross-*message*
+drift explicitly deferred from batch 1 — not the intra-message (B16) or example-bleed
+(B14) bugs.
+
+**How (B10) — a MEMORY + PROMPT-CONSTRAINT change, NOT a render change.**
+- **New store `src/services/complexity-pin.ts`.** Persists the **OPTIMAL only**, keyed
+  on the normalized `/problems/{slug}/` slug (the same key progress records use), in a
+  small schema-versioned, dedicated store (`complexity_pin_{slug}`) that exists even
+  when the user never saved a progress record.
+- **Pin the OPTIMAL, never `currentComplexity`.** The optimal is fixed per problem
+  (stable, pinnable); the user's *current* complexity legitimately changes as they
+  edit, so it stays recomputed every call. (This resolved the earlier "both looked
+  wrong" confusion — current *should* move.)
+- **Authority rule (b) as a pure, testable `shouldRepin()`.** The first authoritative
+  emission pins; **`UNDERSTAND_SOLUTION` (the canonical optimal authority) OVERRIDES
+  and re-pins**; a later `CHECK_APPROACH` / `GENERATE_REPORT` **never overwrites** —
+  that stability IS the fix.
+- **Fed back as a HARD constraint.** A new `LLMRequest.pinnedOptimal` threads
+  `buildMessages → buildUserMessage`; `pinnedOptimalConstraint()` appends *"the
+  canonical optimal has been established as X time / Y space — use EXACTLY this, do NOT
+  recompute; assess the user's CURRENT against it"* to **`CHECK_APPROACH` and
+  `GENERATE_REPORT`**. **`UNDERSTAND_SOLUTION` is deliberately NOT constrained** (it may
+  re-pin). The chat/agent path injects the same pin line into its data block.
+- **Clearable escape hatch.** The pin comes from a non-deterministic model with **NO
+  verifier** (ADR-007: no external authoritative complexity source exists), so it can
+  be wrong — **"Reset this problem" clears it** (`App.tsx` → `clearComplexityPin`), so
+  a bad pin is never inescapable. *Only the Reset path was wired this batch;* a
+  dedicated "this looks off?" badge was consciously deferred to keep B10-core lean (a
+  documented scope decision, not an omission).
+- **Digest reconciliation (`session-digest.ts`).** `buildSessionDigest` previously
+  emitted **two conflicting optimal lines** (the analysis' and the understanding's);
+  it now emits **ONE "Canonical optimal" line** (pin first, else latest understanding,
+  else latest analysis). The analysis line still reports the user's *current* achieved
+  complexity.
+- **Two reasoning levers, both keeping requests at EXACTLY +1** (a hard constraint —
+  one button press = one API call): **Lever 1 — hidden chain-of-thought** on
+  `CHECK_APPROACH` / `UNDERSTAND_SOLUTION`: reason through the cost derivation op-by-op
+  **silently**, then emit only the final sections (*"do NOT print your reasoning"* —
+  respects `OUTPUT_RULES` + must not leak past the no-solutions guardrail). Costs
+  latency + tokens *within the one request*, not a second request. **Lever 3** — anchor
+  complexity variables to the problem's stated constraints (~free). **Lever 2 (route to
+  a stronger model) was REJECTED** — keep `gemini-3.5-flash-lite` default.
+
+**Why (B17).** The Session Stats caption read *"Cost is an estimate from public
+per-token pricing (see metrics-pricing.ts) — you run on your own free quota"*, which
+(a) **leaked an internal source-file name** into user-facing UI and (b) framed an
+"Est. cost" that implies a bill. On the free tier the user is **never charged** — a
+429 rejects a request, it never bills (ADR-007). Reworded to say so plainly and
+dropped the file reference; extracted to an exported `COST_CAPTION` constant in
+`StatsPanel.tsx` so it's assertable in the DOM-free node test env, guarded by
+`stats-caption.test.ts`.
+
+**What broke / the hard part — the honest limit, stated three times.** B10 makes the
+optimal **STABLE and self-consistent within a problem — NOT provably correct.** A
+*wrong-but-stable* optimal is still possible; that's the correctness eval's (**E10**)
+job. This is written into the code (`complexity-pin.ts` docstring), the registry, and
+this entry — deliberately **not** overclaimed. Separating "the number is stable" from
+"the number is correct" was the central design discipline of the batch: B10 ships a
+narrow, honest claim and routes correctness onward.
+
+**The other hard part — there is no source of truth to fetch, so pinning the model's
+own answer IS the right design.** The research behind ADR-007 confirmed there is **no
+machine-readable optimal complexity to fetch anywhere** — not from LeetCode (no API
+field; complexity is optional human prose in editorials), not from any tool (every
+one, including LeetCode's own AI, *computes* it with an LLM), and complexity is
+notation/definition-dependent anyway (`O(N·M)` ≡ "`O(N)` where N = total chars"). So
+pinning the model's first authoritative answer and letting the user correct it is the
+*correct* design given the landscape — not a workaround for a source we failed to
+find.
+
+**New bug captured — B18 (registry row added, NOT fixed).** A pointed complexity
+**follow-up about the user's own code** — *"how is it O(N) when the inner while loop
+can run N times?"* — **misrouted** to the generic `TIME_COMPLEXITY_HINT` action
+instead of chat/analyze. Two symptoms: (a) the user's question **never appeared as a
+chat bubble** (the action path doesn't create one — only `handleChatSubmit` does), and
+(b) they got a generic, algorithm-withholding "Complexity Hint" card instead of an
+answer. **Root cause:** the intent router (`routeMessage`) over-triggers on complexity
+keywords and dispatches `TIME_COMPLEXITY_HINT` even for a follow-up about existing
+code. **Crucial nuance:** this is a **ROUTING defect, not a correctness defect** — the
+card it produced was objectively correct *for the action it ran* (correct target
+`O(N)`/`O(N)`, correct `O(N log N)` sort note); it just answered the **wrong
+question**. Deferred to a future intent-router pass (touching the router was an
+explicit non-goal for this batch).
+
+**Live-test findings (dogfooding "Longest Consecutive Sequence").** B10 works: Current
+`O(N)` / Optimal `O(N)` / "Variables: N = elements in `nums`" stayed **stable across
+repeated "Analyze my code" runs** — the drift is gone. The hidden-CoT lever visibly
+improved the per-operation reasoning (the amortization argument — the inner `while`
+only runs from sequence-starts, each element visited at most twice — was stated
+correctly). **Hand-verified** all 4 responses seen (3 Efficiency cards + 1
+Complexity-Hint card) gave objectively correct `O(N)`/`O(N)` with correct amortization
+/ `O(N log N)`-sort reasoning. **Caveat:** this is a hand-check of 4 responses on ONE
+problem — evidence B10 + CoT help, **NOT** the systematic correctness guarantee (that's
+E10). Cosmetic nit noted, **not** fixed (not a bug in our code): the model
+inconsistently wraps identifiers like `nums` in backticks run-to-run; the renderer
+faithfully styles only what's backticked — output variance, optional prompt-polish.
+
+**Guards (what a regression would trip).** `complexity-pin.test.ts` — persistence; the
+**DRIFT regression** (two emissions of different values → pin holds the first); the
+authority rule incl. the `UNDERSTAND_SOLUTION` override; current-not-pinned; clear;
+slug isolation. `prompts.test.ts` — the pin is injected into the right actions and
+**NOT** into `UNDERSTAND_SOLUTION`; both levers present incl. "do not print your
+reasoning". `session-digest.test.ts` — ONE reconciled optimal line, pin precedence,
+current still reported. `stats-caption.test.ts` — no internal file name, states "not
+charged" / "not a bill", frames the estimate, notes local-only.
+
+**Interview angles.** (1) **Stable ≠ correct, said out loud** — B10 ships drift-
+stability and is explicit it is NOT a correctness guarantee, routing correctness to a
+named future eval; a more credible claim than "the complexity is now fixed." (2) **"No
+source of truth" is itself a finding** — the research that proved no fetchable
+complexity exists is what *justifies* pinning the model's own answer as the right
+design, not a hack. (3) **A self-imposed budget as an architecture driver** — the hard
+"+1 request per button" rule ruled OUT a verification second-pass / stronger-model
+route and ruled IN hidden chain-of-thought (more tokens in the one request) +
+constraint-anchored variables; ADR-007's quota research is *why* CoT was acceptable.
+(4) **One symptom, different bug again** — B18 is a routing defect wearing a
+correctness costume; the card was right for the action, the *routing* was wrong, and
+labeling it precisely is the skill. (5) **Dogfooding catches what a green build can't,
+again** — B18 was invisible to 413 passing tests; only using the extension on a real
+problem (and noticing the question never appeared) surfaced it.
+
+**Verification.** `npm.cmd run build` compiles; `npm.cmd run test` **413 passing** (29
+files); `npm.cmd run lint` **0 errors** (1 pre-existing `App.tsx` ~line 206
+exhaustive-deps warning, not introduced here). Pre-commit husky/eslint was the gate;
+both commits passed it. **Honesty caveat:** B10's stability + the correctness of the 4
+responses seen were live-confirmed on **one** problem — stability is the shipped claim;
+systematic correctness remains E10's job.
+
+**Known doc/code nit to flag (not fixed here, outside the historian's lane).** The
+`complexity-pin.ts` docstring (line ~28) says the pin is clearable *"wired into 'Reset
+this problem' + a 'looks off?' affordance"* — but only the **Reset** path is actually
+wired this batch (the "looks off?" badge was deferred). The comment slightly overstates
+what shipped; worth tightening in a future code touch.
+
+**Commits (branch `feature/e6-bug-hardening`, off `main`; local — NOT pushed/merged).**
+`4b1af65` (B10 — `complexity-pin.ts` + its test, `prompts.ts` + its test,
+`session-digest.ts` + its test, `llm-service.ts`, `types/api.ts`, `App.tsx`; E6
+`design.md`, registry row for B18) · `c97e78b` (B17 — `StatsPanel.tsx` +
+`stats-caption.test.ts`).
+
+---
+
 ## Next up (see [LEARNING_ROADMAP.md](./LEARNING_ROADMAP.md))
 
 1. ~~**Structured output** — the backbone~~ — **DONE (2026-09-03)**; the report is
@@ -2214,13 +2380,18 @@ rows, specs index, `PRE-LAUNCH-ROADMAP.md`).
    router/prompt territory this spec couldn't touch). **Loose end:** B11/B12 still
    need rows in the guardrail-hardening bug registry.
 
-   **Now next: E10** (eval framework for the router/agent), **E6** (hardening),
-   **E5** (docs-removal decision), **E7** (scope extension permissions — intentionally
-   LAST), **E8** (deploy). Also still open from earlier: the deferred eval follow-up
-   (real captured-Gemini cases + a validated LLM-as-judge) and progress-tracking
-   Phase D (verified submissions). Still future: a clickable "open on LeetCode from My
-   Progress" link (its `url` is already validated for safety, but the link itself is
-   not built).
+   **Now next: E6 is in progress** — batch 1 (2026-10-06, `034f2ce`) and batch 2
+   (2026-10-07, `4b1af65` B10 + `c97e78b` B17) built on the standing
+   `feature/e6-bug-hardening` branch; remaining in E6 are **B8/B9** and the
+   **vuln-scan** pass (`npm audit`, CSP, `host_permissions`, `innerHTML`, BYOK), plus
+   **B18** for a future intent-router pass. Then **E10** (the correctness eval — the
+   real home for "is the Big-O actually correct", which B10 explicitly does *not*
+   fix), **E5** (docs-removal decision), **E7** (scope extension permissions —
+   intentionally LAST), **E8** (deploy). Also still open from earlier: the deferred
+   eval follow-up (real captured-Gemini cases + a validated LLM-as-judge) and
+   progress-tracking Phase D (verified submissions). Still future: a clickable "open
+   on LeetCode from My Progress" link (its `url` is already validated for safety, but
+   the link itself is not built).
 
 *When each lands, add an entry above (via the project-historian agent) and backfill
 any resulting numbers into [RESUME.md](./RESUME.md).*

@@ -24,10 +24,11 @@ import { slugFromUrl } from './progress-records';
  *    and re-pins. A first CHECK_APPROACH guess must not permanently outrank it.
  *  - The pin comes from a non-deterministic model with NO verifier (there is no
  *    external authoritative complexity source — confirmed, see spec §3b / ADR
- *    -007). So it can be WRONG: it is clearable (wired into "Reset this problem"
- *    + a "looks off?" affordance). B10 makes the optimal STABLE and
- *    self-consistent within a problem — NOT provably correct. Correctness is the
- *    eval's (E10) job. Never lock a wrong value with no way out.
+ *    -007). So it can be WRONG: it is clearable via "Reset this problem" (the
+ *    shipped escape hatch; a dedicated per-badge "looks off?" affordance is
+ *    designed but deferred). B10 makes the optimal STABLE and self-consistent
+ *    within a problem — NOT provably correct. Correctness is the eval's (E10)
+ *    job. Never lock a wrong value with no way out.
  *
  * This is a small, dedicated, schema-versioned store (mirrors progress-records'
  * conventions) so a pin exists even when the user never saved a progress record.
