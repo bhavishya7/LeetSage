@@ -263,9 +263,10 @@ tool-call deltas (v1.1 — tool rounds are non-streaming), the rich agent-step t
 UI (E2), and an LLM/embedding classifier (the local heuristic stays; the three-tier
 design makes high accuracy less critical). **Effort:** ~~High~~ **DONE — later
 merged to main via PR #19 (`0341bcd`).** **Next (the E-series chat epics):**
-~~E3/E2/E4 (chat polish)~~ **DONE 2026-10-05 (#3.8 below)** → **E10** (eval
-framework for the router/agent) → **E6** (hardening) → **E5** (docs-removal
-decision) → **E7** (scope extension permissions — LAST) → **E8** (deploy).
+~~E3/E2/E4 (chat polish)~~ **DONE 2026-10-05 (#3.8 below)** → ~~**E10** (eval
+framework)~~ **DONE 2026-10-08 (#3a above)** → **E6** (hardening, in progress) →
+**E5** (docs-removal decision) → **E7** (scope extension permissions — LAST) →
+**E8** (deploy). **E10b** (MCP browser testing) is a separate later spec.
 
 ### 3.8. Chat polish (E2 + E3 + E4) — the Sage identity, motion, onboarding + routing bugfixes  🧪 BUILT, PENDING REVIEW (2026-10-05)
 
@@ -400,15 +401,50 @@ pass. **Effort:** Medium — in progress. See [DEV_JOURNAL.md](./DEV_JOURNAL.md)
 Small, high-signal follow-ups to the shipped eval/tests — deliberately not done in
 the same session to keep it scoped.
 
-### 3a. Real captured-Gemini eval cases + a validated LLM-as-judge
-**Skill:** honest measurement, LLM-as-judge validation.
-**What to build.** Collect **real Gemini responses** (incl. adversarial phrasings),
-hand-label them, and add them as `source:'captured'` cases (the dataset already has
-the slot). Then run the LLM-as-judge with a **real** transport and **validate it
-against the labeled set**, scoring the judge with the same metrics and noting its
-biases (position, verbosity, self-preference). **Why.** The current dataset is
-author-generated — a regression gate, not a true recall measurement; this closes
-the gap and lets you quote a *defensible* real-world catch rate. **Effort:** Medium.
+### 3a. Real captured responses + a validated (non-mock) LLM-as-judge — via Promptfoo (E10)  🧪 BUILT, PENDING REVIEW (2026-10-08)
+**Spec:** `leetsage-e10-eval-framework` (**design-only**). **Skill:** honest
+measurement, LLM-as-judge, industry eval tooling, "what belongs in CI vs what
+doesn't", deep tool-learning.
+**What shipped (branch `feature/e10-eval-framework`, `d563b13` + `242eeaf` off
+`main`@`19db429`; **local — NOT pushed, no PR**).** A **Promptfoo** measurement
+layer (`evals-promptfoo/`) added **beside** the deterministic `src/evals/` guardrail
+eval — which stays the CI gate, unchanged — giving the two things that gate couldn't:
+a **real (non-mock) LLM-as-judge** (Gemini `gemini-3.5-flash-lite` via the same
+OpenAI-compatible endpoint the extension ships against) and a **correctness** dataset
+of **real captured responses** scored against human-labeled ground truth. The safety
+set is **generated from** the single source of truth (`guardrail-cases.ts`) and its
+assertion calls the **real shipped `filterResponse`**, so Promptfoo's safety numbers
+equal the Vitest gate by construction. The **echo-provider** scores already-captured
+text (no generation); `report/summarize.mjs` reports metrics **split by source**
+(authored vs captured). The offline/live split is **two config files + an
+`includeJudge` boolean parameter** — an env toggle failed because Promptfoo sandboxes
+`file://` test modules away from `process.env` and caches test cases (a deep
+tool-learning story). Dev dep `promptfoo` pinned exact `0.124.0`; new scripts
+`eval:promptfoo` / `eval:promptfoo:offline`.
+**The numbers (verified).** Build clean; `npm.cmd run test` **413 unchanged** (CI gate
+not regressed). Offline: 28 cases / 0 errors — safety **100% catch / 0% FP / 100%
+precision** (matches the gate) + correctness deterministic **2/3**. **Full judged live
+run** (user's BYOK key, 13,509 tokens / 1m27s): the judge **independently agreed with
+every human label** — safety 100/0/100 over 25 non-exempt cases, correctness 2/3
+case-for-case — which **validated the judge live**, closing the "mock judge only"
+caveat open since 2026-09-15. The correctness set is a deliberate **1-wrong + 2-right**
+mix so it proves it *discriminates*: Encode/Decode's bare `O(N)` vs ground-truth
+`O(N·M)` is correctly **flagged**; two correct Longest-Consecutive cases **pass**.
+**Why.** The 2026-09-15 dataset was author-generated (a regression gate, not a true
+recall measurement) and its judge was an offline mock; E10 closes both and is the
+named home for the "is the Big-O *correct*" question B10 routed away from itself
+(B10 = stable, E10 = correct). **The decision (ADR-010):** the judge is a
+**local/on-demand measurement on the user's own key — key-free CI**, never a release
+gate, mirroring the deliberate CD-skip; both flow from the BYOK/no-shipped-key posture.
+**Honesty caveats the docs keep.** The judge is **model-dependent** and **not**
+validated against a human-labeled *judge* set (only against dataset labels) —
+**self-preference bias is real** (Gemini grading Gemini); treat scores as a signal.
+Correctness ground truth is human-labeled. The safety set is still mostly authored
+(hence split-by-source). E10 **measures** B14/R4/B16, it doesn't fix them. 7 residual
+`npm audit` highs are deliberately accepted (Promptfoo-only proxy/JKS chains; dev-only
+dep). **E10 ≠ E10b** (MCP browser testing, later). See
+[DEV_JOURNAL.md](./DEV_JOURNAL.md) (2026-10-08), [INTERVIEW_PREP.md](./INTERVIEW_PREP.md)
+(Q14), and DESIGN_DECISIONS **ADR-010**. **Effort:** ~~Medium~~ built, pending review.
 
 ### 3b. Wire tests + eval into an automatic gate (pre-commit hook / CI)  ✅ DONE (2026-09-15 follow-up)
 **Skill:** CI, release gating, CI/CD tooling tradeoffs.
@@ -768,8 +804,10 @@ is exactly the GenAI system-design interview. Rehearse it either way — it's in
     across repeated runs); 4 responses hand-verified correct (evidence, not a
     guarantee — that's E10). Tests **387 → 413** (29 files), build clean, lint 0.
     See #3.9.
-    **Now next: finish E6** (B8/B9 → vuln-scan) → **E10** (correctness eval,
-    the real home for "is the Big-O correct") → **E5** (docs-removal decision) →
+    **Now next: finish E6** (B8/B9 → vuln-scan). ~~**E10** (correctness eval, the
+    real home for "is the Big-O correct")~~ **DONE 2026-10-08** — it measured the
+    Encode/Decode `O(N)` vs `O(N·M)` miss (a follow-up correctness fix is a separate
+    decision). Then → **E5** (docs-removal decision) →
     **E7** (scope extension permissions — intentionally LAST) → **E8** (deploy). Also
     still open: **B18** (a future intent-router pass), the Tier-1.5 eval follow-up (#3a
     — real captured cases + a validated judge) and progress-tracking Phase D (verified

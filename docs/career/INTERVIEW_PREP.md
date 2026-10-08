@@ -752,6 +752,72 @@ front of), and **Q3** (the guardrail it preserves).
 
 ---
 
+### Q14. "How do you evaluate an LLM feature — and did you ever use a real LLM-as-judge? What belongs in CI?" ⭐ evals/LLM-ops
+
+> Lead with this for evals, LLM-as-judge, "how do you measure quality", or
+> "what belongs in CI" prompts. It's the follow-up to **Q3a** and the strongest
+> 2026 "I evaluate AI honestly, with real tooling" answer.
+
+**Short answer.** I run **two evals on purpose, in two places.** A **deterministic
+guardrail eval** (Vitest) is the **CI release gate** — fast, offline, key-free; it
+scores my solution-filter (catch / false-positive / precision) and blocks a merge
+that weakens the "never give the solution" promise. Separately, I adopted
+**Promptfoo** as a **local, on-demand measurement** layer that adds the two things a
+deterministic gate can't: a **real (non-mock) LLM-as-judge** and a **correctness**
+dataset built from **real captured responses**. The judge is *not* a CI gate and
+never needs a shipped key — it runs on the user's own BYOK key when I want a read on
+quality. That split — a deterministic gate vs. a probabilistic measurement — is the
+whole point.
+
+**The honest-measurement core (the part interviewers care about).** My datasets are
+tagged **authored vs captured**, and I report metrics **split by source**. Authored
+cases are a strong *regression gate* but optimistic — I wrote both the filter and
+the cases, so they skew toward what the filter already catches ("evaluating on your
+training distribution"). **Captured** responses — real dogfooded outputs — are the
+honest signal. And my correctness set is a deliberate **1-wrong + 2-right** mix so
+the eval proves it *discriminates* (credits a correct Big-O, flags a wrong one), not
+just always-fails. Example: the extension once reported a bare `O(N)` for
+Encode/Decode when the truth is `O(N·M)`; the eval **correctly flags** that — the
+judge's reasoning was "a bare `O(N)` without a variable definition understates the
+multi-dimensional work." A failing case there is the eval *working*.
+
+**Why the judge isn't a CI gate (the design judgment).** An LLM-as-judge is
+model-dependent, needs a live key, and has real biases — position, verbosity, and
+here **self-preference** (I'm using a Gemini model to grade Gemini output). It's a
+valuable *signal*, a terrible *blocker*. Gating CI on it would make the pipeline
+non-deterministic and force a shipped/CI key, which breaks my BYOK posture. So it's
+a measurement, not a gate — the same "what belongs in CI vs what doesn't" instinct
+behind my deliberate CD-skip (**Q10**).
+
+**How I know the judge is any good.** I ran it live against my labeled set:
+**13,509 tokens, ~90 seconds**, and the judge **independently agreed with every
+human label** (safety 100% catch / 0% FP / 100% precision over 25 non-exempt cases;
+correctness matched the deterministic result case-for-case). That's agreement with
+the *dataset* labels — I'm explicit that I have **not** validated it against a
+separate human-labeled *judge* set, so I treat its scores as a signal, not truth.
+
+**A deep tool-learning story (great if they probe implementation).** My first
+offline/live switch read `GEMINI_API_KEY` at dataset-load time to decide whether to
+emit the judge. It silently never worked. I diagnosed the root cause empirically:
+Promptfoo loads `file://` test modules in a **sandbox that doesn't inherit
+`process.env`** *and* **caches generated test cases** — so a load-time env read is
+doubly unreliable. Rather than patch it, I switched to a fundamentally different
+design: **two config files + an `includeJudge` boolean parameter**, the offline
+config having no grader provider at all. And I keep the deterministic layer
+reproducible with the **echo-provider** pattern — my data is already-captured
+output, so there's nothing to generate: Promptfoo echoes the captured text back and
+the assertions score it; live model calls are isolated to the judge alone. The
+safety dataset is also **generated from the same source of truth** my CI gate uses
+and bridges the **real shipped filter**, so the two evals can't drift.
+
+**Signal.** Honest measurement (authored-vs-captured, biases named, "signal not
+truth"); a crisp "what belongs in CI vs what doesn't" judgment; comfort adopting an
+industry eval tool (Promptfoo, LLM-as-judge, llm-rubric); and failure-loop
+discipline (diagnose the root cause, switch designs). Pair with **Q3a** (the gate it
+complements), **Q10** (CI/CD judgment), and **Q5a** (the other honest-numbers story).
+
+---
+
 ## General 2026 AI-engineering questions (use LeetSage as your example)
 
 These come up in AI/LLM interviews regardless of the project. For each, the goal
@@ -761,12 +827,15 @@ is to answer generally **and** ground it in LeetSage.
   actually works, instead of a "vibe check" on a few outputs. LLM-as-judge uses one
   model to score another against a rubric; you validate the judge against a small
   labeled set (it can reach ~85% human agreement but has position/verbosity/
-  self-preference biases). *LeetSage tie-in:* see **Q3a** — I **built** a labeled eval
-  that scores my solution-filter as a release gate (catch rate / false-positive rate
-  / precision) and it caught two real leak bugs on its first run; I also built an
-  offline, injectable LLM-as-judge scaffold for the semantic cases regex can't catch.
-  It's now an **automatic** gate — it runs in GitHub Actions CI on every push/PR, so
-  a change that weakens the guardrail fails the build (see **Q10**).
+  self-preference biases). *LeetSage tie-in:* see **Q3a** and **Q14** — I **built**
+  a labeled eval that scores my solution-filter as a release gate (catch rate /
+  false-positive rate / precision) and it caught two real leak bugs on its first run;
+  it's now an **automatic** gate (GitHub Actions CI on every push/PR — **Q10**). Then
+  (E10, **Q14**) I adopted **Promptfoo** as a separate *local measurement* layer with
+  a **real (non-mock) LLM-as-judge** and a **captured-response correctness** dataset,
+  reporting metrics **split by authored-vs-captured** so a flattering regression
+  number never poses as real recall — and I ran the judge live (it agreed with every
+  human label, with self-preference bias named honestly).
 - **"Structured output / function calling?"** Constraining the model to emit JSON
   matching a schema, so downstream code can rely on it. *Tie-in:* see **Q8** — this
   is a **shipped**, load-bearing decision in LeetSage. The report-feeding actions
@@ -1536,6 +1605,53 @@ decision record so the next person doesn't repeat the hunt.
 value yourself and making it correctable, and it tells you how much effort to spend
 (none, on the fruitless search). Doing the research and recording it as an ADR is the
 difference between a hack and a defensible decision.
+
+### "An approach failed and you kept getting the same result. How did you break the loop?" ⭐ (deep tool-learning)
+
+**Answer.** Adopting Promptfoo for the eval framework (E10), I needed an offline mode
+(deterministic, no key) and a live mode (with the LLM-as-judge). My first design read
+`GEMINI_API_KEY` at dataset-load time to decide whether to emit the judge assertion —
+and it silently never worked. The tempting move is to keep tweaking the env read.
+Instead, after it failed twice I stopped and diagnosed the **root cause empirically**:
+Promptfoo loads `file://` test modules in a **sandbox that doesn't inherit the shell
+`process.env`**, *and* it **caches generated test cases** — so a load-time env read is
+doubly unreliable (the generator can't see the key, and a stale cached result sticks).
+Once I understood *why*, I switched to a fundamentally different design rather than
+patching the broken one: **two config files + an `includeJudge` boolean parameter** on
+the dataset builders (thin `*.ts` / `*.offline.ts` entry files pass it), with the
+offline config carrying **no grader provider** so a judge assertion can't hang there.
+`.env` still feeds the grader (that part of Promptfoo *does* read it) — the two-config
+split only governs whether a judge assertion is *emitted*.
+
+**Signal.** Failure-loop discipline: when a thing fails twice, I stop patching and go
+find the root cause, even if that means learning a tool's internals (sandboxing +
+caching here). And the fix was a *different design*, not a tweak — the hallmark of
+diagnosing versus guessing. It also doubles as "I actually learned the tool deeply,"
+which reads well for any new-tool-adoption question.
+
+### "How do you make sure the *eval itself* is right, not just the code it tests?" ⭐ (verification discipline)
+
+**Answer.** An eval you can't trust is worse than none — a wrong eval produces
+confident, misleading numbers. So on E10 I verified the harness, not just the thing
+under test, and it caught two real bugs before they shipped misleading metrics.
+**(1)** My summarizer first reported **100% false-positive rate / zero true-negatives**
+on the safety split — impossible, since my deterministic CI gate reports 0% FP. The bug
+was in how I reconstructed the filter's raw prediction from `(assertion-passed, label)`;
+I fixed the ternary and re-ran, and the numbers matched the gate exactly. **(2)** My
+correctness judge prompt initially hardcoded "the input spans multiple dimensions, so a
+bare single variable is wrong" — true for the Encode/Decode case I was staring at, but
+it would have **wrongly failed** two genuinely *correct* single-dimension cases. I
+rewrote the prompt to be per-case neutral (judge against the given ground truth, don't
+assume multi-dimensionality unless the code shows it), and the full judged run confirmed
+both correct cases now pass. The thing that made both catchable was a **known expected
+value** — the CI gate's 0% FP, and a dataset deliberately built with *both* right and
+wrong cases so a judge that always-fails would be obvious.
+
+**Signal.** I treat an eval as code that needs its own correctness check — cross-check
+its numbers against a known-good baseline, and build the dataset so a broken scorer is
+visible (right *and* wrong cases, not just failures). Catching an inverted FP metric and
+a biased judge prompt *before* quoting them is the difference between an eval that builds
+trust and one that quietly lies.
 
 ---
 

@@ -338,11 +338,89 @@ supports function/tool calling (endpoint-level, not model-gated) — the same
 
 ---
 
+## ADR-010 — Two evals, by design: a deterministic CI gate + a local LLM-as-judge measurement
+
+> Status: **built, pending review** (branch `feature/e10-eval-framework`,
+> 2026-10-08; not pushed/merged). Spec:
+> [`.kiro/specs/leetsage-e10-eval-framework/`](../../.kiro/specs/leetsage-e10-eval-framework/)
+> (design-only). Folder: `evals-promptfoo/` (see its `README.md`).
+
+**Decision.** Run **two separate evals on purpose**, in two places:
+1. The existing **deterministic guardrail eval** (`src/evals/`, Vitest) stays the
+   **CI release gate** — fast, offline, key-free, blocks a merge that weakens the
+   "never hand over the solution" promise.
+2. A new **Promptfoo** suite (`evals-promptfoo/`) is a **local, on-demand
+   measurement** layer that adds what the gate can't: a **real (non-mock)
+   LLM-as-judge** and a **correctness** dataset of real captured responses scored
+   against human-labeled ground truth. It is **never** a CI gate and **never**
+   needs a shipped/CI key (the judge runs on the user's own BYOK key).
+
+**Alternatives considered.**
+- **Extend the hand-rolled harness** (add a real judge + correctness cases to
+  `src/evals/`) — rejected: adopting an industry eval tool is itself the
+  resume/interview signal, and Promptfoo gives the echo-provider + rubric-grader
+  plumbing for free. (Promptfoo is TS-native, local, backend-free — fits ADR-003.)
+- **Make the judge a CI gate too** — rejected: it's model-dependent, flaky, and
+  needs a live key; gating CI on it would make the pipeline non-deterministic and
+  force a shipped/CI key (breaks the BYOK posture, ADR-001). It's a *measurement*,
+  not a gate.
+- **One config with a runtime env toggle** for offline/live — rejected after it
+  **empirically failed**: Promptfoo loads `file://` test modules in a sandbox that
+  does not inherit `process.env` and caches generated test cases, so a load-time
+  env read is doubly unreliable. Replaced with **two config files + an
+  `includeJudge` boolean parameter** on the dataset builders.
+
+**Why (the governing principle).** *"What belongs in CI vs what doesn't."* A gate
+must be deterministic, fast, and self-contained; a judge is a probabilistic,
+key-requiring opinion — valuable as a signal, wrong as a blocker. Keeping them
+separate is the same instinct as the deliberate **CD-skip** (ADR-003 / the
+2026-09-15 CI work): both flow from the **no-shipped-key / BYOK** posture.
+
+**Key sub-decisions.**
+- **Echo-provider pattern.** The datasets are ALREADY-CAPTURED outputs, so nothing
+  is generated: the captured text is the "prompt", Promptfoo's `echo` provider
+  returns it verbatim, and assertions score it — the deterministic layer is fully
+  offline/reproducible and live model calls are isolated to the judge.
+- **Anti-drift bridge.** The safety dataset is **generated from** the single source
+  of truth (`src/evals/fixtures/guardrail-cases.ts`) and its assertion calls the
+  **real shipped `filterResponse`** — so Promptfoo's safety numbers equal the
+  Vitest gate **by construction** (one code path, no two-sources-disagree drift).
+- **Authored vs captured, reported split-by-source.** Authored cases are a strong
+  regression gate but optimistic (the author wrote both the filter and the cases);
+  **captured** is the honest signal. `report/summarize.mjs` reports them separately
+  so a flattering authored number never poses as real-world recall. The correctness
+  set is a deliberate **1-wrong + 2-right** mix so it proves it *discriminates*.
+- **Measurement ≠ gate at runtime too.** `PROMPTFOO_FAILED_TEST_EXIT_CODE=0`: a
+  failing correctness case (the real Encode/Decode `O(N)` vs `O(N·M)` miss) is the
+  eval *working*, not a reason to abort the run.
+
+**Tradeoff accepted.** The judge is model-dependent and **not** validated against a
+human-labeled judge set (only against the dataset labels), with real
+**self-preference bias** (Gemini grading Gemini) — treat scores as a signal, not
+truth. Adding Promptfoo also pulled a large **dev-only** dependency tree; a safe
+`npm audit fix` cleared the critical + shared highs (33 → 7 high, 0 critical), and
+**7 residual highs are deliberately accepted** — they live in Promptfoo's
+proxy / Java-keystore chains this eval never exercises, the only fix is a breaking
+downgrade, and promptfoo is never imported by `src/`, never in `dist/`, never in
+CI. Documented in `evals-promptfoo/README.md`.
+
+**What validated it.** The full judged run (live Gemini, 13,509 tokens, 1m27s)
+had the judge **independently agree with every human label** — resolving the
+long-standing "LLM-as-judge is only a mock" caveat from 2026-09-15.
+
+**What would change it.** If a future Promptfoo release clears the proxy/JKS chains
+without a breaking downgrade, bump the pin and re-audit. If a human-labeled *judge*
+set is built, the judge's own precision/recall could be scored (and only then would
+its verdicts graduate from "signal" toward "measurement").
+
+---
+
 ## Cross-cutting themes (the interview headline)
 
 | Theme | Where it shows up | Interview framing |
 |---|---|---|
 | Cost control | BYOK, guardrails, model tiering, the bounded agent loop (ADR-009) | "How do you keep LLM costs bounded?" |
+| LLM evaluation & judging | Deterministic guardrail eval (CI gate) + Promptfoo LLM-as-judge + captured-vs-authored (ADR-010) | "How do you evaluate an LLM feature? What belongs in CI?" |
 | Agentic design under constraints | Three-tier chat, bounded tool loop, per-round accounting (ADR-009) | "How would you build an agent without a framework/backend?" |
 | Safety / output constraints | Multi-layer guardrail, solution-filter | "How do you stop the model doing X?" |
 | Security tradeoffs | BYOK, local key storage | "How do you secure users' keys?" |

@@ -136,12 +136,18 @@ Pick 2–4 depending on space. Swap in real numbers as soon as you have them
   free-tier models** rather than exposing paid/power-user models — a deliberate
   "keep it free" product decision weighed against the API's actual capabilities)
   with a written decision log and an articulated scaling path.
-- Built a **labeled eval suite** for the AI safety guardrail — scoring the
-  deterministic solution-filter on a hand-labeled dataset as a release gate
-  (**catch rate / false-positive rate / precision**), plus an offline
-  **LLM-as-judge** scaffold for the semantic cases regex can't catch; the eval
-  **surfaced two solution-leak paths** the filter missed, which were then fixed
-  (regression-gated at 100% catch / 0% false-positive on the set).
+- Built a **two-layer LLM evaluation harness** for the AI safety guardrail: a
+  **deterministic eval** scoring the solution-filter on a labeled dataset as a
+  **key-free CI release gate** (**catch rate / false-positive rate / precision** —
+  it **surfaced two solution-leak paths** the filter missed, then regression-gated
+  at 100% catch / 0% false-positive), *plus* a **Promptfoo** measurement layer with
+  a **real (non-mock) LLM-as-judge** and a **correctness dataset of real captured
+  responses** scored against human-labeled ground truth — reporting metrics
+  **split by authored-vs-captured** so a flattering regression number never poses as
+  real-world recall. Kept the judge a **local/on-demand measurement, never a CI
+  gate** (model-dependent, needs a key — a deliberate "what belongs in CI vs what
+  doesn't" call); ran it live (the judge **agreed with every human label**, with
+  self-preference bias named honestly).
 - Designed a **single-source-of-truth structured-output contract** (hybrid prose +
   schema'd JSON) for a non-deterministic model, with **tolerant parsing that
   degrades to prose-only** and streaming preserved — turning freeform responses
@@ -164,6 +170,7 @@ Only list what you can defend. Currently truthful for LeetSage:
 
 `LLM integration` · `Google Gemini` · `prompt engineering` · `streaming responses`
 · `structured output` · `AI output guardrails` · `LLM evals` · `LLM-as-judge` ·
+`LLM-as-judge (Promptfoo)` · `eval tooling / CI gating` ·
 `unit testing (Vitest)` · `Chrome Extension (Manifest V3)` ·
 `React` · `TypeScript` · `Tailwind CSS` · `Vite` · `client-side architecture` ·
 `cost optimization / rate limiting` · `AI-assisted development (custom agents)` ·
@@ -187,7 +194,7 @@ ordered by resume-value-per-effort. Each maps to
 
 | Gap | Why it matters on a resume | Fix | Effort |
 |---|---|---|---|
-| ~~**No evals**~~ ✅ **shipped (2026-09-15)** | "I wrote evals for my LLM feature" is a top 2026 signal; it also proves the guardrail works | Labeled guardrail eval (16 cases, 8 leak / 8 safe) scoring the solution-filter as a release gate: **100% catch / 0% false-positive / 100% precision**; the eval **caught 2 real leak paths** (a compact complete function; loop-embedded-conditional pseudocode) that were then fixed. Offline **LLM-as-judge** scaffold included (injectable, no live key). *(Caveat: dataset is author-generated — a strong regression gate, but overstates real-world recall until real captured responses are added.)* | ~~Medium~~ done |
+| ~~**No evals**~~ ✅ **shipped (2026-09-15)** + **real LLM-as-judge via Promptfoo (2026-10-08)** | "I wrote evals for my LLM feature" is a top 2026 signal; it also proves the guardrail works | Labeled guardrail eval (16 cases, 8 leak / 8 safe) scoring the solution-filter as a key-free CI release gate: **100% catch / 0% false-positive / 100% precision**; the eval **caught 2 real leak paths** (a compact complete function; loop-embedded-conditional pseudocode) that were then fixed. Then **E10 (2026-10-08)** adopted **Promptfoo** as a local measurement layer: a **real (non-mock) LLM-as-judge** + a **captured-response correctness** dataset, metrics **split authored-vs-captured**, judge run live (**agreed with every human label**; self-preference bias named). *(Caveats: safety set still mostly author-generated — hence split-by-source; the judge isn't validated against a human-labeled judge set, so its scores are a signal, not truth.)* | ~~Medium~~ done |
 | ~~**No quantified impact**~~ ✅ **closed (2026-09-23)** | Resumes reward numbers | **Eval numbers** (100% catch / 0% FP; 167 tests) **+ runtime metrics now real**: instrumented per-request latency/tokens/cost client-side — self-run **p50 1579 ms / p95 2982 ms latency, 1459 avg tokens/request, ~$0.000252 est. cost/request** ($0.002271 over 9 requests). *(Caveat: self-collected, single model `gemini-3.5-flash-lite`, small n=9 sample — an order-of-magnitude signal, not a benchmark.)* | ~~Low–Med~~ done |
 | ~~**No automated tests**~~ ✅ **shipped (2026-09-15)** | Signals engineering rigor | **Vitest** on the pure modules: solution-filter, structured-parser, session-digest, progress-analytics, progress-records, rate-limiter, stuck-timer, URL normalization — **134 tests across 10 files**, plus the eval harness. | ~~Low–Med~~ done |
 | ~~**No structured output**~~ ✅ **shipped (2026-09-03)** | Named modern-LLM-I/O skill | Hybrid prose + `data` response for the 2 report-feeding actions, tolerant parse w/ prose-only fallback, deterministic session digest → session-aware report. Strong architecture story. *(Caveats: 2 actions only; no unit tests yet.)* | ~~Medium~~ done |
@@ -200,9 +207,12 @@ two real leak paths), unlocked the strongest resume bullet ("designed evals that
 measure an AI safety constraint"), and produced the first defensible numbers.
 **Runtime metrics — done (2026-09-23):** per-request latency/tokens/cost are now
 instrumented client-side (p50/p95 latency, avg tokens, est. cost), closing the
-"quantified impact" gap. **Next highest-leverage:** feeding **real captured Gemini
-responses** into the eval set so the catch-rate reflects real-world recall, not just
-the authored set (plus a validated, non-mock LLM-as-judge).
+"quantified impact" gap. **Real LLM-as-judge + captured eval cases — done
+(2026-10-08, E10):** adopted **Promptfoo** as a local measurement layer with a
+real (non-mock) judge and a captured-response correctness set, reported
+split-by-source and run live (judge agreed with every human label). **Next
+highest-leverage:** the remaining `RAG` keyword (the planned cheatsheet), and
+narrowing extension permissions.
 
 > **Recent progress (keep this honest as it ships):** progress-tracking MVP
 > shipped; "Understand solution" correctness bug fixed; **structured output
@@ -237,10 +247,18 @@ the authored set (plus a validated, non-mock LLM-as-judge).
 > test suite 329 → **344**; **built and locally green, NOT yet pushed or merged**;
 > honesty caveat — a successful end-to-end API call could not be confirmed this
 > session because Google's free tier stayed overloaded, so the new error *handling*
-> is unit-verified but the happy path was not seen live). See
+> is unit-verified but the happy path was not seen live); and most recently
+> **E10 eval framework — built (2026-10-08)** on the `feature/e10-eval-framework`
+> branch (a **Promptfoo** measurement layer beside the deterministic CI gate: a
+> real non-mock **LLM-as-judge** + a **captured-response correctness** dataset,
+> metrics split authored-vs-captured, key-free CI, verified by a full live judged
+> run where the judge agreed with every human label; the Vitest suite stayed **413**
+> since the new eval files sit outside the tsconfig/Vitest gate; **built and locally
+> green, NOT yet pushed or merged**). See
 > [DEV_JOURNAL.md](./DEV_JOURNAL.md) for the full narrative. The gaps above stay
-> listed until the work is actually *built*, not just designed — the top unmet
-> resume gap is now **real captured-response eval cases + a validated LLM-as-judge**.
+> listed until the work is actually *built*, not just designed — the top remaining
+> resume gaps are now **`RAG`** (the planned cheatsheet) and **narrowing extension
+> permissions**.
 
 ---
 
@@ -258,6 +276,16 @@ You can't quote impact you never measured. Even rough, self-collected numbers he
   over the sample. *Caveat: self-collected, single model `gemini-3.5-flash-lite`,
   small n=9 sample — an order-of-magnitude signal, not a benchmark. Cost is an
   estimate from public per-token pricing (BYOK / free quota), not a bill.*
+- ✅ **LLM-as-judge validated live (2026-10-08, E10):** over a full judged run
+  (**13,509 tokens, ~1m27s**) the Promptfoo judge **agreed with every human label** —
+  safety judge **100% catch / 0% FP / 100% precision** over 25 non-exempt cases, and
+  the correctness judge matched the deterministic result case-for-case (2/3; the one
+  "fail" is a real reported `O(N)` vs ground-truth `O(N·M)` miss the eval correctly
+  flags). *Caveat: agreement with the dataset labels, not a separate human-labeled
+  judge set; self-preference bias (Gemini grading Gemini) is real — a signal, not
+  truth.* Dependency note: `npm audit fix` took the Promptfoo dev-tree from 33 vulns
+  (1 critical) to **7 high / 0 critical**, with the 7 residual (proxy/JKS, dev-only)
+  deliberately accepted.
 - ✅ **344 automated tests** across the pure modules + the guardrail eval (167 at
   the 2026-09-23 metrics milestone → **205** after the 2026-09-24 guardrail-
   hardening pass added guards for B1–B7 → **236** after the 2026-09-26 chat
@@ -269,7 +297,11 @@ You can't quote impact you never measured. Even rough, self-collected numbers he
   `discovery-prompts.test.ts` and `llm-error-messages.test.ts` and expanded
   `llm-tool-round.test.ts`). *Caveat: the 344 figure is on the `feature/chat-polish`
   branch — **built and locally green, not yet pushed or merged**; E9 (329) merged to
-  main via PR #19, so the last merged-to-main count is 329.*
+  main via PR #19, so the last merged-to-main count is 329.* **Update (2026-10-07/08):**
+  the E6 bug-hardening batches took the suite to **413** (29 files) on
+  `feature/e6-bug-hardening`; **E10 (2026-10-08) added none** — its Promptfoo eval
+  files live outside the Vitest/tsconfig gate (Promptfoo transpiles them itself), so
+  the Vitest count held at 413 before and after E10.
 
 **Still to capture:**
 

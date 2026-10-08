@@ -130,12 +130,3 @@ proxy/JKS chains without a breaking downgrade, bump the pin and re-run `audit`.
 - The safety set is still **mostly authored**; the split-by-source report
   (`report/summarize.mjs`) exists precisely so the captured recall is visible
   separately.
-
-- The **judge is model-dependent and unvalidated** against a human-labeled judge
-  set — treat its verdicts as a signal, not truth. Known biases: position,
-  verbosity, self-preference (the judge here is a Gemini model grading a Gemini
-  model → self-preference risk is real).
-- **Correctness ground truth is human-labeled** (by the user, confirming proposed
-  labels). It's only as good as the labeling.
-- The safety set is still **mostly authored**; the `--split-by-source` report
-  exists precisely so the captured recall is visible separately.
