@@ -1,0 +1,66 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+#
+# LeetSage — Promptfoo eval config (E10).
+# Verified against promptfoo 0.124 docs at build time (2026-10-07). See ./README.md.
+#
+# HOW THIS WORKS (the echo-provider pattern):
+#   Our datasets are ALREADY-CAPTURED responses — we are not generating new model
+#   output, we are scoring real outputs we already observed. So the captured text
+#   is fed in as the "prompt", the `echo` provider returns it verbatim as the
+#   output, and the assertions run over THAT. No live generation = deterministic,
+#   reproducible, and (for the javascript assertions) fully offline.
+#   Ref: https://www.promptfoo.dev/docs/providers/echo/ (Evaluating Logged Outputs)
+#
+# WHAT CALLS A MODEL (and when):
+#   Only the `llm-rubric` JUDGE assertions call a live model, and only when NOT in
+#   offline mode. They are graded by YOUR Gemini key via the OpenAI-compatible
+#   endpoint (see defaultTest.options.provider). CI never runs this — the
+#   deterministic guardrail eval in src/evals/ is the CI gate. This is a local,
+#   on-demand MEASUREMENT, never a release gate, and never needs a shipped key.
+
+description: 'LeetSage safety + correctness eval (captured data, local judge)'
+
+# This eval is a MEASUREMENT, not a release gate (the deterministic guardrail
+# eval in src/evals/ is the gate — see README). A failing CORRECTNESS case is
+# the eval WORKING: it flags a real reported-vs-correct gap we WANT visible, not
+# a reason to abort. Promptfoo's default is to exit non-zero (100) on any test
+# failure, which would stop the summary step from running. We set the failure
+# exit code to 0 so the run always completes and prints the honest report; the
+# failures are still shown in Promptfoo's own output and in report/summarize.mjs.
+env:
+  PROMPTFOO_FAILED_TEST_EXIT_CODE: '0'
+
+# The echo provider returns the captured response as-is; assertions score it.
+providers:
+  - id: echo
+    label: captured-response
+
+# The captured response text IS the prompt (echo returns it unchanged).
+prompts:
+  - '{{captured_output}}'
+
+# Shared defaults for every test, incl. the GRADER used by llm-rubric assertions.
+defaultTest:
+  options:
+    # The judge model. Gemini via its OpenAI-compatible endpoint — the SAME
+    # endpoint the extension ships against (src/services/llm-service.ts), so the
+    # judge is a realistic stand-in. apiKeyEnvar means a MISSING key does not
+    # silently fall back to OPENAI_API_KEY — offline runs simply skip the judge.
+    #
+    # Self-preference caveat (documented honestly): the judge is a Gemini model
+    # grading Gemini-produced output, so its verdicts can skew self-favorable.
+    # Treat judge scores as a signal, validate before trusting. See README.
+    provider:
+      id: openai:chat:gemini-3.5-flash-lite
+      config:
+        apiBaseUrl: https://generativelanguage.googleapis.com/v1beta/openai
+        apiKeyEnvar: GEMINI_API_KEY
+        temperature: 0
+
+# Both suites are generated from TypeScript so they stay in sync with the
+# shipped code (safety cases come from the single source of truth in
+# src/evals/fixtures; correctness cases are the captured dataset). Promptfoo
+# transpiles these .ts files itself at load time.
+tests:
+  - file://datasets/safety-cases.ts
+  - file://datasets/correctness-cases.ts
