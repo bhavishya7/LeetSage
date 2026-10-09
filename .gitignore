@@ -59,3 +59,9 @@ docs/
 # breadcrumbs) — kept local. The spec FOLDERS themselves stay public (they
 # document the product's features cleanly).
 .kiro/specs/README.md
+# The security-audit spec is kept LOCAL: it documents the audit methodology and
+# the deliberately-accepted risks (e.g. the plaintext-key rationale, the accepted
+# dev-only dependency findings). Publishing "here's exactly what we checked and
+# what we left" needlessly aids an attacker — security through transparency of
+# the methodology buys nothing. Spec stays on disk for the audit sessions.
+.kiro/specs/leetsage-security-audit/
