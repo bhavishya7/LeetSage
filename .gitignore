@@ -30,3 +30,17 @@ dist-ssr
 # Exported progress files used for local verification (personal study data —
 # not source). Kept on disk, never committed.
 .kiro/specs/leetsage-progress-export-import/Downloads/
+
+# Promptfoo eval run artifacts (local/on-demand — not source). The last-run
+# JSON is regenerated on every `npm run eval:promptfoo`; Promptfoo's own cache
+# lives under ~/.promptfoo. Neither belongs in git.
+evals-promptfoo/.last-run.json
+evals-promptfoo/.judge-probe.json
+evals-promptfoo/.env-probe.txt
+evals-promptfoo/output/
+.promptfoo/
+
+# Local secrets for on-demand evals (BYOK). Promptfoo auto-loads .env from the
+# cwd for the live LLM-as-judge. NEVER commit the key — it's the user's own.
+.env
+.env.local

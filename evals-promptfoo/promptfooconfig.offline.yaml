@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+#
+# LeetSage — Promptfoo eval, OFFLINE config (E10).
+#
+# Identical to promptfooconfig.yaml EXCEPT:
+#   - the datasets are the *.offline.ts entries, which omit the LLM-as-judge, and
+#   - there is NO grader provider (defaultTest.options.provider), because nothing
+#     model-graded runs here.
+# Result: a fully offline, no-key, deterministic run — the solution-filter mirror
+# (safety) + the notation-equivalence check (correctness). This is the same signal
+# the Vitest CI gate enforces, surfaced through Promptfoo for a quick local read.
+#
+# WHY TWO CONFIGS (not one with an env toggle): Promptfoo loads `file://` test
+# modules in a sandbox that doesn't inherit the shell env, AND caches generated
+# test cases — so a load-time env flag can't reliably strip the judge. Two thin
+# config/entry pairs is the robust alternative. See README + the *.offline.ts files.
+
+description: 'LeetSage safety + correctness eval — OFFLINE (deterministic, no key)'
+
+env:
+  # This eval is a measurement, not a gate — a failing correctness case is the
+  # eval working, not a reason to abort the summary step. See the live config.
+  PROMPTFOO_FAILED_TEST_EXIT_CODE: '0'
+
+providers:
+  - id: echo
+    label: captured-response
+
+prompts:
+  - '{{captured_output}}'
+
+# NO defaultTest.options.provider here on purpose — no model-graded assertions run.
+
+tests:
+  - file://datasets/safety-cases.offline.ts
+  - file://datasets/correctness-cases.offline.ts

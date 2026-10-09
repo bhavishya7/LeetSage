@@ -2293,6 +2293,223 @@ what shipped; worth tightening in a future code touch.
 
 ---
 
+## 2026-10-08 — E10: Promptfoo eval framework — a real LLM-as-judge + a captured correctness dataset
+
+> The project's **second eval layer**, and the one that closes the Tier-1.5
+> promise left open since 2026-09-15: a **real (non-mock) LLM-as-judge** and a
+> correctness dataset built from **real captured responses**. It adopts an
+> industry tool (**Promptfoo**) as a *measurement* layer that sits BESIDE the
+> existing deterministic Vitest guardrail eval — which stays the CI gate and was
+> not touched. The two Longest-Consecutive correctness cases were supplied by the
+> user mid-session (paste problem + code + the extension's verbatim answer), so
+> the "painless capture" the E10 spec promised was exercised for real. On branch
+> `feature/e10-eval-framework` (off `main`@`19db429`; **local — NOT pushed, no PR,
+> not merged**). The interview framing is in
+> [INTERVIEW_PREP.md](./INTERVIEW_PREP.md) (Q14 + the "working with agents" Q&A);
+> the decision is captured as DESIGN_DECISIONS **ADR-010**.
+
+**What.** A new `evals-promptfoo/` directory — a **Promptfoo-based measurement
+layer**, separate from the deterministic `src/evals/` guardrail eval (the CI gate,
+unchanged). It adds the two things that gate couldn't give: a **real LLM-as-judge**
+(Gemini `gemini-3.5-flash-lite` via the same OpenAI-compatible endpoint the
+extension ships against) and a **correctness** dataset of **real captured
+responses** scored against human-labeled ground truth. Twelve files (committed in
+`242eeaf`, 1306 insertions, with the dependency work in `d563b13`):
+- `promptfooconfig.yaml` (LIVE — the judge grader under `defaultTest.options.provider`)
+  and `promptfooconfig.offline.yaml` (OFFLINE — no grader, deterministic only).
+- `datasets/safety-cases.ts` (+ `.offline.ts`) — the safety set, **generated from**
+  the single source of truth `src/evals/fixtures/guardrail-cases.ts`.
+- `datasets/correctness-cases.ts` (+ `.offline.ts`) — the new captured correctness set.
+- `assertions/solution-filter-assert.ts` — a thin bridge to the REAL shipped
+  `filterResponse`; `assertions/complexity-match-assert.ts` — deterministic Big-O
+  notation-equivalence.
+- `report/summarize.mjs` — metrics **split by source** (authored vs captured).
+- `README.md` — the whole design + honesty caveats + the dependency-security note.
+- npm scripts `eval:promptfoo` (full, judged) / `eval:promptfoo:offline`
+  (deterministic), both separate from the existing Vitest `eval`; dev dep
+  `promptfoo` pinned **exact** at `0.124.0`.
+
+**Why.** The 2026-09-15 eval was honest but had two stated gaps: its dataset was
+**author-generated** (a strong regression gate but an optimistic estimate of real
+recall), and its LLM-as-judge was an **offline mock** (a marker-matcher, not a
+validated judge). E10 is the Tier-1.5 follow-up that closes both — and it's the
+named home for the "is the Big-O actually *correct*" question that B10 (the drift
+fix) deliberately routed away from itself: **B10 made the optimal stable;
+E10 measures whether it's right.** Promptfoo was chosen over hand-rolling more
+harness because adopting a real eval tool is itself the resume/interview signal,
+and it's TS-native, local, and backend-free — a fit for the no-backend posture.
+
+**What broke / the hard part.** Four distinct stories, all verified in code.
+
+(1) ⭐ **The offline/live split had to become two config files, not an env toggle —
+and discovering *why* cost real debugging time.** The first design read
+`process.env.GEMINI_API_KEY` inside the dataset generator (a `judgeEnabled()`) to
+decide whether to emit the judge assertion. It silently never worked. Diagnosed
+empirically: Promptfoo loads `file://` test modules in a **sandbox that does not
+inherit the shell `process.env`**, *and* it **caches generated test cases** — so a
+load-time env read is doubly unreliable (the generator can't see the key, and a
+stale cached result sticks). An always-emitted judge was no good either: the
+offline config has **no grader provider**, so a judge assertion there would
+hang/retry instead of failing fast.
+
+(2) **A judge-prompt bias bug that would have failed two *correct* answers.** The
+correctness judge prompt initially hardcoded "for this problem the total input
+spans multiple dimensions, so a bare single variable is WRONG" — true for
+Encode/Decode, but it would have **wrongly failed** the two single-dimension
+Longest-Consecutive cases.
+
+(3) **A summarizer logic bug caught by verification.** The first `summarize.mjs`
+run reported **FP rate 100% / TN=0** on the safety splits — impossible given the
+Vitest gate reports 0% FP. The bug was in reconstructing the filter's raw
+prediction from `(assertion-pass, label)`.
+
+(4) **A misleading raw headline.** Promptfoo's top-line "46% passed / 54% failed"
+is meaningless here: leak cases "fail" **when the judge correctly flags them as
+leaks** — that's the eval working. And a failing *correctness* case (the
+Encode/Decode miss) is also the eval working, not a reason to abort — but
+Promptfoo exits non-zero (100) on any failure, which would stop the summary step.
+
+**How solved.**
+- **(1) The robust two-config design.** The dataset builders take an
+  `includeJudge` **boolean parameter**; two thin entry files pass it
+  (`*.ts` = judge on, `*.offline.ts` = judge off); each config references the
+  matching entry; the offline config has **no grader provider** so a judge
+  assertion can't hang there. `.env` still feeds the *grader* (that part of
+  Promptfoo does read `.env` from cwd) — the two-config split governs only whether
+  a judge assertion is **emitted**. (`evals-promptfoo/README.md` → "Why two
+  configs".)
+- **(2)** Rewrote the judge prompt to be **per-case neutral** — judge against the
+  given ground truth, don't assume multi-dimensionality unless the code shows it.
+  The full judged run confirmed the fix held (both correct cases passed).
+- **(3)** Fixed the ternary to
+  `predictedLeak = filterAgreed ? actualLeak : !actualLeak`
+  (`report/summarize.mjs` line ~77); re-ran → 100% catch / 0% FP, matching the
+  Vitest gate.
+- **(4)** Set `PROMPTFOO_FAILED_TEST_EXIT_CODE: '0'` in the LIVE config so the run
+  always completes and prints the honest report; the meaningful numbers live in
+  the **split-by-source** summary — which is exactly why `summarize.mjs` exists.
+
+**The four design decisions worth keeping (the interview gold).**
+- **Echo-provider pattern.** The data is ALREADY-CAPTURED output, so there's
+  nothing to generate: the captured text is fed as the "prompt", Promptfoo's
+  `echo` provider returns it verbatim, and the assertions score it. (Verified
+  against Promptfoo's "Evaluating Logged Production Outputs" docs.) This makes the
+  deterministic layer fully offline/reproducible and isolates live model calls to
+  the judge alone.
+- **Anti-drift bridge.** The safety dataset is **generated from** the single
+  source of truth (`src/evals/fixtures/guardrail-cases.ts`) by importing it, not
+  re-typing it, and the deterministic safety assertion calls the **real shipped
+  `filterResponse`** via a thin bridge — so Promptfoo's safety numbers match the
+  Vitest CI gate **by construction** (same code path = no two-sources-disagree
+  drift). The authored/captured + leak-type tags are preserved.
+- **Authored vs captured, reported split-by-source (the heart of E10).** The
+  flattering authored number never masquerades as real-world recall. Authored is a
+  strong regression gate but optimistic (the author wrote both the filter and the
+  cases); captured is the honest signal. `summarize.mjs` reports them separately.
+- **Key-free CI (the central call).** The deterministic guardrail eval stays the
+  release gate (GitHub Actions + Husky pre-commit, offline, no key). The Promptfoo
+  LLM-as-judge is a **local, on-demand measurement**, never a CI gate, never needs
+  a shipped/CI key. A conscious "what belongs in CI vs what doesn't" decision,
+  mirroring the earlier deliberate CD-skip — both flow from the no-shipped-key /
+  BYOK posture. Confirmed by grep that neither `.github/` nor `.husky/` references
+  `promptfoo` or the key.
+
+**The correctness dataset (the big new part — a deliberate mix so it DISCRIMINATES).**
+Three fully-grounded cases (all `ready: true`), chosen as **1 wrong + 2 right** so
+the eval proves it credits right answers and flags wrong ones, not just
+always-fails:
+- `corr-encode-decode-strings` (Encode/Decode #271): the extension reported a bare
+  undefined `O(N)`; ground truth is `O(N·M)` (N = #strings, M = avg length). A
+  **genuine miss** → deterministic MISMATCH + judge FAIL (judge reasoning: a bare
+  `O(N)` without a variable definition understates the multi-dimensional work).
+  This is the eval **working** — flagging a real reported-vs-correct gap.
+- `corr-longest-consecutive-optimal` (#128, hash-set): reported `O(N)/O(N)` with
+  N defined, and the extension correctly explained the amortized-`O(N)` subtlety
+  (the one the B18 routing bug had fumbled) → MATCH + judge PASS.
+- `corr-longest-consecutive-bruteforce` (#128, list-membership-in-loop): reported
+  current `O(N²)/O(1)` + optimal `O(N)/O(N)` — all correct → MATCH + judge PASS.
+- The **B16 headline-vs-breakdown** case is a documented, un-fabricated
+  `ready: false` TODO — we had only the complexity *shape* (`O(N*M+C)` vs
+  `O(C*N*M)`), not the problem/code/verbatim text, and the honesty rule is don't
+  invent. The file's `todo` note says exactly what to paste.
+
+**The dependency-security tradeoff (part of `d563b13`).** Promptfoo pulled a big
+dev-only tree. A **safe, non-breaking `npm audit fix`** took **33 vulns (1 critical
+/ 29 high) → 7 high, 0 critical** — clearing the critical `tar` and the shared
+dev-toolchain highs (undici, js-yaml, vite→7.3.7, rollup, postcss, browserslist,
+nanoid…), most of which **predated** Promptfoo (the advisory DB just has more
+entries now). **7 residual highs are deliberately accepted and documented** (eval
+README): two Promptfoo-only chains (`basic-ftp`→…→`proxy-agent`→promptfoo;
+`node-forge`→`jks-js`→promptfoo) in Promptfoo's **proxy / Java-keystore** paths
+this eval never exercises; the only fix is `npm audit fix --force` → a **breaking
+downgrade to promptfoo 0.116** that would invalidate the 0.124 config we verified
+against. The reasoning for accepting: promptfoo is a **dev dependency** — never
+imported by `src/`, never in the shipped `dist/`, never in CI — and the vectors are
+DoS / path-traversal-on-extraction requiring hostile input to a local tool that
+only processes our own repo + pasted eval text. `.env` + `.env.local` are
+gitignored (verified with `git check-ignore` **before** the file was created) so
+the BYOK key can never be committed; run artifacts (`.last-run.json`, probes) are
+gitignored too.
+
+**Verification (all green — the full judged run validated the judge LIVE).**
+- `npm.cmd run build` clean (`tsc -b && vite build`). The `evals-promptfoo/` TS
+  files sit **outside** the tsconfig includes (only `src` is type-checked), so
+  Promptfoo transpiles them itself — they don't affect the build gate.
+- `npm.cmd run test` = **413 passed / 29 files — unchanged**; the CI gate was not
+  regressed, verified before and after the audit-fix dependency churn.
+- `npm.cmd run lint` clean except the one pre-existing `App.tsx` exhaustive-deps
+  warning (untouched).
+- **OFFLINE eval:** 28 cases, 0 errors, deterministic only — safety 100% catch /
+  0% FP / 100% precision (matches the CI gate); correctness deterministic 2/3.
+- **FULL JUDGED run** (live Gemini, user's own key via the gitignored `.env`):
+  **13,509 total tokens, 1m27s.** The judge **independently agreed with every human
+  label** — safety judge 100% catch / 0% FP / 100% precision over 25 non-exempt
+  cases; correctness judge 2/3, matching the deterministic result case-for-case.
+  This resolved the one honest caveat that the judge had been "built but not seen
+  live."
+
+**Interview angle.** ⭐ The headline is **"I adopted an industry eval tool and used
+a real LLM-as-judge, honestly."** Three senior signals stack here. (1) **Honest
+measurement** — the authored-vs-captured split reported separately, so a flattering
+regression number never poses as real recall; real *captured* responses
+(dogfooded failures) beat self-authored cases because the author's cases skew
+toward what the filter already catches, and a correctness set needs **both** true-
+positives and true-negatives (right *and* wrong captures) to prove it
+discriminates. (2) **"What belongs in CI vs what doesn't"** — a validated-but-model-
+dependent, key-requiring judge is a *measurement*, so it stays local/on-demand and
+the deterministic gate stays the release blocker; the same instinct as the CD-skip,
+both driven by the BYOK/no-shipped-key posture. (3) **Deep tool-learning under a
+failure loop** — the env-based toggle failed, I diagnosed the *root cause*
+(sandboxed test-module loading + cached test cases) instead of patching, and
+switched to a fundamentally different design (two configs + a boolean parameter).
+Plus a crisp **"verify the eval itself, not just the thing under test"** story:
+verification caught two real bugs (the summarizer FP-rate inversion and the judge-
+prompt multi-dimensionality bias) **before** they produced misleading numbers.
+
+**Caveats (not overclaimed).**
+- E10 **measures** B14/R4/B16; it does **not** by itself fix them. A measured-wrong
+  result (Encode/Decode) may drive a follow-up prompt/model change — a separate
+  decision.
+- The judge is **model-dependent** and **not** validated against a human-labeled
+  *judge* set (only against the dataset labels); **self-preference bias is real**
+  (Gemini grading Gemini). Treat its scores as a signal, not truth.
+- Correctness ground truth is **human-labeled** (by the user confirming proposed
+  labels) — only as good as the labeling.
+- The safety set is still **mostly authored**; the split-by-source report exists so
+  captured recall is visible separately.
+- E10 ≠ **E10b** (MCP browser testing — a separate, later spec/branch, not built
+  here). The spec is **design-only** (documented as such — "adopt a tool + port the
+  dataset + add judge/correctness"), even though E10 was the single largest-value
+  remaining item.
+
+**Commits (branch `feature/e10-eval-framework`, off `main`@`19db429`; local — NOT
+pushed/merged).** `d563b13` (chore: add Promptfoo pinned `0.124.0` + harden the
+dependency tree — `npm audit fix`, `package.json`/`package-lock.json`, `.gitignore`
+for `.env`/run artifacts) · `242eeaf` (feat: the E10 eval — the 10 `evals-promptfoo/`
+files + the two npm scripts, plus the spec `design.md` + `correctness-seed.md`).
+
+---
+
 ## Next up (see [LEARNING_ROADMAP.md](./LEARNING_ROADMAP.md))
 
 1. ~~**Structured output** — the backbone~~ — **DONE (2026-09-03)**; the report is
