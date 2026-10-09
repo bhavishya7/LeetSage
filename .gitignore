@@ -44,3 +44,18 @@ evals-promptfoo/output/
 # cwd for the live LLM-as-judge. NEVER commit the key — it's the user's own.
 .env
 .env.local
+
+# Secondary / personal material — kept on disk, NEVER committed (E5).
+# Only the PRODUCT lives on git; everything about HOW it was built, what was
+# learned, and career/resume/interview material stays local-only.
+#   - docs/            : dev journal, ADRs, resume/interview prep, the learning
+#                        guides, and the inner doc index — all personal/learning.
+#   - .kiro/steering/  : session steering (conventions + career-project framing),
+#                        maintained locally; the historian still reads/writes these.
+# These files REMAIN on disk and keep being updated; they're just untracked.
+docs/
+.kiro/steering/
+# The specs INDEX is our internal tracking (status, commit hashes, dev-journal
+# breadcrumbs) — kept local. The spec FOLDERS themselves stay public (they
+# document the product's features cleanly).
+.kiro/specs/README.md
