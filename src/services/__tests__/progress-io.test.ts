@@ -177,16 +177,18 @@ describe('security — XSS neutralization (R5.1)', () => {
     const malicious = record({ notes: '<img src=x onerror="alert(1)">' });
     const result = parseImport(serializeProgressExport([malicious]));
     const notes = result.records[0].notes;
-    // Tag-forming chars are stripped, so no element can ever open.
-    expect(notes).not.toContain('<');
-    expect(notes).not.toContain('>');
+    // The tag-forming `<` is stripped, so no element can ever open. The bare
+    // `>` may remain (it's inert text and legitimate as an operator), but
+    // there must be no tag-opening sequence.
+    expect(notes).not.toMatch(/<[a-zA-Z/]/);
+    expect(notes).not.toContain('<img');
   });
 
   it('neutralizes a <script> payload in the title', () => {
     const sane = sanitizeRecord({ ...record(), title: '<script>steal()</script>' });
-    expect(sane?.title).not.toContain('<');
-    expect(sane?.title).not.toContain('>');
+    expect(sane?.title).not.toMatch(/<[a-zA-Z/]/);
     expect(sane?.title).not.toContain('<script');
+    expect(sane?.title).not.toContain('</script');
   });
 
   it('neutralizes a javascript: URL / anchor tag in approachSummary', () => {
@@ -195,19 +197,72 @@ describe('security — XSS neutralization (R5.1)', () => {
       attempts: [{ ...attempt(), approachSummary: `"><a href="javascript:evil()">x</a>` }],
     });
     const a = sane!.attempts[0].approachSummary;
-    // No tag can form without angle brackets; the javascript: URL is inert text.
-    expect(a).not.toContain('<');
-    expect(a).not.toContain('>');
+    // No tag can form without a tag-opening sequence; the javascript: URL is
+    // now inert text.
+    expect(a).not.toMatch(/<[a-zA-Z/]/);
     expect(a).not.toContain('<a href');
+    expect(a).not.toContain('</a');
   });
 
   it('is idempotent on legit prose with apostrophes/ampersands (no progressive corruption)', () => {
     const text = `the element's key & the array's length < n`;
     const once = sanitizeRecord({ ...record(), notes: text })!.notes;
     const twice = sanitizeRecord({ ...record(), notes: once })!.notes;
-    // Apostrophes and & are preserved verbatim; only the stray '<' is stripped.
-    expect(once).toBe(`the element's key & the array's length  n`);
+    // Apostrophes, &, AND the bare comparison operator `<` are all preserved
+    // verbatim now (B20): a `<` followed by a space is not tag-forming.
+    expect(once).toBe(`the element's key & the array's length < n`);
     expect(twice).toBe(once); // re-sanitizing changes nothing
+  });
+});
+
+// ===========================================================================
+// B20 — comparison operators in notes survive import (DATA LOSS regression)
+// ===========================================================================
+
+describe('B20 — comparison operators in notes are NOT stripped (data-loss fix)', () => {
+  it('preserves `<`, `>`, `<=`, `>=` used as operators in a study note', () => {
+    const notes = [
+      'Binary search:',
+      'while (left < right) { ... }',
+      'if (nums[mid] > nums[right]) left = mid + 1;',
+      'guard: arr[i] <= arr[j] && k >= 0',
+    ].join('\n');
+    const sane = sanitizeRecord({ ...record(), notes })!;
+    // Every operator survives UNCHANGED — this is the exact corruption B20 fixed.
+    expect(sane.notes).toContain('left < right');
+    expect(sane.notes).toContain('nums[mid] > nums[right]');
+    expect(sane.notes).toContain('arr[i] <= arr[j] && k >= 0');
+    // And nothing was silently removed.
+    expect(sane.notes).toBe(notes);
+  });
+
+  it('survives a full export -> import round-trip without losing operators', () => {
+    const notes = 'left < right, mid > lo, i <= j, n >= 0';
+    const { records, error } = parseImport(serializeProgressExport([record({ notes })]));
+    expect(error).toBeUndefined();
+    expect(records[0].notes).toBe(notes);
+  });
+
+  it('still neutralizes a real <script>-forming string even while keeping operators', () => {
+    const notes = 'left < right then <script>steal()</script> but mid > lo';
+    const sane = sanitizeRecord({ ...record(), notes })!;
+    // Operators kept…
+    expect(sane.notes).toContain('left < right');
+    expect(sane.notes).toContain('mid > lo');
+    // …but no tag can form.
+    expect(sane.notes).not.toMatch(/<[a-zA-Z/]/);
+    expect(sane.notes).not.toContain('<script');
+    expect(sane.notes).not.toContain('</script');
+  });
+
+  it('is idempotent: a mixed operator + tag string is stable across re-imports', () => {
+    const notes = 'a < b and <div onclick=x> and c > d';
+    const once = sanitizeRecord({ ...record(), notes })!.notes;
+    const twice = sanitizeRecord({ ...record(), notes: once })!.notes;
+    expect(twice).toBe(once);          // second pass changes nothing
+    expect(once).toContain('a < b');   // operator kept
+    expect(once).toContain('c > d');   // operator kept
+    expect(once).not.toMatch(/<[a-zA-Z/]/); // tag neutralized
   });
 });
 
@@ -325,7 +380,7 @@ describe('round-trip — export -> import preserves data and is idempotent', () 
     firstSolvedAt: Date.parse('2026-09-27T12:00:00Z'),
   });
 
-  it('round-trips every field (only `<`/`>` stripped from text; apostrophes & ampersands kept)', () => {
+  it('round-trips every field verbatim (operators + apostrophes + ampersands all kept)', () => {
     const json = serializeProgressExport([realistic]);
     const { records, skipped, error } = parseImport(json);
     expect(error).toBeUndefined();
@@ -337,12 +392,13 @@ describe('round-trip — export -> import preserves data and is idempotent', () 
     expect(r.patterns).toEqual(realistic.patterns);
     expect(r.firstSolvedAt).toBe(realistic.firstSolvedAt);
     expect(r.lastUpdatedAt).toBe(realistic.lastUpdatedAt);
-    // The apostrophe and ampersand survive verbatim; only the `>` is removed.
+    // The apostrophe, ampersand AND the `>` comparison operator all survive
+    // verbatim now (B20 — a `>` / a `<` used as an operator is not a tag).
     expect(r.notes).toContain("the key's list & binary-search");
-    expect(r.notes).toContain('timestamp  mid'); // the `>` was stripped
+    expect(r.notes).toContain('timestamp > mid'); // the operator is preserved
+    expect(r.notes).toBe(realistic.notes);        // whole note is unchanged
     expect(r.notes).not.toContain('&#39;');       // NOT escaped
     expect(r.notes).not.toContain('&amp;');       // NOT escaped
-    expect(r.notes).not.toContain('>');
   });
 
   it('re-importing the same export is a pure no-op (0 added, 0 updated)', () => {

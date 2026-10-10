@@ -17,6 +17,12 @@ import { buildSessionDigest, extractSessionFacts, buildRecordProjection } from '
 import { saveAttempt, slugFromUrl } from '../services/progress-records';
 import { getComplexityPin, recordOptimalPin, clearComplexityPin } from '../services/complexity-pin';
 import { routeMessage } from '../services/intent-router';
+import {
+  classifyPullResult,
+  decidePullAction,
+  DELAY_MS,
+  POST_INJECT_DELAY_MS,
+} from '../services/active-tab-pull';
 import ConfirmAffordance from '../components/ConfirmAffordance';
 import UsageReservoir from '../components/UsageReservoir';
 import WelcomeCard from '../components/WelcomeCard';
@@ -115,9 +121,11 @@ const App: React.FC = () => {
   // Retries with backoff: on a fresh page load the content script may not be
   // injected yet, or its initial extraction may still be running, so a single
   // request can come back empty. We retry a few times over a few seconds.
-  const pullFromActiveTab = useCallback((attempt = 0) => {
-    const MAX_ATTEMPTS = 6;
-    const DELAY_MS = 700;
+  // `attempt` counts message round-trips; `hasInjected` is a one-shot guard so
+  // we inject content.js at most once per pull cycle (B21). The decision of
+  // what to do after each round-trip lives in the pure `decidePullAction` brain
+  // (src/services/active-tab-pull.ts) so it's unit-testable without chrome.*.
+  const pullFromActiveTab = useCallback((attempt = 0, hasInjected = false) => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs[0];
       if (!tab?.id || !tab.url?.includes('leetcode.com/problems/')) return;
@@ -125,25 +133,36 @@ const App: React.FC = () => {
 
       const ask = () => chrome.tabs.sendMessage(tabId, { type: 'REQUEST_PROBLEM_DATA' }, (response) => {
         const lastError = chrome.runtime.lastError;
-        const notReady = lastError || !response?.success || !response?.data;
-        if (!notReady) { applyProblem(response!.data as ProblemContext); return; }
+        const outcome = classifyPullResult(response, lastError?.message);
+        const next = decidePullAction(outcome, { attempt, hasInjected });
 
-        // "Could not establish connection. Receiving end does not exist."
-        // means no content script is running on this tab — this happens on
-        // tabs that were already open before the extension was (re)loaded,
-        // since Chrome only auto-injects on fresh page loads. Inject it
-        // manually once, then retry the message.
-        const noReceiver = !!lastError?.message?.includes('Receiving end does not exist');
-        if (noReceiver && attempt === 0) {
-          chrome.scripting.executeScript(
-            { target: { tabId }, files: ['content.js'] },
-            () => { setTimeout(() => pullFromActiveTab(1), 300); }
-          );
-          return;
-        }
+        switch (next) {
+          case 'apply':
+            applyProblem(response!.data as ProblemContext);
+            return;
 
-        if (attempt < MAX_ATTEMPTS) {
-          setTimeout(() => pullFromActiveTab(attempt + 1), DELAY_MS);
+          case 'inject':
+            // No content script on this tab — happens on a LeetCode tab that was
+            // open BEFORE the extension was (re)installed (Chrome only
+            // auto-injects on fresh loads). Inject content.js once, then re-pull
+            // with hasInjected=true so we don't inject again, and keep retrying
+            // across the wider window until the already-rendered page is scraped.
+            chrome.scripting.executeScript(
+              { target: { tabId }, files: ['content.js'] },
+              () => {
+                void chrome.runtime.lastError; // swallow a benign re-inject error
+                setTimeout(() => pullFromActiveTab(attempt + 1, true), POST_INJECT_DELAY_MS);
+              }
+            );
+            return;
+
+          case 'retry':
+            setTimeout(() => pullFromActiveTab(attempt + 1, hasInjected), DELAY_MS);
+            return;
+
+          case 'giveup':
+          default:
+            return;
         }
       });
 

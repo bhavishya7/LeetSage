@@ -513,7 +513,67 @@ diagnosing a tool's version-gated feature and routing around it via connection m
 
 ---
 
-## Suggested sequence (GM recommendation — user may reorder)
+## ⭐ CURRENT STATUS (updated 2026-10-10 — read this first)
+
+> This block is the authoritative "where are we" snapshot, kept current as items
+> ship. The numbered "Suggested sequence" below it is the ORIGINAL plan (historical
+> — most of it is now done). The most granular live status also lives in the
+> gitignored `docs/career/LEARNING_ROADMAP.md` + the specs index; keep all three
+> in agreement.
+
+**SHIPPED & merged to main (in order built):**
+- ✅ **H1** — spec index statuses fixed.
+- ✅ **E9** — agentic chat enhancement (3-tier: route → context-chat → bounded tool
+  loop; two-layer memory; obscured usage reservoir). PR #19.
+- ✅ **E2+E3+E4** — chat polish (Sage gradient, motion, blinking caret), B11/B12
+  routing-bug fixes, onboarding WelcomeCard. PR #20.
+- ✅ **E6 bug-hardening** (3 batches) — B13 (complexity formatting / markdown-eats-`*`),
+  B14/R4/B16 (prompt example-bleed, bare-symbol, headline-vs-breakdown — PARTIAL,
+  prompt-level; correctness is the eval's job), B15 (reliable code capture:
+  full-Monaco-only, retry, `ok|empty|failed`), B10 (pin canonical optimal per problem
+  + CoT + constraint-anchoring), B17 (honest stats-cost caption). PRs #21, #22.
+- ✅ **E10 eval framework** — Promptfoo adopted (own eval step, local/on-demand
+  LLM-judge, key-free CI); correctness dataset from REAL captured cases; measurement
+  pass run (judge agreed with every human label). PR #23.
+- ✅ **E5** — personal/learning docs (`docs/`, `.kiro/steering/`, specs README,
+  security-audit spec) UNTRACKED + gitignored (clean-forward, Option A). Kept on disk
+  + an external backup at `..\LeetSage-personal-backup\` (refresh via `robocopy /MIR`
+  after any historian edit — git no longer versions these).
+- ✅ **Security audit** (its own `leetsage-security-audit` spec, gitignored) — two
+  independent sweeps, no exposure; 33 deps vulns all dev-only (accepted); produced the
+  E7 permission-narrowing map.
+- ✅ **E7 scope permissions** — manifest narrowed to least privilege: removed
+  `contextMenus` + `tabs` + `localhost:5173` match; host → `https://leetcode.com/problems/*`.
+  Final permissions: `scripting, sidePanel, commands, storage`. `tabs` removal
+  empirically verified safe (host perm covers the sync listeners). PR #24 + the E7
+  commits.
+
+**LEFT before launch:**
+1. **B20 + B21 bug-fix session (NEXT)** — B20 (import strips `<`/`>` from notes →
+   DATA LOSS; user's must-fix; `progress-io.ts` `neutralizeString` → neutralize only
+   tag-forming brackets, stay idempotent) + B21 (content script doesn't inject on an
+   already-open LeetCode tab when arriving from a non-LeetCode page → first-run UX;
+   `App.tsx` inject-fallback hardening). Both in the registry; handoff written. After
+   B20 fix, re-import the ORIGINAL JSON (from backup) to restore corrupted notes —
+   don't overwrite good data with the corrupted current storage.
+2. **E8 — deploy to Chrome Web Store** (THE FINISH LINE) — store listing, privacy
+   disclosure (sends problem text + code to Gemini via the user's own key),
+   screenshots, final permission justification (now cleanly minimal post-E7), icons,
+   versioning. Manual publish (CD deliberately skipped — see CI/CD decision). Needs
+   its own planning spec.
+
+**OPEN bugs not blocking launch** (in the registry): **B18** (complexity follow-up
+misroutes to TIME_COMPLEXITY_HINT → future intent-router pass), **B19** (content-script
+Timeout log on non-problem pages — cosmetic), **B8** (optimality-equivalence crediting),
+**B9** (hallucinated section headers). Plus the deferred/backlog items below.
+
+**DEFERRED to the eval, not a code fix:** B14/R4/B16 are "partial" — the complexity
+*correctness* (vs. drift, which B10 fixed) is measured by E10, not closed by a prompt
+tweak.
+
+---
+
+## Suggested sequence (ORIGINAL plan — HISTORICAL; see CURRENT STATUS above for what's actually done)
 
 1. **H1** fix stale spec index (rides on the next branch).
 2. **E9 agentic chat** (tool-use loop + conversation context (E1), reconciled with
@@ -528,6 +588,11 @@ diagnosing a tool's version-gated feature and routing around it via connection m
    decided).
 7. **E7 scope permissions** (LAST; export data first).
 8. **E8 deployment plan** → publish.
+
+> **Note (2026-10-10):** the above numbered order was the original plan. Actual
+> execution reordered some items (E5 + the security audit happened late, as their own
+> passes; E6 ran as multiple batches). All of 1–7 are DONE; only B20/B21 + E8 remain.
+> The reasoning notes below are kept for the historical "why".
 
 > Why E9 before E2/E3: E9 substantially reworks the chat surface (and partially
 > replaces routing). Doing cosmetic polish (E2) or routing-bug fixes (E3) first

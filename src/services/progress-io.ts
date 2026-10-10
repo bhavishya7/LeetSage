@@ -222,20 +222,32 @@ function readProp(obj: Record<string, unknown>, key: string): unknown {
 /**
  * Neutralizes HTML in a rendered string field (R5.1), and length-caps (R5.2.1).
  *
- * We strip only the TAG-FORMING characters `<` and `>`. Without `<`, no HTML
- * element can open — so `<img onerror=…>`, `<script>`, and `javascript:` hrefs
- * (which require a tag) are all inert. We deliberately DO NOT touch `&`, quotes,
+ * We strip only TAG-FORMING `<` — a `<` immediately followed by a letter or `/`
+ * (as in `<script`, `<img`, `</a`). That is the ONLY shape that can open or
+ * close an HTML element; without it no tag can ever form, so `<img onerror=…>`,
+ * `<script>`, and `javascript:` hrefs (which all require a tag) are inert. We
+ * deliberately LEAVE bare comparison operators alone — `a < b`, `x > y`,
+ * `arr[i] <= arr[j]`, `nums[mid] > nums[right]` — because `< ` / `<=` / a lone
+ * `>` cannot start a tag, and stripping them was pure DATA LOSS in study notes
+ * full of code and complexity prose (bug B20). We also DO NOT touch `&`, quotes,
  * or apostrophes: in text content those cannot start a tag, and escaping them
  * is (a) unnecessary and (b) NOT idempotent — e.g. `element's` → `element&#39;s`
  * → `element&amp;#39;s` would progressively corrupt legit prose across repeated
- * export/import cycles, and would show literal entities in the UI. Stripping
- * `<`/`>` is both sufficient for safety and idempotent (re-import is a no-op).
+ * export/import cycles, and would show literal entities in the UI.
+ *
+ * IDEMPOTENCY: we remove only the tag-forming `<` character (e.g. `<script>` →
+ * `script>`), never rewrite into entities. Once that `<` is gone the leftover
+ * `script>` has only a bare `>` left, which is not tag-forming — so a second
+ * pass is a no-op. Export→import→export→import is stable (the import pipeline
+ * prizes idempotency — R5.1).
  *
  * This is defense-in-depth. The app's renderer builds React elements via JSX
  * (ContentDisplay.renderContent / the RecordDetail <pre>), and React escapes
  * text children by default — there is no dangerouslySetInnerHTML/innerHTML
  * anywhere — so raw HTML never executes even before this runs (verified for
- * R5.1.2). This makes doubly sure it can't.
+ * R5.1.2 / security-audit #6/#14). Because that renderer layer already covers
+ * XSS, this sanitizer can safely be the narrow tag-forming strip rather than
+ * nuking every angle bracket.
  */
 function neutralizeString(value: unknown, maxLen: number): string {
   if (typeof value !== 'string') {
@@ -248,8 +260,11 @@ function neutralizeString(value: unknown, maxLen: number): string {
   // Drop control chars (keep tab/newline/carriage-return for note formatting).
   // eslint-disable-next-line no-control-regex -- stripping control chars is the intent here
   s = s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
-  // Strip tag-forming characters so no HTML element can ever open. Idempotent.
-  s = s.replace(/[<>]/g, '');
+  // Strip ONLY tag-forming `<` (a `<` that opens/closes an element: `<` directly
+  // followed by an ASCII letter or `/`). Remove just the `<`, leaving the rest
+  // as inert text. Bare `<`/`>` used as comparison operators are preserved.
+  // Idempotent: the result never contains a tag-forming `<` again.
+  s = s.replace(/<(?=[a-zA-Z/])/g, '');
   if (s.length > maxLen) s = s.slice(0, maxLen);
   return s;
 }
