@@ -11,7 +11,6 @@
   },
   "permissions": [
     "scripting",
-    "tabs",
     "sidePanel",
     "commands",
     "storage"
@@ -26,10 +25,10 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'; base-uri 'self'"
   },
-  "host_permissions": ["http://*/*", "https://*/*"],
+  "host_permissions": ["https://leetcode.com/problems/*"],
   "content_scripts": [
     {
-      "matches": ["https://leetcode.com/problems/*", "http://localhost:5173/"],
+      "matches": ["https://leetcode.com/problems/*"],
       "js": ["content.js"]
     }
   ],
