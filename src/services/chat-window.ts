@@ -65,7 +65,7 @@ function extractTurns(history: LearningContent[]): Turn[] {
 }
 
 function renderTurn(t: Turn): string {
-  return t.answer ? `You: ${t.question}\nLeetSage: ${t.answer}` : `You: ${t.question}`;
+  return t.answer ? `You: ${t.question}\nLeetSmith: ${t.answer}` : `You: ${t.question}`;
 }
 
 /**

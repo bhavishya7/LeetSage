@@ -1,5 +1,5 @@
 /**
- * Core data models for LeetSage AI Learning Assistant
+ * Core data models for LeetSmith AI Learning Assistant
  */
 
 export interface ProblemContext {

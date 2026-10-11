@@ -12,7 +12,7 @@ import type { GeminiModel } from '../types';
  *   and corroborating public trackers, retrieved 2026-09-23.
  *
  * ⚠️ CAVEAT — READ BEFORE QUOTING THESE NUMBERS:
- *   LeetSage's model IDs are `gemini-3.5-*` (see .kiro/steering/tech.md), but at
+ *   LeetSmith's model IDs are `gemini-3.5-*` (see .kiro/steering/tech.md), but at
  *   retrieval time the cleanly-corroborated public per-token rates were for the
  *   `gemini-2.5-*` tier ($0.10 / $0.40 for flash-lite; $0.30 / $2.50 for flash).
  *   The exact `3.5` rates were NOT consistently confirmed across sources. We

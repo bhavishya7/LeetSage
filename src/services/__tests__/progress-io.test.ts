@@ -59,7 +59,7 @@ function record(overrides: Partial<ProblemRecord> = {}): ProblemRecord {
 describe('buildProgressReportMarkdown', () => {
   it('handles an empty record set', () => {
     const md = buildProgressReportMarkdown([], Date.parse('2026-09-27T00:00:00Z'));
-    expect(md).toContain('# LeetSage Progress — 2026-09-27');
+    expect(md).toContain('# LeetSmith Progress — 2026-09-27');
     expect(md).toContain('No saved problems yet');
   });
 
@@ -426,7 +426,7 @@ describe('round-trip — export -> import preserves data and is idempotent', () 
 
 describe('security — hardening follow-ups (#1 non-JSON, #2 global attempts, #5 url)', () => {
   it('#1 gives a friendly message for a clearly-non-JSON file', () => {
-    const result = parseImport('# LeetSage Progress\n\nthis is markdown, not json');
+    const result = parseImport('# LeetSmith Progress\n\nthis is markdown, not json');
     expect(result.error).toMatch(/doesn't look like a JSON file/i);
     expect(result.records).toHaveLength(0);
   });

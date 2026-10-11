@@ -1,4 +1,4 @@
-# LeetSage Source Code Structure
+# LeetSmith Source Code Structure
 
 ## Directory Overview
 
@@ -81,7 +81,7 @@ src/
 
 1. Make code changes
 2. Build: `npm run build` (on Windows PowerShell: `npm.cmd run build`)
-3. Go to `chrome://extensions` → click **Reload** on LeetSage
+3. Go to `chrome://extensions` → click **Reload** on LeetSmith
 4. If you changed the content script, also refresh the LeetCode tab
 5. For tabs open before a reload, remove + re-add unpacked (Chrome only
    auto-injects content scripts on fresh loads)

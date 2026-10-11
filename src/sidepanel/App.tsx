@@ -668,7 +668,7 @@ const App: React.FC = () => {
       <div className="leetsage-sage-fill h-0.5 shrink-0" aria-hidden="true" />
       {/* Single consolidated header: problem title + difficulty on the left,
           usage counter + theme + settings on the right. (Chrome's side-panel
-          title bar already shows the "LeetSage" name, so we don't repeat it.) */}
+          title bar already shows the "LeetSmith" name, so we don't repeat it.) */}
       <div className="flex items-start justify-between gap-2 px-3 py-2.5 bg-white dark:bg-neutral-800 border-b border-neutral-200 dark:border-neutral-700 shrink-0">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 min-w-0 flex-1">
           {problemContext ? (
@@ -684,7 +684,7 @@ const App: React.FC = () => {
         </div>
         <div className="flex items-center gap-2.5 shrink-0">
           <button onClick={() => setShowProgress(v => !v)} className={`leetsage-pressable transition-colors ${showProgress ? 'text-teal-500' : 'text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200'}`} aria-label="My Progress" aria-pressed={showProgress} title="My Progress">📈</button>
-          <button onClick={() => setShowWelcome(true)} className="leetsage-pressable text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 transition-colors" aria-label="What is LeetSage?" title="What is LeetSage?">❔</button>
+          <button onClick={() => setShowWelcome(true)} className="leetsage-pressable text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 transition-colors" aria-label="What is LeetSmith?" title="What is LeetSmith?">❔</button>
           <button onClick={toggleTheme} className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 transition-colors" aria-label="Toggle theme" title={isDark ? 'Switch to light' : 'Switch to dark'}>
             {isDark ? '☀️' : '🌙'}
           </button>
@@ -854,7 +854,7 @@ const App: React.FC = () => {
           onClick={() => setShowWelcome(false)}
           role="dialog"
           aria-modal="true"
-          aria-label="About LeetSage"
+          aria-label="About LeetSmith"
         >
           <div
             className="leetsage-pop-in bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-xl shadow-lg px-5 py-5"

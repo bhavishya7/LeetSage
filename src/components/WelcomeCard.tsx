@@ -1,7 +1,7 @@
 import React from 'react';
 
 /**
- * E4 onboarding (chat-polish §5). The first-run welcome: what LeetSage is, the
+ * E4 onboarding (chat-polish §5). The first-run welcome: what LeetSmith is, the
  * no-solutions promise, and how to get started. Rendered in TWO places from the
  * same source so they can't drift:
  *   - as the chat empty state (ContentDisplay, when there's no content yet), and
@@ -19,7 +19,7 @@ const WelcomeCard: React.FC<WelcomeCardProps> = ({ onDismiss }) => (
   <div className="max-w-[300px] text-center">
     <div className="text-4xl mb-3">🧠</div>
     <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-100 mb-1.5">
-      Welcome to LeetSage
+      Welcome to LeetSmith
     </h2>
     <p className="text-xs text-neutral-500 dark:text-neutral-400 leading-relaxed mb-3">
       Your AI coach for this problem. I guide you toward the answer with hints,

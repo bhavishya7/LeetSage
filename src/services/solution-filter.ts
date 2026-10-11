@@ -125,7 +125,7 @@ function extractCodeBlocks(content: string): Array<{ code: string; lineCount: nu
 }
 
 function buildFilteredMessage(reason: string): string {
-  return `⚠️ **Content filtered**\n\nThis response appeared to contain too much solution detail. LeetSage is here to help you *learn*, not to solve problems for you!\n\nTry one of these instead:\n- Click **Get Hint** for a progressive hint\n- Click **Break Down Problem** to approach it step by step\n\n*Filter reason: ${reason}*`;
+  return `⚠️ **Content filtered**\n\nThis response appeared to contain too much solution detail. LeetSmith is here to help you *learn*, not to solve problems for you!\n\nTry one of these instead:\n- Click **Get Hint** for a progressive hint\n- Click **Break Down Problem** to approach it step by step\n\n*Filter reason: ${reason}*`;
 }
 
 export function filterResponse(content: string, actionType: ActionType): FilterResult {

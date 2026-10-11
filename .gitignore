@@ -65,3 +65,10 @@ docs/
 # what we left" needlessly aids an attacker — security through transparency of
 # the methodology buys nothing. Spec stays on disk for the audit sessions.
 .kiro/specs/leetsage-security-audit/
+# The E8 Chrome-Web-Store deployment spec is kept LOCAL: it's launch strategy,
+# not product. It contains trademark/name reasoning, the host-Terms ("scraping")
+# risk analysis and knowingly-accepted gray areas, publisher-account and
+# privacy-policy planning, and the policy-compliance pre-flight. That's internal
+# go-to-market/legal-posture material — the public repo should carry only the
+# technical product. Stays on disk + external backup; never committed.
+.kiro/specs/leetsage-e8-chrome-store-deployment/

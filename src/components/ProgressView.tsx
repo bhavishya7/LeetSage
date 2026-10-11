@@ -193,9 +193,12 @@ function downloadFile(filename: string, contents: string, mime: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-/** Date-stamped export filename, e.g. leetsage-progress-2026-09-27.json (R1.4/R2.3). */
+/** Date-stamped export filename, e.g. leetsmith-progress-2026-09-27.json (R1.4/R2.3).
+ *  NB: only the download FILENAME carries the new brand; the in-file envelope
+ *  discriminator stays `EXPORT_FORMAT_ID = 'leetsage-progress'` (a data-schema
+ *  contract) so old backups still import — import keys off file CONTENT, not name. */
 function exportFilename(ext: 'md' | 'json'): string {
-  return `leetsage-progress-${new Date().toISOString().slice(0, 10)}.${ext}`;
+  return `leetsmith-progress-${new Date().toISOString().slice(0, 10)}.${ext}`;
 }
 
 const ProgressView: React.FC<ProgressViewProps> = ({ onClose }) => {
@@ -390,7 +393,7 @@ const ProgressView: React.FC<ProgressViewProps> = ({ onClose }) => {
           )}
           <ToolbarButton
             onClick={() => fileInputRef.current?.click()}
-            title="Import a previously-exported LeetSage JSON backup"
+            title="Import a previously-exported LeetSmith JSON backup"
             icon="⬆"
             label="Import"
           />

@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "LeetSage",
+  "name": "LeetSmith",
   "version": "1.0.0",
   "description": "AI-powered learning companion for LeetCode problems. Get hints, examples, and breakdowns without spoiling solutions.",
   "action": {

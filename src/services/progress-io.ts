@@ -122,14 +122,14 @@ function stripO(c: string): string {
 export function buildProgressReportMarkdown(records: ProblemRecord[], now: number = Date.now()): string {
   const dateStr = new Date(now).toISOString().slice(0, 10);
   if (records.length === 0) {
-    return `# LeetSage Progress — ${dateStr}\n\n_No saved problems yet._\n`;
+    return `# LeetSmith Progress — ${dateStr}\n\n_No saved problems yet._\n`;
   }
 
   const insights = computeInsights(records);
 
   // --- Summary header (R1.2) ---
   const lines: string[] = [];
-  lines.push(`# LeetSage Progress — ${dateStr}`);
+  lines.push(`# LeetSmith Progress — ${dateStr}`);
   lines.push('');
   lines.push('## Summary');
   lines.push(`- Problems tracked: ${insights.totalProblems}`);
@@ -436,22 +436,22 @@ export function parseImport(text: string): ImportResult {
   // picker's `accept=".json"` is only a hint — the user can choose any file.
   const head = text.trimStart()[0];
   if (head !== '{' && head !== '[') {
-    return { records: [], skipped: 0, error: "That doesn't look like a JSON file. Import the .json backup you exported from LeetSage." };
+    return { records: [], skipped: 0, error: "That doesn't look like a JSON file. Import the .json backup you exported from LeetSmith." };
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    return { records: [], skipped: 0, error: "That file isn't valid JSON. Import the .json backup you exported from LeetSage." };
+    return { records: [], skipped: 0, error: "That file isn't valid JSON. Import the .json backup you exported from LeetSmith." };
   }
 
   // Stage 3 — envelope gate (R5.5.1).
   if (!parsed || typeof parsed !== 'object') {
-    return { records: [], skipped: 0, error: 'Not a LeetSage progress file.' };
+    return { records: [], skipped: 0, error: 'Not a LeetSmith progress file.' };
   }
   const env = parsed as Record<string, unknown>;
   if (readProp(env, 'format') !== EXPORT_FORMAT_ID) {
-    return { records: [], skipped: 0, error: 'Not a LeetSage progress file (missing the LeetSage format marker).' };
+    return { records: [], skipped: 0, error: 'Not a LeetSmith progress file (missing the format marker).' };
   }
   const fv = Number(readProp(env, 'formatVersion'));
   if (!Number.isFinite(fv) || fv < 1 || fv > EXPORT_FORMAT_VERSION) {

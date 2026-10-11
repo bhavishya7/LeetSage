@@ -36,10 +36,10 @@ describe('buildConversationWindow', () => {
     expect(buildConversationWindow([actionCard('GET_HINT', 'a hint')])).toBe('');
   });
 
-  it('renders a single answered turn as You / LeetSage', () => {
+  it('renders a single answered turn as You / LeetSmith', () => {
     const out = buildConversationWindow([userMsg('what is a hash map?'), assistantMsg('a key-value store')]);
     expect(out).toContain('You: what is a hash map?');
-    expect(out).toContain('LeetSage: a key-value store');
+    expect(out).toContain('LeetSmith: a key-value store');
   });
 
   it('excludes action-card bodies — only chat turns appear', () => {
@@ -79,7 +79,7 @@ describe('buildConversationWindow', () => {
   it('handles an unanswered trailing question (no assistant reply yet)', () => {
     const out = buildConversationWindow([userMsg('pending question')]);
     expect(out).toContain('You: pending question');
-    expect(out).not.toContain('LeetSage:');
+    expect(out).not.toContain('LeetSmith:');
   });
 
   it('renders turns oldest→newest within the block', () => {

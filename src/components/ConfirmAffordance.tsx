@@ -14,7 +14,7 @@ import type { ActionType } from '../types';
  * reads cleanly in the narrow side panel and never overflows the right edge.
  * The `exempt` reason gets a louder treatment (amber "heads-up" accent + ring +
  * shadow) because it's about to reveal the full solution — the one thing
- * LeetSage normally withholds — so the pause is meaningful, not noise.
+ * LeetSmith normally withholds — so the pause is meaningful, not noise.
  */
 
 type ConfirmReason = 'exempt' | 'borderline';
@@ -55,7 +55,7 @@ function copyFor(reason: ConfirmReason, action: ActionType): { icon: string; hea
       return {
         icon: '🔓',
         heading: 'Reveal the full solution?',
-        body: "This walks through the complete optimal solution — the thing LeetSage usually holds back so you can crack it yourself. Sure you don't want a hint first?",
+        body: "This walks through the complete optimal solution — the thing LeetSmith usually holds back so you can crack it yourself. Sure you don't want a hint first?",
       };
     }
     if (action === 'CHECK_APPROACH') {

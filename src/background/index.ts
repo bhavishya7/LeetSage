@@ -18,19 +18,19 @@ function enablePanelOnActionClick() {
   chrome.sidePanel
     .setOptions({ path: 'index.html', enabled: true })
     .then(() => chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }))
-    .then(() => console.log('[LeetSage Background] side panel enabled + openPanelOnActionClick set'))
-    .catch((err) => console.error('[LeetSage Background] side panel setup failed:', err));
+    .then(() => console.log('[LeetSmith Background] side panel enabled + openPanelOnActionClick set'))
+    .catch((err) => console.error('[LeetSmith Background] side panel setup failed:', err));
 }
 
 enablePanelOnActionClick();
 
 chrome.runtime.onInstalled.addListener(() => {
-  console.log('[LeetSage Background] Service worker installed');
+  console.log('[LeetSmith Background] Service worker installed');
   enablePanelOnActionClick();
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  console.log('[LeetSage Background] Browser startup');
+  console.log('[LeetSmith Background] Browser startup');
   enablePanelOnActionClick();
 });
 
