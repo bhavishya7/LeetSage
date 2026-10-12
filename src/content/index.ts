@@ -24,7 +24,7 @@ async function extractAndSendProblemData(): Promise<void> {
     // while an old content script is still alive in the page — harmless noise.
     const msg = error instanceof Error ? error.message : String(error);
     if (msg.includes('Extension context invalidated')) return;
-    console.error('[LeetSage] Failed to extract problem data:', error);
+    console.error('[LeetSmith] Failed to extract problem data:', error);
   }
 }
 

@@ -177,7 +177,7 @@ async function readOnce(tabId: number): Promise<PageReadResult | null> {
     const result = results?.[0]?.result as PageReadResult | undefined;
     return result ?? null;
   } catch (err) {
-    console.error('[LeetSage] Code read attempt failed:', err);
+    console.error('[LeetSmith] Code read attempt failed:', err);
     return null;
   }
 }

@@ -1,10 +1,15 @@
-# LeetSage 🧠
+# LeetSmith 🧠
 
 **An AI-powered learning coach for LeetCode that helps you understand problems — without ever handing you the answer.**
 
-LeetSage is a Chrome extension that opens a side panel on LeetCode problem pages and offers on-demand coaching: progressive hints, problem breakdowns, alternative examples, pre-submission code analysis, and deep "why does this work" explanations. It is deliberately built to *teach*, not to solve — the opposite of a solve-it-for-you tool.
+LeetSmith is a Chrome extension that opens a side panel on LeetCode problem pages and offers on-demand coaching: progressive hints, problem breakdowns, alternative examples, pre-submission code analysis, and deep "why does this work" explanations. It is deliberately built to *teach*, not to solve — the opposite of a solve-it-for-you tool.
 
 It runs on your own free Google Gemini API key (bring-your-own-key), so there's no cost, no account, and no backend.
+
+> **Not affiliated with LeetCode.** LeetSmith is an independent project and is not
+> affiliated with, endorsed by, sponsored by, or produced by LeetCode. It is a
+> companion tool that works with the LeetCode website; "LeetCode" is a trademark of
+> its respective owner.
 
 ---
 
@@ -17,7 +22,7 @@ Coaching actions, all grounded in the specific problem you're on. Four one-tap b
 - **🧠 Understand solution** — explains *why* the optimal solution works: real-world analogy, key insight, why each part is necessary, and complexity
 - **📝 Generate report** — a study-note / progress report you can save to your notes
 
-Plus **free-form chat that routes**: just type what you want. LeetSage classifies your message and, on a confident match, runs the right action for you — "break this down into steps", "what pattern is this?", "give me another example", "what's the time complexity?" reach the breakdown / pattern / examples / complexity coaching that no longer needs its own button. Anything solution-bearing asks you to confirm first ("Did you want to understand the solution? — Yes / Just answer"), so a solution is never revealed by phrasing alone. Ambiguous or general questions fall through to a direct, code-aware chat answer.
+Plus **free-form chat that routes**: just type what you want. LeetSmith classifies your message and, on a confident match, runs the right action for you — "break this down into steps", "what pattern is this?", "give me another example", "what's the time complexity?" reach the breakdown / pattern / examples / complexity coaching that no longer needs its own button. Anything solution-bearing asks you to confirm first ("Did you want to understand the solution? — Yes / Just answer"), so a solution is never revealed by phrasing alone. Ambiguous or general questions fall through to a direct, code-aware chat answer.
 
 Also: per-problem **history** that persists across sessions, a **dark/light** theme, and **free-tier guardrails** (rate limits, token caps, a usage counter, and a kill switch — all adjustable).
 
@@ -52,7 +57,7 @@ Then load it in Chrome:
 
 ### Use it
 1. Open any LeetCode problem (`leetcode.com/problems/...`)
-2. Click the LeetSage toolbar icon to open the side panel
+2. Click the LeetSmith toolbar icon to open the side panel
 3. Open ⚙️ Settings, paste your Gemini API key, and pick a model (Flash-Lite is the fast, free-tier-friendly default)
 4. Tap a coaching action or ask your own question
 
@@ -75,4 +80,4 @@ Planned enhancements are documented as specs under [`.kiro/specs/`](.kiro/specs/
 
 ## Design philosophy
 
-LeetSage is a *learning* tool first. It withholds complete solutions on purpose, so the value is in building genuine understanding — not shipping green checkmarks. It's a personal project, free to run, with your data staying in your browser.
+LeetSmith is a *learning* tool first. It withholds complete solutions on purpose, so the value is in building genuine understanding — not shipping green checkmarks. It's a personal project, free to run, with your data staying in your browser.
