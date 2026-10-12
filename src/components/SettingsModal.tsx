@@ -159,9 +159,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
                 <span className="mt-0.5 shrink-0 text-[var(--sage-mid)]" aria-hidden="true">✓</span>
                 <span className="text-[11px] leading-relaxed text-neutral-700 dark:text-neutral-200">
                   You've acknowledged how your data is used — the current problem
-                  and your code are sent to{' '}
-                  <span className="font-medium">Google's Gemini API</span> with your
-                  own key to generate coaching.{' '}
+                  and your code are sent to <span className="font-medium">Google</span>{' '}
+                  (using your own key) to generate coaching, and{' '}
+                  <span className="font-medium">LeetSmith does not store or collect your data.</span>{' '}
                   <a
                     href={PRIVACY_POLICY_URL}
                     target="_blank"
@@ -185,10 +185,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
                   className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--sage-mid)] cursor-pointer"
                 />
                 <span className="text-[11px] leading-relaxed text-neutral-700 dark:text-neutral-200">
-                  I understand that LeetSmith sends the current problem text and my
-                  code to <span className="font-medium">Google's Gemini API</span>,
-                  using my own API key, to generate coaching.{' '}
-                  <span className="font-medium">Nothing is sent to any LeetSmith server.</span>{' '}
+                  I understand that LeetSmith sends the current problem and my code
+                  to <span className="font-medium">Google</span> (using my own key)
+                  to generate coaching.{' '}
+                  <span className="font-medium">LeetSmith does not store or collect your data.</span>{' '}
                   <a
                     href={PRIVACY_POLICY_URL}
                     target="_blank"
