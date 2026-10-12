@@ -5,10 +5,9 @@ import { saveSettings } from '../services/storage';
 import { isAlreadyConsented, canSaveSettings } from './consent-gate';
 import StatsPanel from './StatsPanel';
 
-/** Public URL of the full privacy policy (GitHub Pages, set up in E8 Phase 4).
- *  TODO(E8-P4): replace with the real https://<user>.github.io/leetsmith/privacy
- *  URL once the repo is renamed + Pages is enabled. */
-const PRIVACY_POLICY_URL = 'https://leetsmith.example/privacy';
+/** Public URL of the full privacy policy, hosted via GitHub Pages off the
+ *  LeetSmith repo. Rendered from PRIVACY.md at the repo root. */
+const PRIVACY_POLICY_URL = 'https://bhavishya7.github.io/LeetSmith/PRIVACY';
 
 interface SettingsModalProps { currentSettings: UserSettings | null; onSave: (settings: UserSettings) => void; onClose: () => void; }
 
