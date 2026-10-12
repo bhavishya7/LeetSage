@@ -1,8 +1,14 @@
 import React, { useState } from 'react';
 import type { UserSettings, GeminiModel, GuardrailSettings } from '../types';
-import { DEFAULT_GUARDRAILS } from '../types';
+import { DEFAULT_GUARDRAILS, CONSENT_VERSION } from '../types';
 import { saveSettings } from '../services/storage';
+import { isAlreadyConsented, canSaveSettings } from './consent-gate';
 import StatsPanel from './StatsPanel';
+
+/** Public URL of the full privacy policy (GitHub Pages, set up in E8 Phase 4).
+ *  TODO(E8-P4): replace with the real https://<user>.github.io/leetsmith/privacy
+ *  URL once the repo is renamed + Pages is enabled. */
+const PRIVACY_POLICY_URL = 'https://leetsmith.example/privacy';
 
 interface SettingsModalProps { currentSettings: UserSettings | null; onSave: (settings: UserSettings) => void; onClose: () => void; }
 
@@ -23,6 +29,17 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  // Data-use consent (E8 / R7). Reflects PERSISTED consent (stable for the
+  // modal's lifetime):
+  //   - RETURNING user (true): show a STATIC "acknowledged" confirmation, Save
+  //     not gated on it — they aren't re-asked just to change a model/guardrail,
+  //     and there's no toggle to accidentally uncheck.
+  //   - FIRST RUN (false): interactive checkbox that GATES Save until ticked.
+  // Re-prompts only when consent is genuinely absent again: uninstall/reinstall
+  // (storage wiped), the key is cleared, or CONSENT_VERSION is bumped.
+  const consentedPreviously = isAlreadyConsented(currentSettings);
+  const [consentChecked, setConsentChecked] = useState(consentedPreviously);
+
   const setG = <K extends keyof GuardrailSettings>(k: K, v: GuardrailSettings[K]) =>
     setGuardrails(prev => ({ ...prev, [k]: v }));
 
@@ -36,9 +53,16 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
     </div>
   );
 
+  // Save is enabled only when a key is present AND the data-use disclosure is
+  // acknowledged. This is the single chokepoint that persists apiConfig.apiKey,
+  // and all coaching early-returns without that key — so gating Save here makes
+  // consent a hard precondition of every data-sending action (no workaround).
+  const canSave = canSaveSettings(apiKey, consentChecked, saving);
+
   const handleSave = async () => {
     const key = apiKey.trim();
     if (!key) { setError('API key is required'); return; }
+    if (!consentChecked) { setError('Please acknowledge the data-use notice to continue'); return; }
     setSaving(true);
     const newSettings: UserSettings = {
       apiConfig: { provider: 'gemini', apiKey: key, model },
@@ -47,6 +71,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
       stuckTimerDelay: currentSettings?.stuckTimerDelay ?? 300000,
       enableChatMode: currentSettings?.enableChatMode ?? false,
       theme: currentSettings?.theme ?? 'dark',
+      consentAcknowledged: true,
+      consentVersion: CONSENT_VERSION,
     };
     await saveSettings(newSettings);
     onSave(newSettings);
@@ -118,10 +144,86 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
             </button>
             {showStats && <StatsPanel maxRequestsPerDay={guardrails.maxRequestsPerDay} />}
           </div>
+
+          {/* Data-use disclosure (E8 / R7), sage-accented, just above the footer.
+              Two states:
+              - FIRST RUN (not yet consented): an interactive checkbox that GATES
+                Save (the helper text under Save names that reason). It's a real
+                <label> so clicking the text toggles it.
+              - RETURNING (already consented): a STATIC "acknowledged" confirmation
+                — no toggle to accidentally uncheck; consent is a one-time act and
+                isn't re-asked just to change a setting. Link stays in both. */}
+          <div className="border-t border-neutral-200 dark:border-neutral-700 pt-3">
+            {consentedPreviously ? (
+              <div className="flex items-start gap-2.5 rounded-lg border border-[var(--sage-ring)] bg-[var(--sage-tint)] p-3">
+                <span className="mt-0.5 shrink-0 text-[var(--sage-mid)]" aria-hidden="true">✓</span>
+                <span className="text-[11px] leading-relaxed text-neutral-700 dark:text-neutral-200">
+                  You've acknowledged how your data is used — the current problem
+                  and your code are sent to{' '}
+                  <span className="font-medium">Google's Gemini API</span> with your
+                  own key to generate coaching.{' '}
+                  <a
+                    href={PRIVACY_POLICY_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium text-teal-600 dark:text-teal-400 underline underline-offset-2 hover:brightness-110"
+                  >
+                    Read the full privacy policy
+                  </a>.
+                </span>
+              </div>
+            ) : (
+              <label
+                htmlFor="consent-checkbox"
+                className="flex items-start gap-2.5 rounded-lg border border-[var(--sage-ring)] bg-[var(--sage-tint)] p-3 cursor-pointer"
+              >
+                <input
+                  id="consent-checkbox"
+                  type="checkbox"
+                  checked={consentChecked}
+                  onChange={e => { setConsentChecked(e.target.checked); setError(''); }}
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--sage-mid)] cursor-pointer"
+                />
+                <span className="text-[11px] leading-relaxed text-neutral-700 dark:text-neutral-200">
+                  I understand that LeetSmith sends the current problem text and my
+                  code to <span className="font-medium">Google's Gemini API</span>,
+                  using my own API key, to generate coaching.{' '}
+                  <span className="font-medium">Nothing is sent to any LeetSmith server.</span>{' '}
+                  <a
+                    href={PRIVACY_POLICY_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={e => e.stopPropagation()}
+                    className="font-medium text-teal-600 dark:text-teal-400 underline underline-offset-2 hover:brightness-110"
+                  >
+                    Read the full privacy policy
+                  </a>.
+                </span>
+              </label>
+            )}
+          </div>
         </div>
-        <div className="flex gap-2 px-4 py-3 border-t border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shrink-0">
-          <button onClick={onClose} className="flex-1 text-center text-xs py-1.5 border border-neutral-300 dark:border-neutral-600 rounded hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors">Cancel</button>
-          <button onClick={handleSave} disabled={saving} className="flex-1 text-center text-xs py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 transition-colors">{saving ? 'Saving...' : 'Save'}</button>
+        <div className="px-4 py-3 border-t border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shrink-0">
+          <div className="flex gap-2">
+            <button onClick={onClose} className="flex-1 text-center text-xs py-1.5 border border-neutral-300 dark:border-neutral-600 rounded hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors">Cancel</button>
+            <button
+              onClick={handleSave}
+              disabled={!canSave}
+              aria-describedby={!canSave && !saving ? 'save-disabled-reason' : undefined}
+              className="flex-1 text-center text-xs py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+          {/* Name the reason Save is disabled, so the greyed button is never a
+              mystery. Prioritise the key message, then the consent message. */}
+          {!canSave && !saving && (
+            <p id="save-disabled-reason" className="text-[11px] text-neutral-400 mt-1.5 text-center">
+              {apiKey.trim().length === 0
+                ? 'Enter your API key and check the box above to enable Save.'
+                : 'Check the data-use box above to enable Save.'}
+            </p>
+          )}
         </div>
       </div>
     </div>

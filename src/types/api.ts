@@ -104,7 +104,29 @@ export interface UserSettings {
   stuckTimerDelay: number;
   enableChatMode: boolean;
   theme: 'light' | 'dark' | 'auto';
+  /**
+   * Data-use consent gate (E8 / CWS prominent-disclosure requirement).
+   * The user must affirmatively acknowledge, in-UI, that LeetSmith sends the
+   * current problem + their code to Google's Gemini API (via their own key)
+   * before the key can be saved — and thus before any coaching can run.
+   * Optional so settings persisted BEFORE this field existed read as
+   * not-consented (undefined → the gate shows once). Never migrated.
+   */
+  consentAcknowledged?: boolean;
+  /**
+   * Version of the disclosure the user consented to. If this is lower than the
+   * current CONSENT_VERSION (e.g. the data practices materially changed), the
+   * gate re-prompts. Absent on pre-existing data → treated as not-consented.
+   */
+  consentVersion?: number;
 }
+
+/**
+ * Current data-disclosure version. Bump this ONLY when the disclosed data
+ * practices materially change (CWS "disclose post-install changes" rule) — a
+ * stored consentVersion below this re-triggers the in-UI consent gate.
+ */
+export const CONSENT_VERSION = 1;
 
 /**
  * Per-day usage tracking, persisted so it survives service-worker sleep.
