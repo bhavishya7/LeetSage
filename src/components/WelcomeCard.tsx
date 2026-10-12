@@ -42,9 +42,13 @@ const WelcomeCard: React.FC<WelcomeCardProps> = ({ onDismiss }) => (
       → <span className="font-medium">Get API key</span>, then paste it into
       Settings&nbsp;⚙️. It's stored locally and sent only to Google.
     </p>
-    <p className="text-xs text-neutral-500 dark:text-neutral-400 leading-relaxed">
+    <p className="text-xs text-neutral-500 dark:text-neutral-400 leading-relaxed mb-2">
       Then tap a quick action below or try one of the suggested questions to get
       started.
+    </p>
+    <p className="text-[11px] text-neutral-400 dark:text-neutral-500 leading-relaxed">
+      Everything's stored locally — no account, no server. Export your notes from
+      My&nbsp;Progress anytime to back them up.
     </p>
     {onDismiss && (
       <button

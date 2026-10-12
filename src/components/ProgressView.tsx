@@ -408,6 +408,16 @@ const ProgressView: React.FC<ProgressViewProps> = ({ onClose }) => {
         </div>
       )}
 
+      {/* Local-first note (E8 / R13.1): accurate, non-alarmist. Data persists in
+          chrome.storage.local and is NOT lost on normal close/restart — only on
+          uninstall, clearing browser data, or switching devices. Sits right under
+          the Download/Import actions that solve it. Shown on the list screen. */}
+      {!loading && !selected && (
+        <p className="px-3 py-1.5 text-[10px] text-neutral-400 border-b border-neutral-200 dark:border-neutral-700 shrink-0">
+          Your progress is stored locally in this browser. Export a backup to keep it if you reinstall or switch devices.
+        </p>
+      )}
+
       {/* Import feedback (R6.2) — success counts or a specific rejection reason. */}
       {importMsg && !selected && (
         <div
