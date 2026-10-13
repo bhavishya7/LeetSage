@@ -72,3 +72,11 @@ docs/
 # go-to-market/legal-posture material — the public repo should carry only the
 # technical product. Stays on disk + external backup; never committed.
 .kiro/specs/leetsage-e8-chrome-store-deployment/
+
+# Store/launch working assets — kept LOCAL, not product. The SHIPPED icons live
+# in public/images/ (tracked); these are the source art + store-upload artifacts.
+#   - logo/        : original source artwork + working exports for the icon set.
+#   - Screenshots/ : raw captures + the normalized store screenshots to upload.
+# Only the public/ build inputs belong in git; these are prep material.
+logo/
+Screenshots/
