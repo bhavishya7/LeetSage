@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import type { UserSettings, GeminiModel, GuardrailSettings } from '../types';
-import { DEFAULT_GUARDRAILS, CONSENT_VERSION } from '../types';
+import { DEFAULT_GUARDRAILS } from '../types';
 import { saveSettings } from '../services/storage';
-import { isAlreadyConsented, canSaveSettings } from './consent-gate';
+import { isAlreadyConsented, canSaveSettings, buildSettingsOnSave } from './consent-gate';
 import StatsPanel from './StatsPanel';
 
 /** Public URL of the full privacy policy, hosted via GitHub Pages off the
@@ -27,17 +27,27 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
   const [showStats, setShowStats] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // B27: in-panel (themed) confirm for key removal — NOT a native window.confirm,
+  // which pops centered on the whole browser in the OS style, out of the panel.
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
 
-  // Data-use consent (E8 / R7). Reflects PERSISTED consent (stable for the
-  // modal's lifetime):
-  //   - RETURNING user (true): show a STATIC "acknowledged" confirmation, Save
-  //     not gated on it — they aren't re-asked just to change a model/guardrail,
-  //     and there's no toggle to accidentally uncheck.
-  //   - FIRST RUN (false): interactive checkbox that GATES Save until ticked.
-  // Re-prompts only when consent is genuinely absent again: uninstall/reinstall
+  // Data-use consent (E8 / R7).
+  //   - RETURNING user WITH a key still in the field: show a STATIC
+  //     "acknowledged" confirmation — they aren't re-asked just to change a
+  //     model/guardrail, and there's no toggle to accidentally uncheck.
+  //   - FIRST RUN, or a key that's been CLEARED in-session (B27 removal): show
+  //     the interactive checkbox. With no key there is nothing being sent, so a
+  //     "✓ acknowledged" box would be nonsense — the UI must reflect the LIVE
+  //     key state, not just the key the modal opened with.
+  // Re-prompts when consent is genuinely absent again: uninstall/reinstall
   // (storage wiped), the key is cleared, or CONSENT_VERSION is bumped.
   const consentedPreviously = isAlreadyConsented(currentSettings);
   const [consentChecked, setConsentChecked] = useState(consentedPreviously);
+  // The consent SURFACE is driven by the LIVE field: only treat the user as
+  // "already consented" while a key is actually present in the field. Clearing
+  // the key (removal) immediately flips to the interactive, unticked checkbox.
+  const keyPresent = apiKey.trim().length > 0;
+  const showStaticConsent = consentedPreviously && keyPresent;
 
   const setG = <K extends keyof GuardrailSettings>(k: K, v: GuardrailSettings[K]) =>
     setGuardrails(prev => ({ ...prev, [k]: v }));
@@ -60,22 +70,29 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
 
   const handleSave = async () => {
     const key = apiKey.trim();
-    if (!key) { setError('API key is required'); return; }
-    if (!consentChecked) { setError('Please acknowledge the data-use notice to continue'); return; }
+    // Saving a KEY still requires consent (unchanged). Saving an EMPTY key is the
+    // B27 removal path — allowed with no consent (you can't gate "stop sending my
+    // data" behind a data-use acknowledgement). buildSettingsOnSave encodes the
+    // consent-reset-on-remove rule.
+    if (key && !consentChecked) { setError('Please acknowledge the data-use notice to continue'); return; }
     setSaving(true);
-    const newSettings: UserSettings = {
-      apiConfig: { provider: 'gemini', apiKey: key, model },
-      guardrails,
-      enableStuckTimer,
-      stuckTimerDelay: currentSettings?.stuckTimerDelay ?? 300000,
-      enableChatMode: currentSettings?.enableChatMode ?? false,
-      theme: currentSettings?.theme ?? 'dark',
-      consentAcknowledged: true,
-      consentVersion: CONSENT_VERSION,
-    };
+    const newSettings = buildSettingsOnSave({ apiKey, model, guardrails, enableStuckTimer, current: currentSettings });
     await saveSettings(newSettings);
     onSave(newSettings);
     setSaving(false);
+  };
+
+  // B27 — explicit, deliberate key removal (distinct from accidentally blanking
+  // the field mid-edit). Shown only when a key is actually configured. "Remove
+  // key" opens an in-panel themed confirm; confirming clears the field + unticks
+  // consent so the modal shows the first-run shape; the user then presses Save
+  // (now enabled by the relaxed gate) to persist it.
+  const hasConfiguredKey = Boolean(currentSettings?.apiConfig.apiKey);
+  const confirmRemoveKey = () => {
+    setApiKey('');
+    setConsentChecked(false);
+    setError('');
+    setConfirmingRemove(false);
   };
 
   return (
@@ -93,9 +110,48 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
             </select>
           </div>
           <div>
-            <label className="block text-xs font-medium mb-1">Gemini API Key</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-medium">Gemini API Key</label>
+              {/* B27: deliberate key removal. Only offered when a key is actually
+                  configured. Opens an in-panel themed confirm (below); confirming
+                  clears the field + consent, then the user presses Save. */}
+              {hasConfiguredKey && !confirmingRemove && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingRemove(true)}
+                  className="text-[11px] text-red-500 hover:text-red-600 hover:underline"
+                >
+                  Remove key
+                </button>
+              )}
+            </div>
             <input type="password" value={apiKey} onChange={e => { setApiKey(e.target.value); setError(''); }}
               placeholder="Paste your Gemini API key" className={`${inputCls} font-mono`} />
+            {/* In-panel, themed removal confirm (replaces a native window.confirm
+                so it matches the panel's look and lives inside the modal). */}
+            {confirmingRemove && (
+              <div className="mt-2 rounded-lg border border-red-500/30 bg-red-500/5 p-2.5">
+                <p className="text-[11px] text-neutral-700 dark:text-neutral-200 leading-relaxed">
+                  Remove your API key? LeetSmith will stop working until you add one again.
+                </p>
+                <div className="flex gap-2 mt-2">
+                  <button
+                    type="button"
+                    onClick={confirmRemoveKey}
+                    className="text-[11px] px-2.5 py-1 rounded bg-red-500 text-white hover:bg-red-600 transition-colors"
+                  >
+                    Remove key
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingRemove(false)}
+                    className="text-[11px] px-2.5 py-1 rounded border border-neutral-300 dark:border-neutral-600 hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors"
+                  >
+                    Keep key
+                  </button>
+                </div>
+              </div>
+            )}
             {error && <p className="text-red-500 text-[11px] mt-1">{error}</p>}
             <p className="text-neutral-400 text-[11px] mt-1">
               Get a free key from Google AI Studio (aistudio.google.com → Get API key). Stored locally, sent only to Google. No billing required.
@@ -153,7 +209,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
                 — no toggle to accidentally uncheck; consent is a one-time act and
                 isn't re-asked just to change a setting. Link stays in both. */}
           <div className="border-t border-neutral-200 dark:border-neutral-700 pt-3">
-            {consentedPreviously ? (
+            {showStaticConsent ? (
               <div className="flex items-start gap-2.5 rounded-lg border border-[var(--sage-ring)] bg-[var(--sage-tint)] p-3">
                 <span className="mt-0.5 shrink-0 text-[var(--sage-mid)]" aria-hidden="true">✓</span>
                 <span className="text-[11px] leading-relaxed text-neutral-700 dark:text-neutral-200">
@@ -179,8 +235,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ currentSettings, onSave, 
                 <input
                   id="consent-checkbox"
                   type="checkbox"
-                  checked={consentChecked}
-                  onChange={e => { setConsentChecked(e.target.checked); setError(''); }}
+                  // With no key in the field, consent is meaningless (nothing is
+                  // sent), so the box always reads unticked — and ticking it is a
+                  // no-op until a key is entered. This keeps "removed key + ticked
+                  // consent" from ever appearing (B27 review follow-up).
+                  checked={keyPresent && consentChecked}
+                  onChange={e => { if (keyPresent) { setConsentChecked(e.target.checked); setError(''); } }}
                   className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--sage-mid)] cursor-pointer"
                 />
                 <span className="text-[11px] leading-relaxed text-neutral-700 dark:text-neutral-200">

@@ -426,3 +426,82 @@ describe('complexity reasoning levers on the complexity-bearing prompts (B10)', 
     expect(getSystemPrompt('GET_HINT')).not.toContain('COMPLEXITY REASONING');
   });
 });
+
+/**
+ * B22 — PATTERN_RECOGNITION heading structure
+ * (see .kiro/specs/leetsage-post-launch-ui-fixes R1).
+ *
+ * The real bug: the PATTERN_RECOGNITION prompt specified NO heading structure
+ * (unlike every other action prompt), so the model free-styled "####" headings
+ * the card renderer doesn't support — they rendered as literal "####" text. The
+ * fix prescribes an explicit "##"/"###" structure the renderer DOES draw and
+ * forbids deeper levels. These guards stop the structure from being dropped
+ * again.
+ */
+describe('getSystemPrompt(PATTERN_RECOGNITION) — explicit heading structure (B22)', () => {
+  const prompt = getSystemPrompt('PATTERN_RECOGNITION');
+
+  it('prescribes a "## " section heading and a "### " per-pattern subheading', () => {
+    expect(prompt).toContain('"## Pattern Recognition"');
+    expect(prompt).toContain('"### <pattern name>"');
+  });
+
+  it('explicitly forbids headings deeper than "###" (the #### bug)', () => {
+    // The model must be told the renderer supports only ## / ### — this is the
+    // belt-and-suspenders guard against the observed "####" free-styling.
+    expect(prompt).toContain('####');            // mentioned only to forbid it…
+    expect(prompt.toLowerCase()).toContain('do not emit');
+    expect(prompt.toLowerCase()).toContain('render as literal text');
+  });
+
+  it('preserves the content scope (similar problems; no application walkthrough)', () => {
+    expect(prompt.toLowerCase()).toContain('similar problems');
+    // R1.3: still must NOT explain how to apply the pattern.
+    expect(prompt.toLowerCase()).toContain('do not explain how to apply');
+  });
+
+  it('is no longer structure-silent (regression guard)', () => {
+    // The old prompt gave no heading instruction at all. Assert a heading
+    // instruction now exists so a future rewrite can't quietly drop it.
+    expect(prompt).toMatch(/Format under a "## /);
+  });
+
+  it('forbids a stray complexity line on the pattern card (B25)', () => {
+    // Dogfooding showed the model free-styling "Complexity for this pattern is
+    // typically O(N) time and O(1) space." — noise on a "recognize the pattern"
+    // card (same OUTPUT_RULES nudge that caused the GENERATE_EXAMPLES bug). The
+    // prompt must tell it to omit complexity here.
+    expect(prompt.toLowerCase()).toContain('do not state the time or space complexity here');
+  });
+});
+
+/**
+ * B23 — GENERATE_EXAMPLES must not show a per-example Time/Space complexity line
+ * (see .kiro/specs/leetsage-post-launch-ui-fixes R2).
+ *
+ * The real bug: the prompt never asked for Time/Space on examples, but it was
+ * silent on the matter and the shared OUTPUT_RULES ("whenever you state
+ * complexity, give both time and space") nudged the model into volunteering a
+ * noisy Time/Space line per example. The fix adds an explicit negative clause
+ * while KEEPING the Input/Output/"Why this helps" lines and the Simple/Medium/
+ * Tricky difficulty label (R2.2/R2.3).
+ */
+describe('getSystemPrompt(GENERATE_EXAMPLES) — no per-example complexity line (B23)', () => {
+  const prompt = getSystemPrompt('GENERATE_EXAMPLES');
+
+  it('keeps the useful per-example lines (Input / Output / Why this helps)', () => {
+    expect(prompt).toContain('**Input:**');
+    expect(prompt).toContain('**Output:**');
+    expect(prompt).toContain('**Why this helps:**');
+  });
+
+  it('keeps the Simple/Medium/Tricky difficulty label', () => {
+    expect(prompt).toContain('Simple/Medium/Tricky');
+  });
+
+  it('explicitly forbids a Time/Space complexity line on each example', () => {
+    expect(prompt).toContain('Do NOT include a Time Complexity or Space Complexity line');
+    // And it points complexity analysis at the actions where it belongs.
+    expect(prompt.toLowerCase()).toContain('hint and analyze');
+  });
+});

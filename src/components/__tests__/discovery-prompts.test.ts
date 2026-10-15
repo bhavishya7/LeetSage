@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { PLACEHOLDER_EXAMPLES, TRY_ASKING_CHIPS, resolveSubmitText } from '../discovery-prompts';
+import { PLACEHOLDER_EXAMPLES, TRY_ASKING_CHIPS, resolveSubmitText, chatPlaceholder } from '../discovery-prompts';
+import type { PlaceholderState } from '../discovery-prompts';
 
 /**
  * B11 — duplicate "Try" (see .kiro/specs/leetsage-chat-polish, E3 §4.1).
@@ -73,5 +74,59 @@ describe('resolveSubmitText (B12)', () => {
     for (const chip of TRY_ASKING_CHIPS) {
       expect(resolveSubmitText(chip, '').length).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * B24 — reason-aware chat placeholder
+ * (see .kiro/specs/leetsage-post-launch-ui-fixes R3).
+ *
+ * The bug: App derived the placeholder from the overloaded `canInteract`
+ * (apiKeyConfigured && hasProblem && !isLoading), so the instant a request
+ * started (isLoading→true) a key-configured user was wrongly told to "Configure
+ * your API key first". `chatPlaceholder` separates the copy decision from the
+ * enable/disable gate and branches on the SPECIFIC disabled reason in priority
+ * order. These guards pin that busy-with-key never shows the no-key copy.
+ */
+describe('chatPlaceholder (B24)', () => {
+  const base: PlaceholderState = {
+    apiKeyConfigured: true,
+    hasProblem: true,
+    isLoading: false,
+    rotatingExample: 'what pattern is this?',
+  };
+
+  it('shows the no-key copy ONLY when no key is configured', () => {
+    expect(chatPlaceholder({ ...base, apiKeyConfigured: false })).toBe('Configure your API key first');
+  });
+
+  it('no-key has top priority (even if also off-page and busy)', () => {
+    // R3.3: no-key wins over every other disabled reason.
+    const out = chatPlaceholder({
+      apiKeyConfigured: false,
+      hasProblem: false,
+      isLoading: true,
+      rotatingExample: 'x',
+    });
+    expect(out).toBe('Configure your API key first');
+  });
+
+  it('busy WITH a key never shows the no-key copy — the exact regression (R3.1/R3.2)', () => {
+    const out = chatPlaceholder({ ...base, isLoading: true });
+    expect(out).not.toBe('Configure your API key first');
+    expect(out).toBe('Thinking…');
+  });
+
+  it('off a problem page (key configured, not busy) shows the off-page copy', () => {
+    expect(chatPlaceholder({ ...base, hasProblem: false })).toBe('Open a LeetCode problem to get started');
+  });
+
+  it('off-page beats busy (both key-configured) — specific reason, not generic', () => {
+    const out = chatPlaceholder({ ...base, hasProblem: false, isLoading: true });
+    expect(out).toBe('Open a LeetCode problem to get started');
+  });
+
+  it('healthy state (key + problem + idle) shows the rotating example', () => {
+    expect(chatPlaceholder(base)).toBe('what pattern is this?');
   });
 });
