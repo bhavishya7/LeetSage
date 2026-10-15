@@ -7,9 +7,10 @@ import { StuckTimer } from '../services/stuck-timer';
 import type { ProblemContext, ProgressState, LearningContent, ActionType, UserSettings, StuckSuggestion } from '../types';
 import { loadProgress, trackAction, appendContent, clearProgress } from '../services/progress-tracker';
 import { getSettings, saveSettings } from '../services/storage';
-import { streamLLMRequest, sendToolRound, buildChatData } from '../services/llm-service';
+import { streamLLMRequest, sendToolRound, buildChatData, regenerateWithoutSolution } from '../services/llm-service';
 import { filterResponse, isSolutionExemptAction } from '../services/solution-filter';
-import { checkRateLimit, recordRequest, getUsageToday } from '../services/rate-limiter';
+import { decideRecovery, resolveRegenerated } from '../services/filter-recovery';
+import { checkRateLimit, checkHardBudget, recordRequest, getUsageToday } from '../services/rate-limiter';
 import { recordMetric } from '../services/metrics-store';
 import { extractCurrentCode } from '../services/code-extractor';
 import { parseStructuredResponse, stripDataBlockForDisplay } from '../services/structured-parser';
@@ -55,6 +56,14 @@ function actionToContentType(actionType: ActionType): LearningContent['type'] {
 
 const App: React.FC = () => {
   const [problemContext, setProblemContext] = useState<ProblemContext | null>(null);
+  // R4 (off-page gating): is the ACTIVE TAB a coachable LeetCode problem page?
+  // This is a URL-based signal (set from chrome.tabs), DELIBERATELY independent
+  // of `problemContext` — the problem context is pull-based and null for a
+  // multi-second window on a REAL problem page during the MV3 load/retry, so
+  // gating inputs on `!!problemContext` would wrongly disable them on a genuine
+  // page (violating the R4.4 hard bar). The URL matches immediately on a real
+  // page, so it never false-negatives. See .kiro/specs/leetsage-coaching-logic-overhaul §2.
+  const [activeTabIsProblem, setActiveTabIsProblem] = useState(false);
   const [progress, setProgress] = useState<ProgressState | null>(null);
   const [learningContent, setLearningContent] = useState<LearningContent[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -128,7 +137,12 @@ const App: React.FC = () => {
   const pullFromActiveTab = useCallback((attempt = 0, hasInjected = false) => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs[0];
-      if (!tab?.id || !tab.url?.includes('leetcode.com/problems/')) return;
+      // R4: update the URL-based "on a problem page" flag on every pull cycle —
+      // this is the gating signal, and it's correct whether or not the pull
+      // ultimately succeeds in loading the context.
+      const onProblemPage = !!tab?.url?.includes('leetcode.com/problems/');
+      setActiveTabIsProblem(onProblemPage);
+      if (!tab?.id || !onProblemPage) return;
       const tabId = tab.id;
 
       const ask = () => chrome.tabs.sendMessage(tabId, { type: 'REQUEST_PROBLEM_DATA' }, (response) => {
@@ -236,8 +250,78 @@ const App: React.FC = () => {
     return () => clearInterval(id);
   }, [chatInput]);
 
+  // R6/R6b: graceful filter recovery shared by BOTH filter callers
+  // (handleActionClick + handleChatSubmit) so behavior can't diverge. Runs the
+  // (pure, sync) filter, then:
+  //   - clean/partial → return the content as-is (partial keeps teaching; no
+  //     regenerate, no credit spent — R6.8.3).
+  //   - full → if the budget allows, spend ONE counted regenerate; re-filter it;
+  //     show it when clean, else the reworded full message. Never a 2nd regen.
+  // `regenParams` carries what regenerateWithoutSolution needs to re-issue the
+  // SAME action/chat request (problemContext + action + userCode/userQuery).
+  // See .kiro/specs/leetsage-coaching-logic-overhaul §4.3–§4.5.
+  const recoverFilteredResponse = useCallback(async (
+    prose: string,
+    actionType: ActionType,
+    regenParams: { userApproach?: string; userCode?: string; codeLanguage?: string; userQuery?: string },
+  ): Promise<string> => {
+    if (!settings?.apiConfig.apiKey || !problemContext) {
+      return filterResponse(prose, actionType).filteredContent;
+    }
+    const filtered = filterResponse(prose, actionType);
+    // Only the `full` branch may regenerate; check the budget first (R6.9.2).
+    // Fix 1a: the regenerate is a CONTINUATION of this already-paid request, so
+    // only the HARD limits (kill switch + daily cap) gate it — not the soft
+    // per-minute/cooldown pacing (which would otherwise skip the regenerate
+    // during rapid testing and leave the user with the bare fallback).
+    let budgetAllowed = false;
+    if (filtered.wasFiltered && filtered.redactionMode === 'full') {
+      budgetAllowed = (await checkHardBudget(settings.guardrails)).allowed;
+    }
+    const decision = decideRecovery(filtered, { budgetAllowed });
+
+    if (decision === 'show-clean' || decision === 'show-partial' || decision === 'show-full') {
+      return filtered.filteredContent;
+    }
+
+    // decision === 'regenerate' — ONE bounded, counted retry (R6.8/R6.9.1).
+    try {
+      const usage = await recordRequest();
+      setUsageCount(usage.count);
+      const startedAt = performance.now();
+      const regen = await regenerateWithoutSolution({
+        problemContext, actionType, systemPrompt: '', userMessage: '',
+        apiKey: settings.apiConfig.apiKey, model: settings.apiConfig.model,
+        maxTokens: settings.guardrails.maxTokens, timeoutMs: settings.guardrails.requestTimeoutMs,
+        userApproach: regenParams.userApproach, userCode: regenParams.userCode,
+        codeLanguage: regenParams.codeLanguage, userQuery: regenParams.userQuery,
+      });
+      void recordMetric({
+        model: settings.apiConfig.model,
+        latencyMs: performance.now() - startedAt,
+        usage: regen.usage,
+      }).catch(() => { /* metrics are non-critical */ });
+      // Re-filter the regenerated answer ONCE; show it when clean, else the
+      // reworded full message (never a second regenerate).
+      const regenFilter = filterResponse(regen.content, actionType);
+      return resolveRegenerated(regen.content, regenFilter, filtered.filteredContent);
+    } catch {
+      // A regenerate failure (network/timeout) must not lose the response — fall
+      // back to the reworded full message we already have.
+      return filtered.filteredContent;
+    }
+  }, [settings, problemContext]);
+
   const handleActionClick = useCallback(async (actionType: ActionType, userApproach?: string) => {
-    if (!problemContext || !settings?.apiConfig.apiKey) return;
+    if (!settings?.apiConfig.apiKey) return;
+    // R4.4: inputs are gated on the URL signal, so a click can arrive on a real
+    // problem page while the context pull is still in flight. Surface an honest,
+    // transient "still reading" message instead of a silent no-op or an
+    // ungrounded answer. pullFromActiveTab is already racing to fill the context.
+    if (!problemContext) {
+      if (activeTabIsProblem) setError('Still reading this problem — give it a moment and try again.');
+      return;
+    }
 
     // The user is interacting — dismiss any stale "are you stuck?" suggestion.
     setStuckSuggestion(null);
@@ -257,7 +341,7 @@ const App: React.FC = () => {
     let userCode: string | undefined;
     let codeLanguage: string | undefined;
     let codeReadStatus: 'ok' | 'empty' | 'failed' | undefined;
-    if (actionType === 'CHECK_APPROACH' || actionType === 'UNDERSTAND_SOLUTION' || actionType === 'GENERATE_REPORT') {
+    if (actionType === 'CHECK_APPROACH' || actionType === 'UNDERSTAND_SOLUTION' || actionType === 'GENERATE_REPORT' || actionType === 'TIME_COMPLEXITY_HINT') {
       const tabId = await getActiveLeetCodeTabId();
       if (tabId != null) {
         const extracted = await extractCurrentCode(tabId);
@@ -353,7 +437,10 @@ const App: React.FC = () => {
       // structured?.data (if any) is stored on metadata for the report/records/
       // analytics to consume — the prose is never re-parsed for facts (§2, §4).
       const { prose, data } = parseStructuredResponse(fullContent, actionType);
-      const { filteredContent } = filterResponse(prose, actionType);
+      // R6/R6b: redact-and-recover (may spend ONE bounded regenerate in the
+      // would-be-blank case) instead of blanking. Exempt actions are untouched
+      // by filterResponse inside the helper.
+      const filteredContent = await recoverFilteredResponse(prose, actionType, { userApproach, userCode, codeLanguage });
       const finalContent: LearningContent = {
         ...newContent,
         content: filteredContent,
@@ -376,12 +463,18 @@ const App: React.FC = () => {
       setError(err instanceof Error ? err.message : 'Something went wrong');
       setLearningContent(prev => prev.filter(c => c.id !== contentId));
     } finally { setIsLoading(false); setStreamingId(null); }
-  }, [problemContext, settings, progress]);
+  }, [problemContext, settings, progress, activeTabIsProblem, recoverFilteredResponse]);
 
   // Free-form question: adds a user bubble, then streams a coaching answer.
   const handleChatSubmit = useCallback(async (query: string) => {
     const q = query.trim();
-    if (!q || !problemContext || !settings?.apiConfig.apiKey) return;
+    if (!q || !settings?.apiConfig.apiKey) return;
+    // R4.4 (same as handleActionClick): on a real problem page but context still
+    // loading → honest transient message, not a silent drop.
+    if (!problemContext) {
+      if (activeTabIsProblem) setError('Still reading this problem — give it a moment and try again.');
+      return;
+    }
 
     // The user is interacting — dismiss any stale "are you stuck?" suggestion.
     setStuckSuggestion(null);
@@ -509,8 +602,10 @@ const App: React.FC = () => {
 
       // Single filtered reveal (B1): the loop's final answer is NON-EXEMPT, so it
       // passes through filterResponse before anything is shown — a full-solution
-      // answer is still caught, exactly like the shipped chat path.
-      const { filteredContent } = filterResponse(result.answer, 'EXPLAIN_CONCEPT');
+      // answer is still caught, exactly like the shipped chat path. R6/R6b:
+      // redact-and-recover (one bounded regenerate in the would-be-blank case)
+      // via the SAME shared helper the action path uses.
+      const filteredContent = await recoverFilteredResponse(result.answer, 'EXPLAIN_CONCEPT', { userQuery: q, userCode, codeLanguage });
       const finalResp = { ...respMsg, content: filteredContent };
       setLearningContent(prev => prev.map(c => c.id === respId ? finalResp : c));
       await appendContent(problemContext.url, userMsg);
@@ -520,7 +615,7 @@ const App: React.FC = () => {
       setError(err instanceof Error ? err.message : 'Something went wrong');
       setLearningContent(prev => prev.filter(c => c.id !== respId));
     } finally { setIsLoading(false); setStreamingId(null); setAgentStepLabel(null); }
-  }, [problemContext, settings, progress]);
+  }, [problemContext, settings, progress, activeTabIsProblem, recoverFilteredResponse]);
 
   const handleReset = useCallback(async () => {
     if (!problemContext) return;
@@ -586,7 +681,15 @@ const App: React.FC = () => {
     Easy: 'text-green-500', Medium: 'text-yellow-500', Hard: 'text-red-500',
   };
 
-  const canInteract = apiKeyConfigured && !!problemContext && !isLoading;
+  // R4: gate inputs on the URL-based "on a coachable problem page" signal, NOT
+  // on `!!problemContext`. The URL matches immediately on a real page, so inputs
+  // are enabled the instant the user is on a problem — they never flip to
+  // "off-page" during the sub-second context pull (the R4.4 hard bar). If the
+  // context is still loading when the user clicks, handleActionClick/
+  // handleChatSubmit surface a transient "reading this problem" message rather
+  // than a wrong answer. See .kiro/specs/leetsage-coaching-logic-overhaul §2.
+  const onCoachablePage = activeTabIsProblem;
+  const canInteract = apiKeyConfigured && onCoachablePage && !isLoading;
 
   // Chat intent routing (design §7): the chat box is a smart entry point. Before
   // sending a message to the free-form chat path, run the PURE pipeline
@@ -663,7 +766,8 @@ const App: React.FC = () => {
   // drives the actual enable/disable wiring below (that part was correct).
   const currentPlaceholder = chatPlaceholder({
     apiKeyConfigured,
-    hasProblem: !!problemContext,
+    onProblemPage: onCoachablePage, // R4: URL-based; drives the off-page copy
+    hasProblem: !!problemContext,   // context loaded; drives the "reading…" copy
     isLoading,
     rotatingExample: PLACEHOLDER_EXAMPLES[placeholderIdx],
   });
@@ -757,6 +861,15 @@ const App: React.FC = () => {
 
       {/* Bottom input bar: quick-command chips + free-form text input */}
       <div className="shrink-0 border-t border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2 space-y-2">
+        {/* R4.3: off-page clear state. Shown only when a key IS configured (so it
+            doesn't stack with the no-key banner) and the active tab is NOT a
+            coachable problem page. The coaching INPUTS are disabled here, but the
+            rest of the panel (scroll, copy, Settings, Progress) stays usable. */}
+        {apiKeyConfigured && !onCoachablePage && (
+          <div className="text-xs text-center py-1.5 bg-neutral-500/10 border border-neutral-400/30 rounded text-neutral-500 dark:text-neutral-400">
+            Open a LeetCode problem to use the coaching tools.
+          </div>
+        )}
         <QuickActions progress={progress} disabled={!canInteract} isLoading={isLoading} onAction={handleActionClick} />
 
         {/* Discovery (R8): dismissible "Try asking…" chips teach the intents that

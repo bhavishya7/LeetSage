@@ -505,3 +505,144 @@ describe('getSystemPrompt(GENERATE_EXAMPLES) — no per-example complexity line 
     expect(prompt.toLowerCase()).toContain('hint and analyze');
   });
 });
+
+/**
+ * Coaching-logic-overhaul R1–R3 — the code-aware complexity hint.
+ *
+ * TIME_COMPLEXITY_HINT used to be optimal-only and blind to the user's code.
+ * It is now code-aware (modeled on the Analyze Efficiency block) with an
+ * adaptive Hint/affirmation branch, plus a no-code fallback that makes NO claim
+ * about the user's code. These guards pin that behavior + the B14 no-example-
+ * Big-O discipline + the pin reuse (R3.1).
+ */
+describe('getSystemPrompt(TIME_COMPLEXITY_HINT) — code-aware, adaptive (R1–R3)', () => {
+  const prompt = getSystemPrompt('TIME_COMPLEXITY_HINT');
+
+  it('builds upon the Analyze Efficiency shape (Current/Optimal/Variables/breakdown)', () => {
+    expect(prompt).toContain('## ⚡ Efficiency');
+    expect(prompt).toContain('**Current:**');
+    expect(prompt).toContain('**Optimal:**');
+    expect(prompt).toContain('**Variables:**');
+    expect(prompt.toLowerCase()).toContain('where the cost comes from');
+  });
+
+  it('is adaptive: Hint + What-this-means when worse; affirmation + NO Hint when optimal', () => {
+    const lower = prompt.toLowerCase();
+    // worse-than-optimal branch carries a Hint section.
+    expect(prompt).toContain('**Hint:**');
+    expect(prompt).toContain('**What this means:**');
+    // already-optimal branch explicitly says NOT to show a Hint and to affirm.
+    expect(lower).toContain('do not include a "hint" section');
+    expect(lower).toContain('already reached the optimal');
+  });
+
+  it('has a no-code fallback that makes NO Current claim (R2)', () => {
+    const lower = prompt.toLowerCase();
+    expect(prompt).toContain('## Complexity Hint');
+    expect(prompt).toContain('**Target time:**');
+    expect(prompt).toContain('**Target space:**');
+    // Explicitly forbids inventing a current complexity when no code is present.
+    expect(lower).toContain('do not invent or estimate a "current"');
+  });
+
+  it('carries COMPUTE-DON\'T-COPY + no answerable example Big-O (B14 discipline)', () => {
+    expect(prompt).toContain("COMPUTE, DON'T COPY");
+    // The structured example uses placeholders, never a concrete answer.
+    const dataStart = prompt.indexOf('```leetsage-data');
+    const dataBlock = prompt.slice(dataStart, dataStart + 400);
+    expect(dataBlock).toContain('O(<time>)');
+    expect(dataBlock).not.toMatch(/O\(N\^2\)/);
+  });
+
+  it('carries the hidden chain-of-thought reasoning levers', () => {
+    expect(prompt).toContain('COMPLEXITY REASONING');
+    expect(prompt.toLowerCase()).toContain('do not print your reasoning');
+  });
+});
+
+describe('buildUserMessage(TIME_COMPLEXITY_HINT) — code-aware + pin reuse (R1–R3)', () => {
+  it('sends the user code when present and tells the model to analyze current vs optimal', () => {
+    const msg = buildUserMessage('TIME_COMPLEXITY_HINT', INJECTED_PROBLEM, {
+      userCode: 'def f(nums):\n    return nums', codeLanguage: 'python',
+    });
+    expect(msg).toContain('```python');
+    expect(msg.toLowerCase()).toContain('my code is provided');
+  });
+
+  it('falls back to optimal-only (no fabricated current) when no code is present', () => {
+    const msg = buildUserMessage('TIME_COMPLEXITY_HINT', INJECTED_PROBLEM, {});
+    expect(msg.toLowerCase()).toContain('optimal target complexity only');
+    expect(msg.toLowerCase()).toContain('do not invent a "current"');
+    expect(msg).not.toContain('```python');
+  });
+
+  it('reuses the pinned optimal as a hard constraint (R3.1 — no new drift)', () => {
+    const msg = buildUserMessage('TIME_COMPLEXITY_HINT', INJECTED_PROBLEM, {
+      userCode: 'x=1', codeLanguage: 'python', pinnedOptimal: PIN,
+    });
+    expect(msg).toContain('O(N*M) time / O(N*M) space');
+    expect(msg.toLowerCase()).toContain('do not recompute');
+  });
+});
+
+/**
+ * Coaching-logic-overhaul R6.7 + §4.6a lock 1 — the first-call reinforcement
+ * must make a leak rarer WITHOUT over-gating. It is present on the non-exempt
+ * action prompts + both chat prompts, and it must RESTATE (not restrict) the
+ * snippet/partial-logic allowance so a future edit can't turn it into a gag.
+ */
+describe('first-call reinforcement (R6.7 / §4.6a lock 1)', () => {
+  const NON_EXEMPT: ActionType[] = [
+    'GET_HINT', 'GENERATE_EXAMPLES', 'BREAK_DOWN_PROBLEM', 'EXPLAIN_CONCEPT',
+    'TIME_COMPLEXITY_HINT', 'PATTERN_RECOGNITION',
+  ];
+
+  for (const action of NON_EXEMPT) {
+    it(`${action}: carries the "stop before the complete solution" reinforcement`, () => {
+      const p = getSystemPrompt(action);
+      expect(p).toContain('BEFORE YOU ANSWER');
+      expect(p.toLowerCase()).toContain('stop and give the guiding insight');
+    });
+
+    it(`${action}: the reinforcement RESTATES that snippets/partial logic are allowed (not a gag)`, () => {
+      const p = getSystemPrompt(action);
+      // Must still explicitly encourage short snippets / partial pseudocode —
+      // the usability lock against over-gating.
+      expect(p.toLowerCase()).toContain('short illustrative snippets');
+      expect(p.toLowerCase()).toContain('encouraged');
+    });
+  }
+
+  it('both chat prompts carry the reinforcement too', () => {
+    expect(getChatSystemPrompt()).toContain('BEFORE YOU ANSWER');
+    expect(getChatAgentSystemPrompt(false)).toContain('BEFORE YOU ANSWER');
+  });
+
+  it('does NOT over-gate: exempt actions are free to show full solutions (no reinforcement forcing otherwise)', () => {
+    // The exempt actions' own CRITICAL FRAMING governs them; the reinforcement
+    // is a non-exempt concern. (CHECK_APPROACH shares SOLUTION_PREVENTION_RULES
+    // but its own framing allows discussing the user's code in full.) We just
+    // assert the exempt-vs-non-exempt behavior isn't broken by over-restriction:
+    // UNDERSTAND_SOLUTION still instructs explaining the OPTIMAL solution.
+    expect(getSystemPrompt('UNDERSTAND_SOLUTION').toLowerCase()).toContain('optimal solution');
+  });
+});
+
+/**
+ * R6.8 — the regeneration instruction exists and tells the model to teach, not
+ * re-dump the full solution.
+ */
+describe('REGENERATE_NO_SOLUTION (R6.8)', () => {
+  it('steers the retry toward a CONCEPTUAL plain-English explanation (not code/steps)', async () => {
+    const { REGENERATE_NO_SOLUTION } = await import('../prompts');
+    const lower = REGENERATE_NO_SOLUTION.toLowerCase();
+    expect(lower).toContain('withheld');
+    // The core steer: conceptual prose, explicitly NOT code or a step list.
+    expect(lower).toContain('conceptual');
+    expect(lower).toContain('plain-english');
+    expect(lower).toContain('do not write pseudocode');
+    expect(lower).toContain('numbered or bulleted list of steps');
+    // And it handles the "they literally asked for pseudocode/code" case.
+    expect(lower).toContain('conceptual walkthrough instead');
+  });
+});

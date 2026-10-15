@@ -57,6 +57,31 @@ export async function checkRateLimit(guardrails: GuardrailSettings): Promise<Gua
 }
 
 /**
+ * HARD-limit-only budget check for a CONTINUATION of an in-flight request (the
+ * R6b bounded regenerate — see .kiro/specs/leetsage-coaching-logic-overhaul §4.5).
+ *
+ * The regenerate is not a NEW user action; it's a second attempt to produce a
+ * useful answer for a request the user already triggered (and already paid one
+ * credit for). So the SOFT pacing limits — per-minute rate and the inter-request
+ * cooldown — should NOT block it (those exist to pace fresh user actions, and a
+ * rapid-fire tester would otherwise never see the regenerate fire). The HARD
+ * limits still apply: the kill switch (user paused everything) and the daily cap
+ * (the real quota guard) both block it. This keeps the "always try to produce a
+ * useful response for the credit spent" intent without letting the regenerate
+ * run away past the daily budget.
+ */
+export async function checkHardBudget(guardrails: GuardrailSettings): Promise<GuardrailCheck> {
+  if (guardrails.killSwitch) {
+    return { allowed: false, reason: 'Kill switch is on — all AI requests are paused. Turn it off in Settings.' };
+  }
+  const usage = await getUsage();
+  if (usage.count >= guardrails.maxRequestsPerDay) {
+    return { allowed: false, reason: `Daily limit reached (${guardrails.maxRequestsPerDay}/day). Resets at midnight.` };
+  }
+  return { allowed: true };
+}
+
+/**
  * Records a request against today's usage. Call this right before/after a
  * successful request is initiated so the counters stay accurate.
  */

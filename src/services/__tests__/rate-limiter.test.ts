@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { checkRateLimit, recordRequest, getUsageToday } from '../rate-limiter';
+import { checkRateLimit, checkHardBudget, recordRequest, getUsageToday } from '../rate-limiter';
 import { DEFAULT_GUARDRAILS } from '../../types';
 import type { GuardrailSettings } from '../../types';
 
@@ -124,6 +124,44 @@ describe('checkRateLimit — cooldown', () => {
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain('wait a moment');
     expect(result.retryAfterMs).toBeCloseTo(1500, -2);
+  });
+});
+
+/**
+ * Fix 1a (coaching-logic-overhaul §4.5) — the bounded regenerate is a
+ * CONTINUATION of an already-paid request, so it is gated by HARD limits only
+ * (kill switch + daily cap), NOT the soft per-minute/cooldown pacing. This is
+ * what lets the regenerate actually fire during rapid testing instead of being
+ * skipped (the observed "show-full with budgetAllowed:false" dead end).
+ */
+describe('checkHardBudget — regenerate continuation (hard limits only)', () => {
+  it('blocks on the kill switch', async () => {
+    const result = await checkHardBudget(guardrails({ killSwitch: true }));
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain('Kill switch');
+  });
+
+  it('blocks when the daily cap is reached', async () => {
+    store[USAGE_KEY] = { date: TODAY, count: 5, recentTimestamps: [] };
+    const result = await checkHardBudget(guardrails({ maxRequestsPerDay: 5 }));
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain('Daily limit');
+  });
+
+  it('ALLOWS despite a per-minute burst that checkRateLimit would block', async () => {
+    store[USAGE_KEY] = { date: TODAY, count: 2, recentTimestamps: [NOW - 10_000, NOW - 5_000] };
+    const g = guardrails({ maxRequestsPerMinute: 2, cooldownMs: 0, maxRequestsPerDay: 200 });
+    // The soft check blocks…
+    expect((await checkRateLimit(g)).allowed).toBe(false);
+    // …but the hard-budget check (used for the regenerate) allows.
+    expect((await checkHardBudget(g)).allowed).toBe(true);
+  });
+
+  it('ALLOWS despite a cooldown that checkRateLimit would block', async () => {
+    store[USAGE_KEY] = { date: TODAY, count: 1, recentTimestamps: [NOW - 500] };
+    const g = guardrails({ cooldownMs: 2000, maxRequestsPerMinute: 100, maxRequestsPerDay: 200 });
+    expect((await checkRateLimit(g)).allowed).toBe(false);
+    expect((await checkHardBudget(g)).allowed).toBe(true);
   });
 });
 

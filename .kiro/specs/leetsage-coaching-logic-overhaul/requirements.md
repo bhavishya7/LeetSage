@@ -15,9 +15,10 @@
 > split by the user along "UI bugs + simple fixes" vs. "fundamental logic
 > changes."
 
-**Status:** 📝 Requirements draft — awaiting sign-off; design/tasks in a later
-session. Nothing built.
-**Date:** 2026-10-14.
+**Status:** ✅ Requirements signed off. Design in progress (full trilogy).
+R6 extended 2026-10-15 after the design discussion (regenerate-first flow — see
+R6.7–R6.9). Nothing built.
+**Date:** 2026-10-14 (R6.7–R6.9 added 2026-10-15).
 **Found by:** real-use dogfooding on problem *167. Two Sum II* post-deployment.
 
 ---
@@ -175,6 +176,44 @@ model non-determinism (not "fixable"), partly path inconsistency (fixable).
   value, WITHOUT implying they did something wrong (replace the current scolding
   "not to solve problems for you!" copy).
 
+### R6b — Always-produce-a-response (regenerate-first, bounded) — added 2026-10-15
+
+> Added after the design discussion. Core principle: a request spent on the free
+> tier SHOULD return a useful coaching answer whenever possible, not a canned
+> blank. Redaction/full-blank remain the guaranteed-safe backstop, but the
+> system first tries to recover a clean answer.
+
+- **R6.7 — Strengthen the FIRST call so a leak is RARE.** THE primary prompt(s)
+  for non-exempt actions SHALL be reinforced so the model is unlikely to produce
+  solution-bearing content in the first place (minimizing how often any recovery
+  path runs, so credits are not wasted on a second call). The deterministic
+  filter remains the backstop regardless of prompt strength.
+- **R6.8 — Bounded regenerate ONLY when redaction would leave nothing teachable.**
+  WHEN `filterResponse` detects a leak in a non-exempt response AND local
+  redaction (R6.1–R6.4) would leave NO meaningful teaching content (the `full`
+  case), THE SYSTEM SHALL attempt AT MOST ONE regeneration: re-ask the model to
+  answer the same question while teaching the concept/approach WITHOUT revealing
+  the full solution, then run that regenerated output back through
+  `filterResponse`.
+  - **R6.8.1** IF the regenerated output passes the filter, THE SYSTEM SHALL show
+    it (a real coaching answer rather than a blank).
+  - **R6.8.2** IF the regenerated output STILL leaks, THE SYSTEM SHALL fall back
+    to the reworded full message (R6.6). The regenerate SHALL NOT be retried a
+    second time (hard cap of one, to bound cost and latency).
+  - **R6.8.3** WHEN local redaction already preserves meaningful teaching (the
+    `partial` case), THE SYSTEM SHALL show that partial result and SHALL NOT spend
+    a regenerate call (no credit spent to prettify an already-useful answer).
+- **R6.9 — The regenerate is a counted, budget-gated, bounded request.**
+  - **R6.9.1** THE regenerate SHALL be recorded against the daily usage counter
+    (it is a real request against the free-tier cap).
+  - **R6.9.2** IF the user's rate-limit/budget check does not allow another
+    request at that moment, THE SYSTEM SHALL skip the regenerate and fall back to
+    the local redaction/full-message result silently (no error, no partial leak).
+  - **R6.9.3** THE recovery (redaction, regenerate, fallback) SHALL be SEAMLESS to
+    the user: the final card shows a normal coaching answer with no visible note
+    that a correction occurred. (The guarantee of R6.4 — nothing solution-bearing
+    is ever shown — is unchanged.)
+
 ### R7 — No regressions
 
 - **R7.1** The Hint, Analyze, Understand, Report, and chat flows on a real
@@ -183,7 +222,11 @@ model non-determinism (not "fixable"), partly path inconsistency (fixable).
   defect (standing bug-registry discipline). In particular R6 redaction SHALL
   have tests proving (a) teaching content survives, (b) a prose-only algorithm
   does NOT survive, (c) the empty-after-redaction fallback fires, and the
-  guardrail-eval safety numbers do NOT regress.
+  guardrail-eval safety numbers do NOT regress. R6b SHALL additionally have tests
+  proving (d) the `partial` case does NOT trigger a regenerate, (e) the `full`
+  case triggers at most ONE regenerate and shows it when clean, (f) a regenerate
+  that still leaks falls back to the reworded full message (no second
+  regenerate), and (g) regenerate is skipped when the budget check disallows it.
 
 ---
 

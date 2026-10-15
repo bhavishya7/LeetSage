@@ -1,4 +1,4 @@
-import type { ActionType, StructuredData, AnalyzeData, UnderstandData, ReportData, Complexity, ProblemPattern } from '../types';
+import type { ActionType, StructuredData, AnalyzeData, UnderstandData, ReportData, ComplexityHintData, Complexity, ProblemPattern } from '../types';
 
 /**
  * Splits a structured action's raw response into the human-readable prose and
@@ -29,7 +29,7 @@ import type { ActionType, StructuredData, AnalyzeData, UnderstandData, ReportDat
 const DATA_FENCE_TAG = 'leetsage-data';
 
 /** Which actions carry a structured `data` block. Others are prose-only. */
-const STRUCTURED_ACTIONS: ReadonlySet<ActionType> = new Set(['CHECK_APPROACH', 'UNDERSTAND_SOLUTION', 'GENERATE_REPORT']);
+const STRUCTURED_ACTIONS: ReadonlySet<ActionType> = new Set(['CHECK_APPROACH', 'UNDERSTAND_SOLUTION', 'GENERATE_REPORT', 'TIME_COMPLEXITY_HINT']);
 
 export function isStructuredAction(actionType: ActionType): boolean {
   return STRUCTURED_ACTIONS.has(actionType);
@@ -61,6 +61,26 @@ export function stripDataBlockForDisplay(raw: string, actionType: ActionType): s
   return raw;
 }
 
+/**
+ * Strip an UNCLOSED `leetsage-data` fence (opening fence + whatever partial JSON
+ * follows, with no closing ```). Used by parseStructuredResponse when no
+ * complete block was found, so a response truncated mid-JSON (token cap) never
+ * renders its half-written data block. If a complete fence IS present, or no
+ * opening fence exists, the text is returned unchanged (the normal paths handle
+ * those). Pure + exported for unit testing.
+ */
+export function stripDanglingDataFence(raw: string): string {
+  const openIdx = raw.indexOf('```' + DATA_FENCE_TAG);
+  if (openIdx === -1) return raw;
+  // If there's a closing ``` after the opening fence, it's a complete block —
+  // leave it for the normal extractor to handle.
+  const afterOpen = raw.indexOf('\n', openIdx);
+  const searchFrom = afterOpen === -1 ? openIdx + 3 : afterOpen;
+  if (raw.indexOf('```', searchFrom) !== -1) return raw;
+  // Dangling opening fence → cut from it to end-of-string.
+  return raw.slice(0, openIdx).trimEnd();
+}
+
 export interface ParsedStructured {
   /** Prose with the raw data block removed — safe to show/persist as content. */
   prose: string;
@@ -76,7 +96,16 @@ export function parseStructuredResponse(raw: string, actionType: ActionType): Pa
   if (!STRUCTURED_ACTIONS.has(actionType)) return { prose: raw };
 
   const match = extractDataBlock(raw);
-  if (!match) return { prose: raw.trim() };
+  if (!match) {
+    // No COMPLETE data block. A response that hit the token cap mid-JSON leaves
+    // an UNCLOSED `leetsage-data` fence (opening ``` + partial JSON, no closing
+    // ```); extractDataBlock can't match it, so without this the raw half-written
+    // JSON would render in the card (observed: a scrollable JSON box at the end
+    // of a truncated UNDERSTAND_SOLUTION answer). Strip from a dangling opening
+    // fence to end-of-string so a truncated block is never shown. No data to
+    // return — the card degrades to prose-only, which is the correct behavior.
+    return { prose: stripDanglingDataFence(raw).trim() };
+  }
 
   const { jsonText, prose } = match;
   let parsed: unknown;
@@ -138,8 +167,28 @@ function validate(parsed: unknown, actionType: ActionType): StructuredData | nul
     case 'CHECK_APPROACH': return validateAnalyze(obj);
     case 'UNDERSTAND_SOLUTION': return validateUnderstand(obj);
     case 'GENERATE_REPORT': return validateReport(obj);
+    case 'TIME_COMPLEXITY_HINT': return validateComplexityHint(obj);
     default: return null;
   }
+}
+
+/**
+ * Validate the code-aware complexity hint's data block
+ * (.kiro/specs/leetsage-coaching-logic-overhaul §1). Optimal is required (the
+ * hint always targets an optimal); current is OPTIONAL and stays `null` when the
+ * model couldn't read the user's code (R2.2 — never fabricate a Current). We do
+ * NOT coerce a missing current into `O(?)`; absence must survive as null so the
+ * card renders the no-code fallback shape rather than a bogus Current line.
+ */
+function validateComplexityHint(obj: Record<string, unknown>): ComplexityHintData | null {
+  const optimal = toComplexity(obj.optimalComplexity);
+  if (!optimal) return null;
+  const current = toComplexity(obj.currentComplexity); // null when absent/invalid
+  return {
+    currentComplexity: current,
+    optimalComplexity: optimal,
+    onOptimalPath: obj.onOptimalPath === true,
+  };
 }
 
 function validateReport(obj: Record<string, unknown>): ReportData | null {

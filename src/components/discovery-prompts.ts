@@ -70,19 +70,32 @@ export function resolveSubmitText(explicit: string | undefined, inputValue: stri
  *
  * Priority order (first match wins):
  *   1. no key   — the only state the user must ACT on; keep the genuine no-key copy.
- *   2. off-page — not on a problem; matches the header's "Open a LeetCode problem".
- *   3. busy     — a neutral "Thinking…" (disabled-because-busy, not no-key).
- *   4. healthy  — the normal rotating example.
+ *   2. off-page — NOT on a coachable problem page (URL-based signal, R4). The
+ *                 inputs are hard-disabled here; this copy explains why.
+ *   3. loading  — on a problem page but the problem context is still being pulled
+ *                 (the MV3 pull/retry window). Distinct from off-page so a real
+ *                 page mid-load never reads as "no problem" (R4.4).
+ *   4. busy     — a request is in flight: a neutral "Thinking…".
+ *   5. healthy  — the normal rotating example.
  *
- * Pure + DOM-free so it unit-tests under this repo's `node` vitest env. The
- * explicit branch structure also gives the sibling off-page-gating spec a clean
- * seam to add a "why disabled" message without re-untangling `canInteract`
- * (see .kiro/specs/leetsage-post-launch-ui-fixes design §3).
+ * Coaching-logic-overhaul (R4) note: `onProblemPage` is the URL-based signal
+ * (the active tab is a /problems/ page), which is load-INDEPENDENT and so safe
+ * to hard-gate on. `hasProblem` means the problem CONTEXT has finished loading.
+ * Separating them is what lets the off-page copy be truthful without ever
+ * mislabeling a real page that's still loading as "off-page".
+ *
+ * Pure + DOM-free so it unit-tests under this repo's `node` vitest env.
  */
 export interface PlaceholderState {
   /** A Gemini API key is configured. */
   apiKeyConfigured: boolean;
-  /** The user is on a LeetCode problem page (problemContext is loaded). */
+  /**
+   * The active tab is a coachable LeetCode problem page (URL-based, R4). When
+   * omitted, defaults to `hasProblem` for backward compatibility with callers
+   * that only track loaded context.
+   */
+  onProblemPage?: boolean;
+  /** The problem CONTEXT has finished loading (problemContext is non-null). */
   hasProblem: boolean;
   /** A request is in flight. */
   isLoading: boolean;
@@ -91,8 +104,10 @@ export interface PlaceholderState {
 }
 
 export function chatPlaceholder(s: PlaceholderState): string {
+  const onPage = s.onProblemPage ?? s.hasProblem;
   if (!s.apiKeyConfigured) return 'Configure your API key first';
-  if (!s.hasProblem) return 'Open a LeetCode problem to get started';
+  if (!onPage) return 'Open a LeetCode problem to use the coaching tools';
+  if (!s.hasProblem) return 'Reading this problem…';
   if (s.isLoading) return 'Thinking…';
   return s.rotatingExample;
 }

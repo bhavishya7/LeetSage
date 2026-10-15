@@ -124,43 +124,259 @@ function extractCodeBlocks(content: string): Array<{ code: string; lineCount: nu
   return blocks;
 }
 
-function buildFilteredMessage(reason: string): string {
-  return `⚠️ **Content filtered**\n\nThis response appeared to contain too much solution detail. LeetSmith is here to help you *learn*, not to solve problems for you!\n\nTry one of these instead:\n- Click **Get Hint** for a progressive hint\n- Click **Break Down Problem** to approach it step by step\n\n*Filter reason: ${reason}*`;
+/**
+ * The REWORDED full-filter message (coaching-logic-overhaul R6.6). Replaces the
+ * old scolding "not to solve problems for you!" copy. It acknowledges the ask is
+ * legitimate, points at the coaching affordances that actually exist (the 4-chip
+ * bar: Hint / Understand solution — NOT the removed "Break Down Problem"), and
+ * does not imply the user did anything wrong. Shown only when redaction leaves
+ * nothing teachable AND (per the App recovery helper) a regenerate wasn't
+ * possible or didn't produce a clean answer.
+ */
+function buildFilteredMessage(): string {
+  return (
+    `I kept this one at a coaching level — the answer drifted toward handing over the full solution, ` +
+    `so I held it back. You'll get more out of reaching it yourself.\n\n` +
+    `Try **💡 Hint** for a nudge in the right direction, or **🧠 Understand solution** if you'd like the ` +
+    `optimal approach explained for study.`
+  );
+}
+
+/**
+ * A detected leak region in the original content, as a [start, end) character
+ * span to be removed during redaction.
+ */
+interface LeakRegion {
+  start: number;
+  end: number;
+  reason: string;
+}
+
+/** Finds every fenced code block as a span + its inner code + line count. */
+function fencedBlockSpans(content: string): Array<{ start: number; end: number; code: string; lineCount: number }> {
+  const out: Array<{ start: number; end: number; code: string; lineCount: number }> = [];
+  const regex = /```[\w]*\n([\s\S]*?)```/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(content)) !== null) {
+    const code = match[1];
+    out.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      code,
+      lineCount: code.split('\n').filter(l => l.trim()).length,
+    });
+  }
+  return out;
+}
+
+/**
+ * Does a fenced block leak? (Same predicates as before — detection UNCHANGED.)
+ * Returns a reason string, or null if it's a safe snippet.
+ */
+function fencedBlockLeakReason(block: { code: string; lineCount: number }): string | null {
+  // Reason strings preserved verbatim from the pre-redaction filter so the
+  // existing contract (and tests) stay stable.
+  if (block.lineCount > MAX_CODE_BLOCK_LINES) return 'Code block too long';
+  if (COMPLETE_FUNCTION_PATTERNS.some(p => p.test(block.code)) || looksLikeCompleteBraceFunction(block.code)) {
+    return 'Complete implementation detected';
+  }
+  if (looksLikeFullPseudocode(block.code)) return 'Full pseudocode detected';
+  return null;
+}
+
+/**
+ * Collect every leak region in the content (coaching-logic-overhaul §4.4):
+ *   - solution-phrase lines,
+ *   - leaking fenced blocks,
+ *   - non-fenced prose runs (blank-line-separated) that are full pseudocode
+ *     (R6.2 — localizes a prose algorithm so surrounding teaching can survive).
+ * Detection predicates themselves are unchanged; this just records WHERE.
+ */
+function collectLeakRegions(content: string): LeakRegion[] {
+  const regions: LeakRegion[] = [];
+
+  // 1) Solution phrases — redact the whole line the phrase sits on.
+  const lower = content.toLowerCase();
+  for (const phrase of SOLUTION_PHRASES) {
+    let idx = lower.indexOf(phrase);
+    while (idx !== -1) {
+      const lineStart = content.lastIndexOf('\n', idx) + 1;
+      let lineEnd = content.indexOf('\n', idx);
+      if (lineEnd === -1) lineEnd = content.length;
+      regions.push({ start: lineStart, end: lineEnd, reason: 'Solution phrases detected' });
+      idx = lower.indexOf(phrase, idx + phrase.length);
+    }
+  }
+
+  // 2) Leaking fenced blocks.
+  const fences = fencedBlockSpans(content);
+  for (const block of fences) {
+    const reason = fencedBlockLeakReason(block);
+    if (reason) regions.push({ start: block.start, end: block.end, reason });
+  }
+
+  // 3) Non-fenced prose runs that are full pseudocode. Segment the text OUTSIDE
+  // fenced blocks into blank-line-separated runs and test each. A tripping run
+  // is a prose-algorithm leak (R6.2); localizing it lets neighboring teaching
+  // survive while guaranteeing no prose-only algorithm slips through.
+  for (const run of proseRunsOutsideFences(content, fences)) {
+    if (looksLikeFullPseudocode(run.text)) {
+      regions.push({ start: run.start, end: run.end, reason: 'Full pseudocode detected (prose)' });
+    }
+  }
+
+  return regions;
+}
+
+/**
+ * Splits the content into blank-line-separated runs that lie OUTSIDE any fenced
+ * block, returning each run's text + span. Fenced blocks are skipped (they're
+ * handled separately) so a code fence can't merge two prose runs.
+ */
+function proseRunsOutsideFences(
+  content: string,
+  fences: Array<{ start: number; end: number }>,
+): Array<{ start: number; end: number; text: string }> {
+  // Build the complement of the fenced spans: the prose segments between them.
+  const proseSegments: Array<{ start: number; end: number }> = [];
+  let cursor = 0;
+  for (const f of fences) {
+    if (f.start > cursor) proseSegments.push({ start: cursor, end: f.start });
+    cursor = Math.max(cursor, f.end);
+  }
+  if (cursor < content.length) proseSegments.push({ start: cursor, end: content.length });
+
+  // Within each prose segment, split on blank lines into runs.
+  const runs: Array<{ start: number; end: number; text: string }> = [];
+  for (const seg of proseSegments) {
+    const segText = content.slice(seg.start, seg.end);
+    const re = /\n[ \t]*\n/g; // blank-line separators
+    let runStart = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(segText)) !== null) {
+      const runEnd = m.index;
+      if (runEnd > runStart) {
+        runs.push({ start: seg.start + runStart, end: seg.start + runEnd, text: segText.slice(runStart, runEnd) });
+      }
+      runStart = m.index + m[0].length;
+    }
+    if (runStart < segText.length) {
+      runs.push({ start: seg.start + runStart, end: seg.end, text: segText.slice(runStart) });
+    }
+  }
+  return runs;
+}
+
+/** Remove the leak regions from the content and tidy the resulting whitespace. */
+function redactRegions(content: string, regions: LeakRegion[]): string {
+  if (regions.length === 0) return content;
+  // Merge overlapping/adjacent regions, sorted by start.
+  const sorted = [...regions].sort((a, b) => a.start - b.start);
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const r of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && r.start <= last.end) last.end = Math.max(last.end, r.end);
+    else merged.push({ start: r.start, end: r.end });
+  }
+  // Build the surviving text by keeping everything outside the merged spans.
+  let out = '';
+  let cursor = 0;
+  for (const span of merged) {
+    out += content.slice(cursor, span.start);
+    cursor = span.end;
+  }
+  out += content.slice(cursor);
+  // Tidy: collapse 3+ newlines left by removals into a clean paragraph break,
+  // and trim stray leading/trailing whitespace.
+  return out.replace(/\n{3,}/g, '\n\n').replace(/[ \t]+\n/g, '\n').trim();
+}
+
+/** Strip markdown chrome + common framing filler, returning the real prose. */
+function teachingProse(text: string): string {
+  return text
+    .replace(/^#{1,6}\s+.*$/gm, '')      // headings
+    .replace(/^\s*[-*]\s*$/gm, '')        // empty bullets
+    .replace(/\*\*[^*]+:\*\*/g, '')      // bold "Label:" markers
+    .replace(/[*_`#>-]/g, '')             // stray markdown punctuation
+    // Filler framing that often brackets a removed block but teaches NOTHING on
+    // its own ("Here is the pseudocode:", "As you write this…", "keep in mind…").
+    .replace(/here('?s| is)( the)? (pseudo-?code|solution|code|algorithm|approach|implementation)[^.:\n]*[:.]?/gi, '')
+    .replace(/\bas you (write|code|implement) this\b/gi, '')
+    .replace(/\b(keep in mind|remember|don'?t forget|note) that\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Does the surviving (redacted) text still contain meaningful TEACHING content,
+ * or is it effectively a hollow shell left after the thing-the-user-asked-for
+ * was redacted? Used to classify partial vs. full.
+ *
+ * Two signals, BOTH required, because a char-count alone can't tell a trailing
+ * implementation tip ("remember to 1-index") from genuine conceptual teaching:
+ *  1. ABSOLUTE floor — there must be at least a sentence of real prose left
+ *     (filler framing stripped first).
+ *  2. SURVIVING FRACTION — the real prose must be a meaningful share of the
+ *     ORIGINAL's prose. When redaction removed the bulk (the algorithm the user
+ *     asked for) and only a small framing tail remains, that's a hollow shell →
+ *     prefer `full` so the bounded regenerate produces a real conceptual answer.
+ *     A genuine concept paragraph beside a small code block keeps a high share →
+ *     stays `partial`.
+ * This ratio approach is robust where a bare threshold was fragile (observed on
+ * the real "give me pseudocode" case): it keys on how much was REMOVED, not an
+ * arbitrary absolute length.
+ */
+function hasMeaningfulTeaching(original: string, redacted: string): boolean {
+  const survivingProse = teachingProse(redacted);
+  const originalProse = teachingProse(original);
+  if (survivingProse.length < 60) return false;           // (1) absolute floor
+  if (originalProse.length === 0) return false;
+  const fraction = survivingProse.length / originalProse.length;
+  return fraction >= 0.5;                                   // (2) surviving share
+}
+
+/** Pure leak-detection decision (unchanged semantics) — used for the re-filter. */
+function detectsLeak(content: string, actionType: ActionType): boolean {
+  if (SOLUTION_EXEMPT_ACTIONS.has(actionType)) return false;
+  const lower = content.toLowerCase();
+  if (SOLUTION_PHRASES.some(p => lower.includes(p))) return true;
+  for (const block of extractCodeBlocks(content)) {
+    if (block.lineCount > MAX_CODE_BLOCK_LINES) return true;
+    if (COMPLETE_FUNCTION_PATTERNS.some(p => p.test(block.code)) || looksLikeCompleteBraceFunction(block.code)) return true;
+    if (looksLikeFullPseudocode(block.code)) return true;
+  }
+  if (looksLikeFullPseudocode(content)) return true;
+  return false;
 }
 
 export function filterResponse(content: string, actionType: ActionType): FilterResult {
   // These actions analyze/explain the user's OWN code — solutions are expected.
-  if (SOLUTION_EXEMPT_ACTIONS.has(actionType)) return { filteredContent: content, wasFiltered: false };
-
-  const lower = content.toLowerCase();
-  if (SOLUTION_PHRASES.some(p => lower.includes(p))) {
-    return { filteredContent: buildFilteredMessage('Solution-revealing language detected'), wasFiltered: true, filterReason: 'Solution phrases detected' };
+  if (SOLUTION_EXEMPT_ACTIONS.has(actionType)) {
+    return { filteredContent: content, wasFiltered: false, redactionMode: 'none' };
   }
 
-  for (const block of extractCodeBlocks(content)) {
-    if (block.lineCount > MAX_CODE_BLOCK_LINES) {
-      return { filteredContent: buildFilteredMessage(`Code block had ${block.lineCount} lines (max ${MAX_CODE_BLOCK_LINES})`), wasFiltered: true, filterReason: `Code block too long` };
-    }
-    // A COMPLETE function implementation is a leak regardless of line count: a
-    // compact 8-line solution (e.g. Two Sum) is still the whole answer. The
-    // patterns require a real function signature + a substantial body (5+
-    // indented lines, or a 200-char brace body), so a short illustrative
-    // snippet — the thing we WANT to allow — won't match. The old
-    // `> MAX_SNIPPET_LINES` gate let compact full solutions slip through; the
-    // guardrail eval caught it (case pos-code-1).
-    if (COMPLETE_FUNCTION_PATTERNS.some(p => p.test(block.code)) || looksLikeCompleteBraceFunction(block.code)) {
-      return { filteredContent: buildFilteredMessage('Complete function implementation detected'), wasFiltered: true, filterReason: 'Complete implementation detected' };
-    }
-    // A fenced block that's really full pseudocode of the algorithm.
-    if (looksLikeFullPseudocode(block.code)) {
-      return { filteredContent: buildFilteredMessage('Response spelled out the full algorithm as pseudocode'), wasFiltered: true, filterReason: 'Full pseudocode detected' };
-    }
+  // DETECTION is unchanged — collect every leak region. If none, pass clean.
+  const regions = collectLeakRegions(content);
+  if (regions.length === 0) {
+    return { filteredContent: content, wasFiltered: false, redactionMode: 'none' };
   }
 
-  // Pseudocode often appears WITHOUT code fences — check the whole response too.
-  if (looksLikeFullPseudocode(content)) {
-    return { filteredContent: buildFilteredMessage('Response spelled out the full algorithm step-by-step'), wasFiltered: true, filterReason: 'Full pseudocode detected (prose)' };
+  // A leak was detected (wasFiltered: true, invariant to how we render it).
+  const reason = regions[0].reason;
+
+  // Try to preserve the teaching: redact only the offending regions.
+  const redacted = redactRegions(content, regions);
+
+  // Classify partial vs. full. A `partial` must (a) still have meaningful
+  // teaching AND (b) itself be clean — re-run detection on the redacted text as
+  // a hard self-verification (R6.4 §4.4 step 4). If anything still trips, we do
+  // NOT trust the partial and fall back to full.
+  if (hasMeaningfulTeaching(content, redacted) && !detectsLeak(redacted, actionType)) {
+    return { filteredContent: redacted, wasFiltered: true, filterReason: reason, redactionMode: 'partial' };
   }
 
-  return { filteredContent: content, wasFiltered: false };
+  // Nothing teachable survived (or the redacted text still trips a detector) →
+  // the reworded full message. The App recovery helper decides whether to
+  // attempt a bounded regenerate before showing this.
+  return { filteredContent: buildFilteredMessage(), wasFiltered: true, filterReason: reason, redactionMode: 'full' };
 }

@@ -118,15 +118,59 @@ describe('chatPlaceholder (B24)', () => {
   });
 
   it('off a problem page (key configured, not busy) shows the off-page copy', () => {
-    expect(chatPlaceholder({ ...base, hasProblem: false })).toBe('Open a LeetCode problem to get started');
+    // Backward-compat: when onProblemPage is omitted it defaults to hasProblem,
+    // so hasProblem:false still reads as off-page.
+    expect(chatPlaceholder({ ...base, hasProblem: false })).toBe('Open a LeetCode problem to use the coaching tools');
   });
 
   it('off-page beats busy (both key-configured) — specific reason, not generic', () => {
     const out = chatPlaceholder({ ...base, hasProblem: false, isLoading: true });
-    expect(out).toBe('Open a LeetCode problem to get started');
+    expect(out).toBe('Open a LeetCode problem to use the coaching tools');
   });
 
   it('healthy state (key + problem + idle) shows the rotating example', () => {
+    expect(chatPlaceholder(base)).toBe('what pattern is this?');
+  });
+});
+
+/**
+ * Coaching-logic-overhaul R4 — URL-based off-page gating adds a THIRD disabled
+ * reason distinct from "no context loaded". `onProblemPage` is the load-
+ * independent URL signal; `hasProblem` is "context finished loading". The
+ * placeholder must tell them apart so a REAL problem page mid-load never reads
+ * as "off-page" (R4.4). Priority: no-key → off-page → loading → busy → healthy.
+ */
+describe('chatPlaceholder — URL-based off-page vs. still-loading (R4)', () => {
+  const base: PlaceholderState = {
+    apiKeyConfigured: true,
+    onProblemPage: true,
+    hasProblem: true,
+    isLoading: false,
+    rotatingExample: 'what pattern is this?',
+  };
+
+  it('NOT on a problem URL → off-page copy (inputs hard-disabled)', () => {
+    expect(chatPlaceholder({ ...base, onProblemPage: false, hasProblem: false }))
+      .toBe('Open a LeetCode problem to use the coaching tools');
+  });
+
+  it('on a problem URL but context still loading → "Reading this problem…", NOT off-page (R4.4)', () => {
+    // The crux: a real page whose context is still being pulled must never be
+    // mislabeled "off-page". onProblemPage:true + hasProblem:false → loading copy.
+    expect(chatPlaceholder({ ...base, onProblemPage: true, hasProblem: false }))
+      .toBe('Reading this problem…');
+  });
+
+  it('off-page beats the loading copy (URL signal wins)', () => {
+    expect(chatPlaceholder({ ...base, onProblemPage: false, hasProblem: false, isLoading: true }))
+      .toBe('Open a LeetCode problem to use the coaching tools');
+  });
+
+  it('on-page + loaded + busy → Thinking…', () => {
+    expect(chatPlaceholder({ ...base, isLoading: true })).toBe('Thinking…');
+  });
+
+  it('fully healthy → rotating example', () => {
     expect(chatPlaceholder(base)).toBe('what pattern is this?');
   });
 });
