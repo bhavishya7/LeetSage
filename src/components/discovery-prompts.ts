@@ -55,3 +55,44 @@ export const TRY_ASKING_CHIPS: string[] = [
 export function resolveSubmitText(explicit: string | undefined, inputValue: string): string {
   return (explicit ?? inputValue).trim();
 }
+
+/**
+ * B24 — the chat input placeholder must reflect the SPECIFIC reason the input is
+ * disabled, never collapse every disabled state into the no-key copy.
+ *
+ * The bug: App derived the placeholder from `canInteract = apiKeyConfigured &&
+ * !!problemContext && !isLoading` — one boolean overloaded for both "is the input
+ * usable?" (correct) AND "which placeholder copy?" (wrong). The instant a request
+ * started, `isLoading` flipped `canInteract` false and the key-fine user was told
+ * to "Configure your API key first" mid-stream. This helper separates the copy
+ * decision from the enable/disable gate (App keeps using `canInteract` for the
+ * actual `disabled=` wiring).
+ *
+ * Priority order (first match wins):
+ *   1. no key   — the only state the user must ACT on; keep the genuine no-key copy.
+ *   2. off-page — not on a problem; matches the header's "Open a LeetCode problem".
+ *   3. busy     — a neutral "Thinking…" (disabled-because-busy, not no-key).
+ *   4. healthy  — the normal rotating example.
+ *
+ * Pure + DOM-free so it unit-tests under this repo's `node` vitest env. The
+ * explicit branch structure also gives the sibling off-page-gating spec a clean
+ * seam to add a "why disabled" message without re-untangling `canInteract`
+ * (see .kiro/specs/leetsage-post-launch-ui-fixes design §3).
+ */
+export interface PlaceholderState {
+  /** A Gemini API key is configured. */
+  apiKeyConfigured: boolean;
+  /** The user is on a LeetCode problem page (problemContext is loaded). */
+  hasProblem: boolean;
+  /** A request is in flight. */
+  isLoading: boolean;
+  /** The current rotating example (PLACEHOLDER_EXAMPLES[placeholderIdx]). */
+  rotatingExample: string;
+}
+
+export function chatPlaceholder(s: PlaceholderState): string {
+  if (!s.apiKeyConfigured) return 'Configure your API key first';
+  if (!s.hasProblem) return 'Open a LeetCode problem to get started';
+  if (s.isLoading) return 'Thinking…';
+  return s.rotatingExample;
+}

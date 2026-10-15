@@ -26,7 +26,7 @@ import {
 import ConfirmAffordance from '../components/ConfirmAffordance';
 import UsageReservoir from '../components/UsageReservoir';
 import WelcomeCard from '../components/WelcomeCard';
-import { PLACEHOLDER_EXAMPLES, TRY_ASKING_CHIPS, resolveSubmitText } from '../components/discovery-prompts';
+import { PLACEHOLDER_EXAMPLES, TRY_ASKING_CHIPS, resolveSubmitText, chatPlaceholder } from '../components/discovery-prompts';
 import { getChatAgentSystemPrompt, wrapUntrusted, wrapToolResult } from '../services/prompts';
 import { buildConversationWindow } from '../services/chat-window';
 import { toolSpecs, toolLabel, runTool, type ToolContext } from '../services/chat-tools';
@@ -656,7 +656,17 @@ const App: React.FC = () => {
     handleChatSubmit(query);
   };
 
-  const currentPlaceholder = canInteract ? PLACEHOLDER_EXAMPLES[placeholderIdx] : 'Configure your API key first';
+  // B24: derive the placeholder from the SPECIFIC disabled reason (no-key vs.
+  // off-page vs. busy) instead of the overloaded `canInteract` — which collapsed
+  // all three into the no-key copy, so a mid-stream request wrongly told a
+  // key-configured user to "Configure your API key first". `canInteract` still
+  // drives the actual enable/disable wiring below (that part was correct).
+  const currentPlaceholder = chatPlaceholder({
+    apiKeyConfigured,
+    hasProblem: !!problemContext,
+    isLoading,
+    rotatingExample: PLACEHOLDER_EXAMPLES[placeholderIdx],
+  });
   // The decorative "you can type here" caret shows only when the field is usable,
   // empty, and unfocused (the real text caret takes over on focus).
   const showIdleCaret = canInteract && !chatFocused && !chatInput;
