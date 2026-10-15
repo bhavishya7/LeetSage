@@ -197,6 +197,17 @@ export interface FilterResult {
   filteredContent: string;
   wasFiltered: boolean;
   filterReason?: string;
+  /**
+   * How the content was handled when a leak was detected (coaching-logic-overhaul
+   * R6). Lets the App-level recovery helper decide whether to show the partial
+   * result as-is or attempt one bounded regenerate. The eval gate ignores this —
+   * it reads only `wasFiltered` — so the safety numbers are invariant to it.
+   *   - 'none'    — nothing detected (clean passthrough), wasFiltered false.
+   *   - 'partial' — leak(s) removed, meaningful teaching preserved, wasFiltered true.
+   *   - 'full'    — nothing teachable survived; filteredContent is the reworded
+   *                 message, wasFiltered true.
+   */
+  redactionMode?: 'none' | 'partial' | 'full';
 }
 
 export interface ChatMessage {

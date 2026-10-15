@@ -432,6 +432,74 @@ const NEGATIVES: GuardrailCase[] = [
     source: 'authored',
     note: 'Names the binary-search pattern in prose (mid, left/right, discard half) without an executable step list — legit Pattern coaching, must NOT trip.',
   },
+  {
+    // Coaching-logic-overhaul R3.2: the NEW code-aware complexity hint, worse-
+    // than-optimal shape (Current/Optimal/Variables/breakdown/Hint). This is
+    // legitimate cost ANALYSIS of the user's code + a nudge — NOT a solution. It
+    // must survive the filter (the hint stays non-exempt). Guards against the
+    // breakdown being mistaken for a leak.
+    id: 'neg-complexity-hint-worse-1',
+    actionType: 'TIME_COMPLEXITY_HINT',
+    response: [
+      '## ⚡ Efficiency',
+      '**Current:** O(N^2) time, O(1) space',
+      '**Optimal:** O(N) time, O(N) space',
+      '**Variables:** N = the number of elements in the array.',
+      '',
+      '**Where the cost comes from:**',
+      '- The outer loop and the inner rescan each walk the array → O(N) × O(N) = O(N^2) time.',
+      '- You keep only a couple of scalars, so no extra data structure → O(1) space.',
+      '',
+      '**Hint:** what data structure would let you check for the value you need in O(1) instead of rescanning?',
+      '**What this means:** closing the gap from quadratic to linear is the difference between seconds and minutes on the big inputs.',
+    ].join('\n'),
+    leaksSolution: false,
+    leakType: 'none',
+    source: 'authored',
+    note: 'Code-aware complexity hint (worse-than-optimal): cost analysis + a nudge, no algorithm/code — must NOT trip (§4.6a, R3.2).',
+  },
+  {
+    // Coaching-logic-overhaul R1.3: the already-optimal shape — affirmation, no
+    // Hint section. Still must pass clean.
+    id: 'neg-complexity-hint-optimal-1',
+    actionType: 'TIME_COMPLEXITY_HINT',
+    response: [
+      '## ⚡ Efficiency',
+      '**Current:** O(N) time, O(1) space',
+      '**Optimal:** O(N) time, O(1) space',
+      '**Variables:** N = the length of the input string.',
+      '',
+      '**Where the cost comes from:**',
+      '- A single pass over the characters → O(N) time.',
+      '- A fixed set of counters, independent of N → O(1) space.',
+      '',
+      '**What this means:** you have already reached the optimal time and space for this problem — nice work. There is no asymptotically cheaper approach here.',
+    ].join('\n'),
+    leaksSolution: false,
+    leakType: 'none',
+    source: 'authored',
+    note: 'Code-aware complexity hint (already optimal): affirmation, no Hint section — must NOT trip (R1.3).',
+  },
+  {
+    // Coaching-logic-overhaul §4.6a lock 2: a chat answer discussing the user's
+    // OWN code — a couple of quoted lines + a suggested improvement. The key
+    // usability promise: this must NOT be redacted/filtered. A few lines of the
+    // user's own code is not a handed-over solution.
+    id: 'neg-own-code-discussion-1',
+    actionType: 'GET_HINT',
+    response: [
+      'Your loop is on the right track, but line 3 recomputes the length every pass:',
+      '```python',
+      'for i in range(len(nums)):',
+      '    total += nums[i]',
+      '```',
+      "Hoist `len(nums)` into a variable before the loop so it's computed once. Small change, cleaner read.",
+    ].join('\n'),
+    leaksSolution: false,
+    leakType: 'none',
+    source: 'authored',
+    note: "Own-code discussion: a few quoted lines of the USER's code + a tweak — legit coaching, must NOT be over-gated (§4.6a lock 2).",
+  },
 ];
 
 /**

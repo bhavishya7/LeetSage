@@ -1,5 +1,5 @@
 import type { LLMRequest, LLMResponse, GeminiModel } from '../types';
-import { getSystemPrompt, getChatSystemPrompt, buildUserMessage, formatProblemContext, wrapUntrusted } from './prompts';
+import { getSystemPrompt, getChatSystemPrompt, buildUserMessage, formatProblemContext, wrapUntrusted, REGENERATE_NO_SOLUTION } from './prompts';
 
 // Google Gemini via its OpenAI-compatible endpoint. This lets us keep the
 // standard chat-completions request/response shape while using a free-tier
@@ -161,6 +161,53 @@ export async function sendLLMRequest(request: LLMRequest): Promise<LLMResponse> 
       finishReason: data.choices?.[0]?.finish_reason ?? 'stop',
       usage: data.usage ? { promptTokens: data.usage.prompt_tokens, completionTokens: data.usage.completion_tokens } : undefined,
     };
+  } finally { clearTimeout(timeoutId); }
+}
+
+/**
+ * BOUNDED REGENERATE (coaching-logic-overhaul R6.8). The single retry used by
+ * the App recovery helper when a first answer leaked so badly that redaction
+ * left nothing teachable (`redactionMode: 'full'`). It re-issues the SAME
+ * request (same action/chat prompt, same untrusted data block) with
+ * `REGENERATE_NO_SOLUTION` appended to the system prompt, telling the model its
+ * prior answer over-shared and to teach at a coaching level this time.
+ *
+ * NON-streaming on purpose: the B1 pre-display gate withholds non-exempt output
+ * until after the output filter runs anyway, so there is no streaming UX to
+ * preserve here — we just need the final text to re-filter. The caller
+ * (App.tsx) is responsible for recording it against the usage cap and
+ * re-running `filterResponse` on the result (never trusted blindly — it may
+ * still leak, in which case the caller shows the reworded full message).
+ */
+export async function regenerateWithoutSolution(request: LLMRequest): Promise<LLMResponse> {
+  const model = request.model ?? DEFAULT_MODEL;
+  const maxTokens = request.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+  // Reuse the normal message assembly, then reinforce the system message so the
+  // ONE retry is steered away from the full-solution drift that got filtered.
+  const messages = buildMessages(request).map((m) =>
+    m.role === 'system' ? { ...m, content: `${m.content}\n${REGENERATE_NO_SOLUTION}` } : m,
+  );
+
+  const body = JSON.stringify({ model, messages, max_tokens: maxTokens, temperature: 0.7 });
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchWithRetry(`${GEMINI_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${request.apiKey}` },
+      body, signal: controller.signal,
+    }, 2);
+    const data = await response.json() as ChatCompletionResponse;
+    return {
+      content: data.choices?.[0]?.message?.content ?? '',
+      finishReason: data.choices?.[0]?.finish_reason ?? 'stop',
+      usage: data.usage ? { promptTokens: data.usage.prompt_tokens, completionTokens: data.usage.completion_tokens } : undefined,
+    };
+  } catch (err) {
+    throw humanizeTransportError(err, timeoutMs);
   } finally { clearTimeout(timeoutId); }
 }
 

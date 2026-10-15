@@ -82,8 +82,9 @@ describe('B1 — a leaking non-exempt response is never committed before the fil
     const committed = committedContents('PATTERN_RECOGNITION', LEAK_CHUNKS);
     // Exactly one commit (the final filtered reveal): nothing mid-stream.
     expect(committed).toHaveLength(1);
-    // That single commit is the "Content filtered" coaching message…
-    expect(committed[0]).toContain('Content filtered');
+    // That single commit is the reworded coaching message (R6.6 — the leak was
+    // all-algorithm with no teaching, so redaction classifies it `full`)…
+    expect(committed[0].toLowerCase()).toContain('coaching level');
     // …and NONE of the committed values ever contained the leaked algorithm.
     for (const c of committed) {
       expect(c).not.toContain('while left <= right');
