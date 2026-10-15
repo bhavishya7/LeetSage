@@ -3,8 +3,9 @@ import {
   parseStructuredResponse,
   isStructuredAction,
   stripDataBlockForDisplay,
+  stripDanglingDataFence,
 } from '../structured-parser';
-import type { ActionType, AnalyzeData, UnderstandData, ReportData } from '../../types';
+import type { ActionType, AnalyzeData, UnderstandData, ReportData, ComplexityHintData } from '../../types';
 
 /**
  * Unit tests for the tolerant structured-output parser.
@@ -26,10 +27,12 @@ function fenced(json: string): string {
 }
 
 describe('isStructuredAction', () => {
-  it('is true for the three structured producers', () => {
+  it('is true for the structured producers', () => {
     expect(isStructuredAction('CHECK_APPROACH')).toBe(true);
     expect(isStructuredAction('UNDERSTAND_SOLUTION')).toBe(true);
     expect(isStructuredAction('GENERATE_REPORT')).toBe(true);
+    // Coaching-logic-overhaul: the complexity hint is now code-aware + structured.
+    expect(isStructuredAction('TIME_COMPLEXITY_HINT')).toBe(true);
   });
   it('is false for prose-only actions', () => {
     expect(isStructuredAction('GET_HINT')).toBe(false);
@@ -103,14 +106,17 @@ describe('parseStructuredResponse — graceful degradation (never throws)', () =
     expect(result.prose).not.toContain('leetsage-data');
   });
 
-  it('partial / truncated data block (no closing fence) -> prose-only', () => {
-    // Stream cut off before the closing fence: no complete block to extract.
+  it('partial / truncated data block (no closing fence) -> dangling block STRIPPED, prose kept', () => {
+    // Stream cut off before the closing fence: no complete block to extract. The
+    // dangling `leetsage-data` fence + partial JSON must be stripped (not shown
+    // as a raw JSON box in the card — the token-cap bug). Prose above it survives.
     const raw = 'Analysis text.\n```leetsage-data\n{ "approachDetected": "brute';
     let result!: ReturnType<typeof parseStructuredResponse>;
     expect(() => { result = parseStructuredResponse(raw, ANALYZE); }).not.toThrow();
     expect(result.data).toBeUndefined();
-    // No complete fence found -> whole raw returned as prose (trimmed).
-    expect(result.prose).toBe(raw.trim());
+    expect(result.prose).toBe('Analysis text.');
+    expect(result.prose).not.toContain('leetsage-data');
+    expect(result.prose).not.toContain('approachDetected');
   });
 
   it('valid JSON but missing required fields -> data dropped, prose kept', () => {
@@ -176,6 +182,102 @@ describe('parseStructuredResponse — looser fallbacks for model drift', () => {
     const result = parseStructuredResponse('P.\n' + first + '\nmore\n' + second, ANALYZE);
     const data = result.data as AnalyzeData;
     expect(data.approachDetected).toBe('second');
+  });
+});
+
+describe('parseStructuredResponse — TIME_COMPLEXITY_HINT (code-aware hint)', () => {
+  const HINT: ActionType = 'TIME_COMPLEXITY_HINT';
+
+  it('parses a code-present hint block (current + optimal + onOptimalPath)', () => {
+    const prose = '## ⚡ Efficiency\n**Current:** O(N^2) time, O(1) space';
+    const json = JSON.stringify({
+      currentComplexity: { time: 'O(N^2)', space: 'O(1)' },
+      optimalComplexity: { time: 'O(N)', space: 'O(N)' },
+      onOptimalPath: false,
+    });
+    const result = parseStructuredResponse(prose + '\n\n' + fenced(json), HINT);
+    const data = result.data as ComplexityHintData;
+    expect(data.currentComplexity).toEqual({ time: 'O(N^2)', space: 'O(1)' });
+    expect(data.optimalComplexity).toEqual({ time: 'O(N)', space: 'O(N)' });
+    expect(data.onOptimalPath).toBe(false);
+    expect(result.prose).not.toContain('leetsage-data');
+  });
+
+  it('keeps currentComplexity NULL when no code was read (never fabricates one)', () => {
+    // R2.2: the no-code fallback emits a null current; the parser must preserve
+    // null rather than coercing it into a bogus O(?) Current line.
+    const json = JSON.stringify({
+      currentComplexity: null,
+      optimalComplexity: { time: 'O(N)', space: 'O(1)' },
+      onOptimalPath: false,
+    });
+    const result = parseStructuredResponse('## Complexity Hint\n' + fenced(json), HINT);
+    const data = result.data as ComplexityHintData;
+    expect(data.currentComplexity).toBeNull();
+    expect(data.optimalComplexity).toEqual({ time: 'O(N)', space: 'O(1)' });
+  });
+
+  it('treats a missing currentComplexity key as null (not O(?))', () => {
+    const json = JSON.stringify({
+      optimalComplexity: { time: 'O(N log N)', space: 'O(1)' },
+      onOptimalPath: true,
+    });
+    const result = parseStructuredResponse('Prose.\n' + fenced(json), HINT);
+    const data = result.data as ComplexityHintData;
+    expect(data.currentComplexity).toBeNull();
+    expect(data.onOptimalPath).toBe(true);
+  });
+
+  it('drops the data when optimalComplexity is missing (optimal is required)', () => {
+    const json = JSON.stringify({ currentComplexity: { time: 'O(N)', space: 'O(1)' }, onOptimalPath: false });
+    const result = parseStructuredResponse('Prose.\n' + fenced(json), HINT);
+    expect(result.data).toBeUndefined();
+  });
+});
+
+describe('parseStructuredResponse — truncated/unclosed data block (token-cap bug)', () => {
+  it('strips a DANGLING leetsage-data fence (no closing ```) so raw JSON never shows', () => {
+    // A response that hit max_tokens mid-JSON: opening fence + partial object,
+    // no closing fence. extractDataBlock can't match it; without the dangling
+    // strip the raw JSON would render in the card (the observed scrollable box).
+    const prose = 'Here is the explanation of the optimal approach.';
+    const truncated =
+      prose +
+      '\n\n```leetsage-data\n{\n  "patterns": ["Two Pointers"],\n  "keyInsight": "Because the array is sorted",\n  "optimalComplexity": { "time';
+    const result = parseStructuredResponse(truncated, UNDERSTAND);
+    expect(result.data).toBeUndefined();           // no complete block to parse
+    expect(result.prose).toBe(prose);              // the dangling JSON is gone
+    expect(result.prose).not.toContain('leetsage-data');
+    expect(result.prose).not.toContain('"patterns"');
+    expect(result.prose).not.toContain('optimalComplexity');
+  });
+
+  it('a COMPLETE block is still parsed normally (dangling strip does not interfere)', () => {
+    const json = JSON.stringify({
+      patterns: ['Two Pointers'],
+      keyInsight: 'sorted array lets two pointers converge',
+      optimalComplexity: { time: 'O(N)', space: 'O(1)' },
+    });
+    const result = parseStructuredResponse('Explanation.\n' + fenced(json), UNDERSTAND);
+    expect(result.data).toBeDefined();
+    expect(result.prose).toBe('Explanation.');
+  });
+});
+
+describe('stripDanglingDataFence (pure helper)', () => {
+  it('cuts from a dangling opening fence to end-of-string', () => {
+    const raw = 'Real prose here.\n\n```leetsage-data\n{ "patterns": ["X"], "optimalComplexity": { "time';
+    expect(stripDanglingDataFence(raw)).toBe('Real prose here.');
+  });
+
+  it('leaves text with a COMPLETE fence unchanged (the extractor handles it)', () => {
+    const raw = 'Prose.\n```leetsage-data\n{ "a": 1 }\n```';
+    expect(stripDanglingDataFence(raw)).toBe(raw);
+  });
+
+  it('leaves text with NO data fence unchanged', () => {
+    const raw = 'Just prose, no data block at all.';
+    expect(stripDanglingDataFence(raw)).toBe(raw);
   });
 });
 

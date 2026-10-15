@@ -157,8 +157,26 @@ export interface ReportData {
   solvedOptimally: boolean;
 }
 
+/**
+ * Structured `data` for TIME_COMPLEXITY_HINT (the code-aware complexity hint).
+ * See .kiro/specs/leetsage-coaching-logic-overhaul §1 (R1–R3). Unlike Analyze,
+ * `currentComplexity` is NULLABLE: it is null when the editor code could not be
+ * read (empty/failed), in which case the hint falls back to the optimal-only
+ * shape and makes NO claim about the user's code (R2.2 — never fabricate a
+ * Current). `onOptimalPath` is the model's own judgement of whether the user's
+ * current code already matches optimal; it drives whether the card shows a Hint
+ * section (worse-than-optimal) or just the "you've hit optimal" affirmation.
+ */
+export interface ComplexityHintData {
+  /** The user's current code complexity, or null when no code was read. */
+  currentComplexity: Complexity | null;
+  optimalComplexity: Complexity;
+  /** Model's judgement: is the current code already at the optimal complexity? */
+  onOptimalPath: boolean;
+}
+
 /** Union of every action's structured `data` shape. */
-export type StructuredData = AnalyzeData | UnderstandData | ReportData;
+export type StructuredData = AnalyzeData | UnderstandData | ReportData | ComplexityHintData;
 
 // ---------------------------------------------------------------------------
 // Progress tracking — Phase B persistent records (see
